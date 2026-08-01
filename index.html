@@ -727,7 +727,7 @@ function openPartyEdit(p){
   $('pe-gstin').value = p?.gstin||''; $('pe-contact').value = p?.contact_person||'';
   $('pe-phone').value = p?.phone||''; $('pe-email').value = p?.email||'';
   $('pe-active').checked = p ? p.is_active : true;
-  $('pe-territory').innerHTML = '<option value="">\u2014 none \u2014</option>' + (M.terr||[]).map(t=>`<option value="${t.id}" ${p&&p.territory_id===t.id?'selected':''}>${esc(t.name)}</option>`).join('');
+  $('pe-territory').innerHTML = '<option value="">\u2014 none \u2014</option>' + (M.terr||[]).filter(t=>t.is_active || (p&&p.territory_id===t.id)).map(t=>`<option value="${t.id}" ${p&&p.territory_id===t.id?'selected':''}>${esc(t.name)}${t.is_active?'':' (inactive)'}</option>`).join('');
   const owners = isDir() ? M.users : [{id:me.id, full_name:me.full_name}];
   $('pe-owner').innerHTML = owners.map(u=>`<option value="${u.id}" ${p&&p.owner_id===u.id?'selected':(!p&&u.id===me.id?'selected':'')}>${esc(u.full_name)}</option>`).join('');
   say('pe-msg','');
