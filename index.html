@@ -257,6 +257,27 @@
     <div id="mfg-body"></div>
   </section>
 
+  <!-- ============ MODULE 3: TASKS ============ -->
+  <section id="view-tasks" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Tasks (Kartavya)</h2>
+      <p>Assigned work with FY numbers and a progress trail. Overdue computes itself; lapses stay on record.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="kt-my" onclick="tasksTab('my')">My tasks</button>
+      <button class="chip dir-only" id="kt-all" onclick="tasksTab('all')">All tasks</button>
+      <button class="chip" id="kt-duties" onclick="tasksTab('duties')">Duties</button>
+    </div>
+    <div id="tasks-body"></div>
+  </section>
+
+  <!-- ============ MODULE 4: EXCISE & RENEWALS ============ -->
+  <section id="view-comp" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Excise &amp; Renewals</h2>
+      <p>Licenses, label registrations, agreements, insurance — with the expiring-soon lens (120-day warning for label regns).</p></div>
+    <div id="comp-body"></div>
+  </section>
+
   <!-- ============ MODULE 2: ONBOARDING & VENDORS ============ -->
   <section id="view-onboard" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -383,8 +404,8 @@ const MODULES = [
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
   {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
-  {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up',                 live:false},
-  {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:false},
+  {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
+  {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
 ];
@@ -399,7 +420,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -1031,6 +1052,174 @@ async function vnAdd(){
     status: 'ACTIVE', created_by: me.id });
   if (error){ say('vn-msg', error.message, false); return; }
   onbTab('vendors');
+}
+
+/* ================= MODULE 3: TASKS ================= */
+const tpill = s => s==='DONE'?'DELIVERED':(s==='CANCELLED'?'CANCELLED':(s==='IN_PROGRESS'?'DISPATCHED':'RECEIVED'));
+async function openTasks(){
+  await loadMasters();
+  await db.schema('tasks').rpc('generate_duty_log');   // create current period + mark lapses
+  tasksTab('my'); applyDirOnly(); show('tasks');
+}
+async function tasksTab(which){
+  ['my','all','duties'].forEach(k => $('kt-'+k).classList.toggle('on', k===which));
+  const B = $('tasks-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
+  const T = db.schema('tasks');
+  const uname = id => (M.users.find(u=>u.id===id)||{}).full_name || (id===me.id?'Me':'—');
+  if (which === 'my' || which === 'all'){
+    let q = T.from('tasks').select('*').order('created_at',{ascending:false}).limit(200);
+    if (which === 'my') q = q.eq('assignee_id', me.id);
+    const { data, error } = await q;
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    let html = '';
+    if (which === 'all' && isDir()){
+      const uopts = M.users.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('');
+      html += `<div class="card" style="margin-bottom:14px;max-width:640px;"><h2 style="font-size:15px;">Assign a task</h2>
+        <input type="text" id="nt-title" placeholder="What needs doing? *" style="margin-top:8px;">
+        <div class="row2c" style="margin-top:8px;"><select id="nt-assignee">${uopts}</select>
+        <input type="date" id="nt-due"></div>
+        <div class="row2c" style="margin-top:8px;">
+        <select id="nt-priority"><option>NORMAL</option><option>HIGH</option><option>URGENT</option></select>
+        <button class="btn gold sm" style="padding:11px;" onclick="taskAdd()">Assign</button></div>
+        <div id="nt-msg"></div></div>`;
+    }
+    html += '<div class="table-scroll"><table><thead><tr><th>No</th><th>Task</th>' +
+      (which==='all'?'<th>Assignee</th>':'') + '<th>Due</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>';
+    for (const t of (data||[])){
+      const overdue = t.due_date && t.status!=='DONE' && t.status!=='CANCELLED' && t.due_date < new Date().toISOString().slice(0,10);
+      const acts = [];
+      if (t.status==='OPEN' && t.assignee_id===me.id) acts.push(`<button class="mini" onclick="taskSet('${t.id}','IN_PROGRESS')">Start</button>`);
+      if ((t.status==='OPEN'||t.status==='IN_PROGRESS') && (t.assignee_id===me.id||isDir()))
+        acts.push(`<button class="mini" onclick="taskSet('${t.id}','DONE')">Done</button>`);
+      if (isDir() && (t.status==='OPEN'||t.status==='IN_PROGRESS'))
+        acts.push(`<button class="mini" onclick="taskSet('${t.id}','CANCELLED')">Cancel</button>`);
+      html += `<tr${overdue?' style="background:#fdf3f2;"':''}><td><b>${esc(t.task_no)}</b></td>
+        <td>${esc(t.title)}${t.details?'<br><span style="font-size:11px;color:#777">'+esc(t.details)+'</span>':''}</td>` +
+        (which==='all'?`<td>${esc(uname(t.assignee_id))}</td>`:'') +
+        `<td>${t.due_date||'—'}${overdue?' <b style="color:#b3382c">OVERDUE</b>':''}</td>
+        <td>${t.priority}</td><td><span class="pill ${tpill(t.status)}">${t.status}</span></td>
+        <td>${acts.join(' ')}</td></tr>`;
+    }
+    B.innerHTML = html + '</tbody></table></div><div id="tk-msg"></div>';
+  }
+  if (which === 'duties'){
+    const [{ data: duties, error: e1 }, { data: log }] = await Promise.all([
+      T.from('duties').select('*'), T.from('duty_log').select('*').order('due_date',{ascending:false}).limit(200)
+    ]);
+    if (e1){ B.innerHTML = `<div class="msg err">${esc(e1.message)}</div>`; return; }
+    let html = '';
+    if (isDir()){
+      const uopts = M.users.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('');
+      html += `<div class="card" style="margin-bottom:14px;max-width:640px;"><h2 style="font-size:15px;">New recurring duty</h2>
+        <input type="text" id="nd-title" placeholder="e.g. Submit monthly excise return *" style="margin-top:8px;">
+        <div class="row2c" style="margin-top:8px;"><select id="nd-assignee">${uopts}</select>
+        <select id="nd-freq"><option value="MONTHLY">MONTHLY</option><option value="WEEKLY">WEEKLY</option></select></div>
+        <div class="row2c" style="margin-top:8px;"><input type="number" id="nd-day" placeholder="Day (1-28 of month, or 1=Mon…7=Sun)">
+        <button class="btn gold sm" style="padding:11px;" onclick="dutyAdd()">Create duty</button></div>
+        <div id="ndm"></div></div>`;
+    }
+    const dutyName = id => (duties||[]).find(d=>d.id===id) || {};
+    html += '<div class="table-scroll"><table><thead><tr><th>Duty</th><th>Assignee</th><th>Period</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>';
+    for (const l of (log||[])){
+      const d = dutyName(l.duty_id);
+      const canDo = (d.assignee_id===me.id || isDir()) && l.status!=='DONE';
+      html += `<tr${l.status==='LAPSED'?' style="background:#fdf3f2;"':''}><td><b>${esc(d.title||'')}</b></td>
+        <td>${esc(uname(d.assignee_id))}</td><td>${l.period}</td><td>${l.due_date}</td>
+        <td><span class="pill ${l.status==='DONE'?'DELIVERED':(l.status==='LAPSED'?'CANCELLED':'DISPATCHED')}">${l.status}</span></td>
+        <td>${canDo?`<button class="mini" onclick="dutyDone('${l.id}')">Mark done</button>`:''}</td></tr>`;
+    }
+    B.innerHTML = html + '</tbody></table></div><div id="tk-msg"></div>';
+  }
+}
+async function taskAdd(){
+  const title = $('nt-title').value.trim();
+  if (!title){ say('nt-msg','Title is required.',false); return; }
+  const { error } = await db.schema('tasks').rpc('create_task', {
+    p_title: title, p_details: null, p_assignee: $('nt-assignee').value,
+    p_due: $('nt-due').value || null, p_priority: $('nt-priority').value });
+  if (error){ say('nt-msg', error.message, false); return; }
+  tasksTab('all');
+}
+async function taskSet(id, status){
+  const patch = { status };
+  if (status === 'DONE') patch.completed_at = new Date().toISOString();
+  const { error } = await db.schema('tasks').from('tasks').update(patch).eq('id', id);
+  if (error){ say('tk-msg', error.message, false); return; }
+  tasksTab(isDir() ? 'all' : 'my');
+}
+async function dutyAdd(){
+  const title = $('nd-title').value.trim(), day = Number($('nd-day').value);
+  if (!title || !(day>=1)){ say('ndm','Title and day are required.',false); return; }
+  const { error } = await db.schema('tasks').from('duties').insert({
+    title, assignee_id: $('nd-assignee').value, freq: $('nd-freq').value, day_of: day, created_by: me.id });
+  if (error){ say('ndm', error.message, false); return; }
+  await db.schema('tasks').rpc('generate_duty_log');
+  tasksTab('duties');
+}
+async function dutyDone(id){
+  const { error } = await db.schema('tasks').from('duty_log')
+    .update({ status:'DONE', done_at: new Date().toISOString(), done_by: me.id }).eq('id', id);
+  if (error){ say('tk-msg', error.message, false); return; }
+  tasksTab('duties');
+}
+
+/* ================= MODULE 4: EXCISE & RENEWALS ================= */
+const CATS = { EXCISE_LICENSE:'Excise license/permit', LABEL_REGN:'Label registration',
+               AGREEMENT:'Agreement/contract', INSURANCE_VEHICLE:'Insurance/vehicle' };
+async function openComp(){
+  await loadMasters();
+  const B = $('comp-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
+  const { data, error } = await db.schema('comp').from('v_expiring').select('*').order('days_left');
+  if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; show('comp'); return; }
+  const alerts = (data||[]).filter(d => d.alert_level !== 'OK').length;
+  const bopts = M.brands.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  let html = `<div class="statgrid">
+    <div class="stat"><div class="n">${(data||[]).length}</div><div class="l">Active documents</div></div>
+    <div class="stat"><div class="n" style="color:${alerts?'#b3382c':'#1f7a4d'}">${alerts}</div><div class="l">Expiring / expired (act now)</div></div></div>`;
+  if (isDir() || false){
+    html += `<div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Add document</h2>
+      <input type="text" id="cd-title" placeholder="Title (e.g. MH Wholesale Licence FY26-27) *" style="margin-top:8px;">
+      <div class="row2c" style="margin-top:8px;">
+        <select id="cd-cat">${Object.entries(CATS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select>
+        <input type="text" id="cd-ref" placeholder="Reference no."></div>
+      <div class="row2c" style="margin-top:8px;">
+        <select id="cd-brand"><option value="">— brand (label regns) —</option>${bopts}</select>
+        <input type="text" id="cd-party" placeholder="Linked party (self / MMC / …)"></div>
+      <div class="row2c" style="margin-top:8px;">
+        <input type="date" id="cd-to" title="Valid till *">
+        <button class="btn gold sm" style="padding:11px;" onclick="compAdd()">Add</button></div>
+      <div id="cd-msg"></div></div>`;
+  }
+  html += '<div class="table-scroll"><table><thead><tr><th>Document</th><th>Category</th><th>Ref</th><th>Valid till</th><th class="amount">Days left</th><th>Alert</th><th></th></tr></thead><tbody>';
+  for (const d of (data||[])){
+    const color = d.alert_level==='EXPIRED'||d.alert_level==='RED' ? '#b3382c' : (d.alert_level==='AMBER' ? '#7a5c10' : '#1f7a4d');
+    html += `<tr${d.alert_level!=='OK'?' style="background:#fdf6ee;"':''}>
+      <td><b>${esc(d.title)}</b>${d.linked_party?'<br><span style="font-size:11px;color:#777">'+esc(d.linked_party)+'</span>':''}</td>
+      <td>${CATS[d.category]||d.category}</td><td>${esc(d.ref_no||'—')}</td>
+      <td>${d.valid_to}</td><td class="amount">${d.days_left}</td>
+      <td><b style="color:${color}">${d.alert_level}</b></td>
+      <td>${isDir()?`<div style="display:flex;gap:4px;"><input type="date" id="rn-${d.id}" style="padding:5px;font-size:11px;width:130px;">
+        <button class="mini" onclick="compRenew('${d.id}')">Renew</button></div>`:''}</td></tr>`;
+  }
+  $('comp-body').innerHTML = html + '</tbody></table></div><div id="cd-msg2"></div>';
+  show('comp');
+}
+async function compAdd(){
+  const title = $('cd-title').value.trim(), to = $('cd-to').value;
+  if (!title || !to){ say('cd-msg','Title and valid-till date are required.',false); return; }
+  const { error } = await db.schema('comp').from('documents').insert({
+    title, category: $('cd-cat').value, ref_no: $('cd-ref').value.trim()||null,
+    brand_id: $('cd-brand').value||null, linked_party: $('cd-party').value.trim()||null,
+    state_id: 'MH', valid_to: to, created_by: me.id });
+  if (error){ say('cd-msg', error.message, false); return; }
+  openComp();
+}
+async function compRenew(id){
+  const to = $('rn-'+id).value;
+  if (!to){ say('cd-msg2','Pick the new valid-till date first.',false); return; }
+  const { error } = await db.schema('comp').rpc('renew_document', { p_doc: id, p_new_valid_to: to, p_note: null });
+  if (error){ say('cd-msg2', error.message, false); return; }
+  openComp();
 }
 
 init();
