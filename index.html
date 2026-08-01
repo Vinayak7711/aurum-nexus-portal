@@ -224,7 +224,7 @@
       <p>Distributors — one row each, forever. Deactivate, never delete.</p></div>
     <div class="toolbar"><button class="btn gold sm" onclick="openPartyEdit(null)">+ Add distributor</button></div>
     <div class="table-scroll"><table>
-      <thead><tr><th>Code</th><th>Name</th><th>City</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
+      <thead><tr><th>Code</th><th>Name</th><th>City</th><th>Territory</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows"></tbody>
     </table></div>
   </section>
@@ -350,6 +350,7 @@
     </div>
     <label>Email</label><input type="text" id="pe-email">
     <label>Salesperson (owner)</label><select id="pe-owner"></select>
+    <label>Territory</label><select id="pe-territory"></select>
     <div class="switch"><input type="checkbox" id="pe-active" checked><span>Active</span></div>
     <div class="row2" style="margin-top:16px;">
       <button class="btn ghost" onclick="closeSheet('party-overlay')">Cancel</button>
@@ -472,14 +473,15 @@ function drawModules(){
 /* ---------------- masters cache ---------------- */
 async function loadMasters(){
   const S = db.schema('sales');
-  const [b, s, f, c, p] = await Promise.all([
+  const [b, s, f, c, p, tr] = await Promise.all([
     S.from('brands').select('*').order('name'),
     S.from('skus').select('*, brand:brands(name)').order('sku_code'),
     S.from('manufacturers').select('*'),
     S.from('categories').select('*'),
     S.from('parties').select('*').order('name'),
+    S.from('territories').select('*').order('name'),
   ]);
-  M.brands=b.data||[]; M.skus=s.data||[]; M.mfrs=f.data||[]; M.cats=c.data||[]; M.parties=p.data||[];
+  M.brands=b.data||[]; M.skus=s.data||[]; M.mfrs=f.data||[]; M.cats=c.data||[]; M.parties=p.data||[]; M.terr=(tr&&tr.data)||[];
   if (isDir() && !M.users.length){
     const u = await db.schema('adm').from('users').select('id, full_name').order('full_name');
     M.users = u.data||[];
@@ -707,7 +709,8 @@ async function openParties(){
   for (const p of M.parties){
     const tr = document.createElement('tr');
     if (!p.is_active) tr.className='inactive';
-    tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td>` +
+    const tname = ((M.terr||[]).find(t=>t.id===p.territory_id)||{}).name;
+    tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td><td>${esc(tname||'—')}</td>` +
       `<td>${esc(ownerName(p.owner_id))}</td><td>${p.is_active?'✔':'✖'}</td>` +
       `<td><button class="mini">Edit</button></td>`;
     tr.querySelector('button').onclick = ()=>openPartyEdit(p);
@@ -724,6 +727,7 @@ function openPartyEdit(p){
   $('pe-gstin').value = p?.gstin||''; $('pe-contact').value = p?.contact_person||'';
   $('pe-phone').value = p?.phone||''; $('pe-email').value = p?.email||'';
   $('pe-active').checked = p ? p.is_active : true;
+  $('pe-territory').innerHTML = '<option value="">\u2014 none \u2014</option>' + (M.terr||[]).map(t=>`<option value="${t.id}" ${p&&p.territory_id===t.id?'selected':''}>${esc(t.name)}</option>`).join('');
   const owners = isDir() ? M.users : [{id:me.id, full_name:me.full_name}];
   $('pe-owner').innerHTML = owners.map(u=>`<option value="${u.id}" ${p&&p.owner_id===u.id?'selected':(!p&&u.id===me.id?'selected':'')}>${esc(u.full_name)}</option>`).join('');
   say('pe-msg','');
@@ -736,7 +740,8 @@ $('btn-save-party').onclick = async () => {
     name, city: $('pe-city').value.trim()||null, credit_days: Number($('pe-credit').value)||0,
     license_no: $('pe-license').value.trim()||null, gstin: $('pe-gstin').value.trim()||null,
     contact_person: $('pe-contact').value.trim()||null, phone: $('pe-phone').value.trim()||null,
-    email: $('pe-email').value.trim()||null, owner_id: $('pe-owner').value, is_active: $('pe-active').checked
+    email: $('pe-email').value.trim()||null, owner_id: $('pe-owner').value, is_active: $('pe-active').checked,
+    territory_id: $('pe-territory').value || null
   };
   let error;
   if (editingParty){
