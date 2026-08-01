@@ -244,6 +244,31 @@
     </table></div>
   </section>
 
+  <!-- ============ MODULE 2: MANUFACTURING @ MMC ============ -->
+  <section id="view-mfg" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Manufacturing @ MMC</h2>
+      <p>Your material, their premises — custody tracked. QC gates every batch; only PASSED stock exists.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="mt-fg" onclick="mfgTab('fg')">FG stock</button>
+      <button class="chip" id="mt-batches" onclick="mfgTab('batches')">Batches &amp; QC</button>
+      <button class="chip" id="mt-rm" onclick="mfgTab('rm')">Raw material</button>
+    </div>
+    <div id="mfg-body"></div>
+  </section>
+
+  <!-- ============ MODULE 2: ONBOARDING & VENDORS ============ -->
+  <section id="view-onboard" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Onboarding &amp; Vendors</h2>
+      <p>Distributor applications (AS/SALES/DO-01) and vendor registrations. Approval creates the party — no re-typing.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="ot-apps" onclick="onbTab('apps')">Distributor applications</button>
+      <button class="chip" id="ot-vendors" onclick="onbTab('vendors')">Vendors</button>
+    </div>
+    <div id="onb-body"></div>
+  </section>
+
   <!-- ============ MODULE 1: RATES & OUTSTANDING (Director) ============ -->
   <section id="view-rates" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -356,6 +381,8 @@ const MODULES = [
   {key:'party',   ico:'🤝', name:'Party Master',     desc:'Distributors & their salespersons',      live:true,  open:()=>openParties()},
   {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Deccan Crest, Frost 91 family, packs',   live:true,  open:()=>openBrands()},
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
+  {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
+  {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up',                 live:false},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:false},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
@@ -372,7 +399,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -824,6 +851,186 @@ async function saveMcActual(structId){
   const { error } = await db.schema('sales').from('sku_structures')
     .update({ mc_actual: v===''?null:Number(v) }).eq('id', structId);
   if (error) say('rates-msg', error.message, false);
+}
+
+/* ================= MODULE 2: MANUFACTURING ================= */
+async function openMfg(){ await loadMasters(); mfgTab('fg'); show('mfg'); }
+async function mfgTab(which){
+  ['fg','batches','rm'].forEach(k => $('mt-'+k).classList.toggle('on', k===which));
+  const B = $('mfg-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
+  const MF = db.schema('mfg');
+  if (which === 'fg'){
+    const { data, error } = await MF.from('v_fg_stock').select('*').order('sku_code');
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    const total = (data||[]).reduce((a,r)=>a+Number(r.cases),0);
+    let html = `<div class="statgrid"><div class="stat"><div class="n">${total}</div><div class="l">Total FG cases at MMC</div></div></div>`;
+    html += '<div class="table-scroll"><table><thead><tr><th>SKU</th><th class="amount">Cases in stock</th></tr></thead><tbody>';
+    for (const r of (data||[]).filter(x=>Number(x.cases)!==0))
+      html += `<tr><td><b>${esc(r.sku_code)}</b></td><td class="amount">${r.cases}</td></tr>`;
+    B.innerHTML = html + '</tbody></table></div><p style="font-size:11px;color:#777;margin-top:8px;">IN = QC-passed batches · OUT = dispatched orders · adjustments are Director-only with a reason.</p>';
+  }
+  if (which === 'batches'){
+    const { data, error } = await MF.from('batches').select('*, sku:sku_id(sku_code)').order('created_at',{ascending:false}).limit(100);
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    const opts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
+    let html = `<div class="card" style="margin-bottom:14px;max-width:560px;"><h2 style="font-size:15px;">New production batch</h2>
+      <div class="row2c" style="margin-top:8px;"><select id="nb-sku">${opts}</select>
+      <input type="number" id="nb-cases" placeholder="Cases produced"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="date" id="nb-date">
+      <button class="btn gold sm" style="padding:11px;" onclick="createBatch()">Record batch</button></div>
+      <div id="mfg-msg"></div></div>`;
+    html += '<div class="table-scroll"><table><thead><tr><th>Batch</th><th>SKU</th><th class="amount">Cases</th><th>Date</th><th>QC</th><th>QC remarks</th><th></th></tr></thead><tbody>';
+    for (const b of (data||[])){
+      const act = (b.qc_status==='PENDING'||b.qc_status==='HOLD')
+        ? `<button class="mini" onclick="qcSet('${b.id}','PASSED')">Pass</button>
+           <button class="mini" onclick="qcSet('${b.id}','HOLD')">Hold</button>
+           <button class="mini" onclick="qcSet('${b.id}','FAILED')">Fail</button>` : '';
+      html += `<tr><td><b>${esc(b.batch_no)}</b></td><td>${esc(b.sku?.sku_code)}</td>
+        <td class="amount">${b.cases}</td><td>${b.production_date}</td>
+        <td><span class="pill ${b.qc_status==='PASSED'?'DELIVERED':(b.qc_status==='FAILED'?'CANCELLED':(b.qc_status==='HOLD'?'DISPATCHED':'RECEIVED'))}">${b.qc_status}</span></td>
+        <td>${esc(b.qc_remarks||'')}</td><td>${act}</td></tr>`;
+    }
+    B.innerHTML = html + '</tbody></table></div><div id="mfg-msg2"></div>';
+  }
+  if (which === 'rm'){
+    const [{ data: stock, error: e1 }, { data: issues }] = await Promise.all([
+      MF.from('v_rm_stock').select('*').order('code'),
+      MF.from('rm_issues').select('*, item:rm_item_id(code,name)').order('created_at',{ascending:false}).limit(50)
+    ]);
+    if (e1){ B.innerHTML = `<div class="msg err">${esc(e1.message)}</div>`; return; }
+    const iopts = (stock||[]).map(i=>`<option value="${i.rm_item_id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('');
+    let html = `<div class="card" style="margin-bottom:14px;max-width:560px;"><h2 style="font-size:15px;">Record material sent to MMC</h2>
+      <div class="row2c" style="margin-top:8px;"><select id="ri-item">${iopts}</select>
+      <input type="number" id="ri-qty" placeholder="Quantity"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="ri-challan" placeholder="Challan no.">
+      <button class="btn gold sm" style="padding:11px;" onclick="rmIssue()">Record issue</button></div>
+      <div id="mfg-msg3"></div></div>`;
+    html += '<h4 class="sec">Balance at MMC</h4><div class="table-scroll"><table><thead><tr><th>Item</th><th class="amount">Issued</th><th class="amount">Consumed</th><th class="amount">Balance</th><th>Unit</th></tr></thead><tbody>';
+    for (const r of (stock||[]))
+      html += `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${r.issued}</td><td class="amount">${r.consumed}</td><td class="amount"><b>${r.balance}</b></td><td>${r.unit}</td></tr>`;
+    html += '</tbody></table></div><h4 class="sec">Recent issues</h4><div class="table-scroll"><table><thead><tr><th>Date</th><th>Item</th><th class="amount">Qty</th><th>Challan</th><th>Received at MMC</th></tr></thead><tbody>';
+    for (const r of (issues||[]))
+      html += `<tr><td>${r.issue_date}</td><td>${esc(r.item?.code)}</td><td class="amount">${r.qty}</td><td>${esc(r.challan_no||'—')}</td>
+        <td>${r.received_at ? '✔ '+r.received_at.slice(0,10) : `<button class="mini" onclick="rmReceive('${r.id}')">Confirm receipt</button>`}</td></tr>`;
+    B.innerHTML = html + '</tbody></table></div>';
+  }
+}
+async function createBatch(){
+  const cases = Number($('nb-cases').value);
+  if (!(cases>0)){ say('mfg-msg','Enter cases produced.',false); return; }
+  const { error } = await db.schema('mfg').rpc('create_batch',
+    { p_sku: $('nb-sku').value, p_cases: cases, p_date: $('nb-date').value || null, p_rm: [] });
+  if (error){ say('mfg-msg', error.message, false); return; }
+  mfgTab('batches');
+}
+async function qcSet(id, status){
+  const remarks = status==='PASSED' ? null : ($('qcr-'+id)?.value || null);
+  const { error } = await db.schema('mfg').rpc('qc_set', { p_batch: id, p_status: status, p_remarks: remarks });
+  if (error){ say('mfg-msg2', error.message, false); return; }
+  mfgTab('batches');
+}
+async function rmIssue(){
+  const qty = Number($('ri-qty').value);
+  if (!(qty>0)){ say('mfg-msg3','Enter a quantity.',false); return; }
+  const { error } = await db.schema('mfg').from('rm_issues').insert({
+    rm_item_id: $('ri-item').value, qty, challan_no: $('ri-challan').value.trim()||null, created_by: me.id });
+  if (error){ say('mfg-msg3', error.message, false); return; }
+  mfgTab('rm');
+}
+async function rmReceive(id){
+  const { error } = await db.schema('mfg').from('rm_issues')
+    .update({ received_by: me.id, received_at: new Date().toISOString() }).eq('id', id);
+  if (!error) mfgTab('rm');
+}
+
+/* ================= MODULE 2: ONBOARDING & VENDORS ================= */
+async function openOnboard(){ await loadMasters(); onbTab('apps'); show('onboard'); }
+async function onbTab(which){
+  ['apps','vendors'].forEach(k => $('ot-'+k).classList.toggle('on', k===which));
+  const B = $('onb-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
+  const S = db.schema('sales');
+  if (which === 'apps'){
+    const { data, error } = await S.from('onboarding').select('*').order('created_at',{ascending:false});
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    let html = `<div class="card" style="margin-bottom:14px;max-width:640px;"><h2 style="font-size:15px;">New application (from signed form AS/SALES/DO-01)</h2>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="ob-name" placeholder="Legal entity name *">
+      <input type="text" id="ob-trade" placeholder="Trade name"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="ob-entity" placeholder="Entity type (LLP / Pvt Ltd …)">
+      <input type="text" id="ob-territory" placeholder="Territory (district / taluk)"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="ob-gstin" placeholder="GSTIN">
+      <input type="text" id="ob-licence" placeholder="Excise licence no."></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="ob-owner" placeholder="Owner / contact person">
+      <input type="text" id="ob-phone" placeholder="Phone"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="ob-email" placeholder="Email">
+      <button class="btn gold sm" style="padding:11px;" onclick="onbAdd()">Register application</button></div>
+      <div id="onb-msg"></div></div>`;
+    html += '<div class="table-scroll"><table><thead><tr><th>App No</th><th>Applicant</th><th>Territory</th><th>Status</th><th></th></tr></thead><tbody>';
+    for (const a of (data||[])){
+      const pill = a.status==='APPROVED'?'DELIVERED':(a.status==='REJECTED'?'CANCELLED':(a.status==='UNDER_REVIEW'?'DISPATCHED':'RECEIVED'));
+      const act = (a.status==='APPLIED'||a.status==='UNDER_REVIEW')
+        ? `<button class="mini" onclick="onbApprove('${a.id}')">Approve → create party</button>
+           <button class="mini" onclick="onbStatus('${a.id}','${a.status==='APPLIED'?'UNDER_REVIEW':'REJECTED'}')">${a.status==='APPLIED'?'Mark review':'Reject'}</button>` : '';
+      html += `<tr><td><b>${esc(a.app_no)}</b></td><td>${esc(a.applicant_name)}${a.trade_name?'<br><span style="font-size:11px;color:#777">'+esc(a.trade_name)+'</span>':''}</td>
+        <td>${esc(a.territory||'—')}</td><td><span class="pill ${pill}">${a.status}</span></td><td>${act}</td></tr>`;
+    }
+    B.innerHTML = html + '</tbody></table></div><div id="onb-msg2"></div>';
+  }
+  if (which === 'vendors'){
+    const { data, error } = await S.from('vendors').select('*').order('created_at',{ascending:false});
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    let html = `<div class="card" style="margin-bottom:14px;max-width:640px;"><h2 style="font-size:15px;">Register vendor</h2>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-name" placeholder="Vendor name *">
+      <input type="text" id="vn-cat" placeholder="Category (bottles / caps / transport …)"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-gstin" placeholder="GSTIN">
+      <input type="text" id="vn-phone" placeholder="Phone"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-contact" placeholder="Contact person">
+      <button class="btn gold sm" style="padding:11px;" onclick="vnAdd()">Register</button></div>
+      <div id="vn-msg"></div></div>`;
+    html += '<div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>';
+    for (const v of (data||[])){
+      const pill = v.status==='ACTIVE'?'DELIVERED':(v.status==='INACTIVE'?'CANCELLED':'RECEIVED');
+      html += `<tr><td><b>${esc(v.code)}</b></td><td>${esc(v.name)}</td><td>${esc(v.category||'—')}</td>
+        <td><span class="pill ${pill}">${v.status}</span></td>
+        <td><button class="mini" onclick="vnStatus('${v.id}','${v.status==='ACTIVE'?'INACTIVE':'ACTIVE'}')">${v.status==='ACTIVE'?'Deactivate':'Activate'}</button></td></tr>`;
+    }
+    B.innerHTML = html + '</tbody></table></div>';
+  }
+}
+async function onbAdd(){
+  const name = $('ob-name').value.trim();
+  if (!name){ say('onb-msg','Applicant name is required.',false); return; }
+  const { data: appno, error: e1 } = await db.schema('app').rpc('next_code', { p_series: 'DOF' });
+  if (e1){ say('onb-msg', e1.message, false); return; }
+  const { error } = await db.schema('sales').from('onboarding').insert({
+    app_no: appno, applicant_name: name, trade_name: $('ob-trade').value.trim()||null,
+    entity_type: $('ob-entity').value.trim()||null, territory: $('ob-territory').value.trim()||null,
+    gstin: $('ob-gstin').value.trim()||null, excise_licence: $('ob-licence').value.trim()||null,
+    contacts: { owner: $('ob-owner').value.trim()||null, phone: $('ob-phone').value.trim()||null, email: $('ob-email').value.trim()||null },
+    created_by: me.id });
+  if (error){ say('onb-msg', error.message, false); return; }
+  onbTab('apps');
+}
+async function onbApprove(id){
+  const { error } = await db.schema('sales').rpc('onboarding_approve', { p_id: id });
+  if (error){ say('onb-msg2', error.message, false); return; }
+  onbTab('apps');
+}
+async function onbStatus(id, status){
+  const { error } = await db.schema('sales').from('onboarding').update({ status }).eq('id', id);
+  if (error){ say('onb-msg2', error.message, false); return; }
+  onbTab('apps');
+}
+async function vnAdd(){
+  const name = $('vn-name').value.trim();
+  if (!name){ say('vn-msg','Vendor name is required.',false); return; }
+  const { data: code, error: e1 } = await db.schema('app').rpc('next_code', { p_series: 'VEN' });
+  if (e1){ say('vn-msg', e1.message, false); return; }
+  const { error } = await db.schema('sales').from('vendors').insert({
+    code, name, category: $('vn-cat').value.trim()||null, gstin: $('vn-gstin').value.trim()||null,
+    phone: $('vn-phone').value.trim()||null, contact_person: $('vn-contact').value.trim()||null,
+    status: 'ACTIVE', created_by: me.id });
+  if (error){ say('vn-msg', error.message, false); return; }
+  onbTab('vendors');
 }
 
 init();
