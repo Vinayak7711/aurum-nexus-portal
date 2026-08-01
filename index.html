@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aurum Nexus — Aurum Spirits India Limited</title>
+<!-- ==========================================================================
+  AURUM NEXUS — the company portal.  Phase 0 edition:
+    · Sign-in (email magic link via Supabase Auth)
+    · Home portal shell (module cards — modules light up as we build them)
+    · Users & Roles admin screen (Directors only)
+  ONE self-contained file. To deploy: fill in the two CONFIG values below,
+  upload this file to your web host, open it in a browser. That's the release.
+=========================================================================== -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+  :root{
+    --ink:#1a1a2e; --ink-soft:#4a4a68; --line:#e6e2d8;
+    --gold:#b8912e; --gold-soft:#f4ecd8; --paper:#faf8f3; --card:#ffffff;
+    --ok:#1f7a4d; --bad:#b3382c; --radius:14px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+       background:var(--paper); color:var(--ink); min-height:100vh;}
+  .hidden{display:none !important;}
+
+  /* ---------- header ---------- */
+  header{background:var(--ink); color:#fff; padding:14px 18px;
+         display:flex; align-items:center; justify-content:space-between;
+         position:sticky; top:0; z-index:10;}
+  .brand{display:flex; align-items:center; gap:10px;}
+  .brand .mono{width:38px; height:38px; border-radius:10px; background:var(--gold);
+        display:flex; align-items:center; justify-content:center;
+        font-weight:800; font-size:20px; color:var(--ink);}
+  .brand h1{font-size:17px; letter-spacing:.3px;}
+  .brand small{display:block; font-weight:400; font-size:11px; opacity:.75;}
+  #who{font-size:12px; text-align:right; opacity:.9;}
+  #who b{display:block; font-size:13px;}
+  #btn-signout{margin-top:4px; background:none; border:1px solid rgba(255,255,255,.35);
+        color:#fff; border-radius:8px; padding:3px 10px; font-size:11px; cursor:pointer;}
+
+  main{max-width:960px; margin:0 auto; padding:20px 16px 60px;}
+
+  /* ---------- login card ---------- */
+  .login-wrap{max-width:400px; margin:8vh auto 0;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+        padding:22px; box-shadow:0 2px 10px rgba(26,26,46,.05);}
+  .card h2{font-size:19px; margin-bottom:6px;}
+  .card p.sub{color:var(--ink-soft); font-size:13px; margin-bottom:16px;}
+  label{font-size:12px; font-weight:600; color:var(--ink-soft); display:block; margin:10px 0 4px;}
+  input[type=email], input[type=text], select{
+        width:100%; padding:12px; border:1px solid var(--line); border-radius:10px;
+        font-size:15px; background:#fff;}
+  .btn{width:100%; margin-top:14px; padding:13px; border:none; border-radius:10px;
+        background:var(--ink); color:#fff; font-size:15px; font-weight:600; cursor:pointer;}
+  .btn.gold{background:var(--gold); color:var(--ink);}
+  .btn:disabled{opacity:.5;}
+  .msg{margin-top:12px; font-size:13px; padding:10px 12px; border-radius:8px;}
+  .msg.ok{background:#e8f4ec; color:var(--ok);}
+  .msg.err{background:#fbeae8; color:var(--bad);}
+
+  /* ---------- home portal ---------- */
+  .welcome{margin:6px 0 18px;}
+  .welcome h2{font-size:21px;}
+  .welcome p{color:var(--ink-soft); font-size:13px; margin-top:3px;}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px;}
+  .mod{background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+       padding:16px 14px; cursor:pointer; transition:transform .08s;}
+  .mod:active{transform:scale(.97);}
+  .mod .ico{font-size:24px;}
+  .mod h3{font-size:14px; margin-top:8px;}
+  .mod p{font-size:11px; color:var(--ink-soft); margin-top:3px;}
+  .mod.soon{opacity:.45; cursor:default;}
+  .mod.soon .tag{display:inline-block; margin-top:6px; font-size:9px; font-weight:700;
+       letter-spacing:.6px; background:var(--gold-soft); color:var(--gold);
+       padding:2px 7px; border-radius:20px;}
+
+  /* ---------- admin screen ---------- */
+  .crumb{font-size:13px; color:var(--ink-soft); margin-bottom:14px; cursor:pointer;}
+  .crumb:hover{color:var(--gold);}
+  table{width:100%; border-collapse:collapse; background:var(--card);
+        border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;
+        font-size:13px;}
+  th{background:var(--ink); color:#fff; text-align:left; padding:10px 12px; font-size:11px;
+     letter-spacing:.5px; text-transform:uppercase;}
+  td{padding:10px 12px; border-top:1px solid var(--line); vertical-align:middle;}
+  tr.inactive td{opacity:.45;}
+  .pill{display:inline-block; padding:2px 9px; border-radius:20px; font-size:11px; font-weight:700;}
+  .pill.DIRECTOR{background:#efe3c2; color:#7a5c10;}
+  .pill.ADMIN{background:#dbe7f6; color:#274b77;}
+  .pill.STAFF{background:#e4e4ea; color:#44445e;}
+  .pill.PUBLIC{background:#f0dede; color:#7a3030;}
+  .lock{font-size:12px;}
+  td .mini{font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid var(--line);
+        background:#fff; cursor:pointer;}
+  .table-scroll{overflow-x:auto;}
+
+  /* ---------- edit user modal ---------- */
+  .overlay{position:fixed; inset:0; background:rgba(26,26,46,.5); z-index:50;
+        display:flex; align-items:flex-end; justify-content:center;}
+  @media(min-width:600px){ .overlay{align-items:center;} }
+  .sheet{background:#fff; width:100%; max-width:480px; border-radius:18px 18px 0 0;
+        padding:22px; max-height:88vh; overflow-y:auto;}
+  @media(min-width:600px){ .sheet{border-radius:18px;} }
+  .sheet h3{font-size:17px; margin-bottom:2px;}
+  .sheet p.email{font-size:12px; color:var(--ink-soft); margin-bottom:12px;}
+  .permgrid{border:1px solid var(--line); border-radius:10px; margin-top:6px; overflow:hidden;}
+  .permrow{display:grid; grid-template-columns:1.4fr repeat(4,1fr); align-items:center;
+        border-top:1px solid var(--line); font-size:12px;}
+  .permrow:first-child{border-top:none; background:var(--gold-soft); font-weight:700;
+        font-size:10px; text-transform:uppercase; letter-spacing:.5px;}
+  .permrow > div{padding:9px 10px; text-align:center;}
+  .permrow > div:first-child{text-align:left; font-weight:600;}
+  .permrow input[type=checkbox]{width:17px; height:17px; accent-color:var(--gold);}
+  .row2{display:flex; gap:10px;}
+  .row2 .btn{flex:1;}
+  .btn.ghost{background:#fff; color:var(--ink); border:1px solid var(--line);}
+  .switch{display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px;}
+  .switch input{width:18px; height:18px; accent-color:var(--ok);}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="mono">A</div>
+    <h1>Aurum Nexus<small>Aurum Spirits India Limited</small></h1>
+  </div>
+  <div id="who" class="hidden">
+    <b id="who-name"></b><span id="who-role"></span><br>
+    <button id="btn-signout">Sign out</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ VIEW: LOGIN ============ -->
+  <section id="view-login" class="login-wrap hidden">
+    <div class="card">
+      <h2>Sign in</h2>
+      <p class="sub">Enter your company email. We'll send you a one-tap sign-in link — no password to remember.</p>
+      <label for="login-email">Email</label>
+      <input type="email" id="login-email" placeholder="name@aurumspirits.com" autocomplete="email">
+      <button class="btn gold" id="btn-magic">Send sign-in link</button>
+      <div id="login-msg"></div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW: HOME ============ -->
+  <section id="view-home" class="hidden">
+    <div class="welcome">
+      <h2 id="home-hello">Welcome</h2>
+      <p>Your company, one portal. Modules appear here as they go live.</p>
+    </div>
+    <div class="grid" id="module-grid"></div>
+  </section>
+
+  <!-- ============ VIEW: ADMIN (Users & Roles) ============ -->
+  <section id="view-admin" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Users &amp; Roles</h2>
+      <p>People appear here automatically after their first sign-in. Promote, grant, or deactivate — never delete history.</p></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Name</th><th>Role</th><th>Designation</th><th>Active</th><th></th></tr></thead>
+      <tbody id="user-rows"></tbody>
+    </table></div>
+  </section>
+
+</main>
+
+<!-- ============ MODAL: EDIT USER ============ -->
+<div class="overlay hidden" id="edit-overlay">
+  <div class="sheet">
+    <h3 id="edit-name"></h3>
+    <p class="email" id="edit-email"></p>
+
+    <label>Full name</label>
+    <input type="text" id="edit-fullname">
+    <label>Designation</label>
+    <input type="text" id="edit-designation" placeholder="e.g. Area Sales Manager">
+    <label>Role (tier)</label>
+    <select id="edit-role">
+      <option value="DIRECTOR">DIRECTOR — sees & approves everything</option>
+      <option value="ADMIN">ADMIN — runs a domain day-to-day</option>
+      <option value="STAFF">STAFF — own world only</option>
+      <option value="PUBLIC">PUBLIC — outside surfaces only</option>
+    </select>
+
+    <label style="margin-top:14px;">Module permissions (fine grain — ignored for Directors, who get all)</label>
+    <div class="permgrid" id="permgrid"></div>
+
+    <div class="switch">
+      <input type="checkbox" id="edit-active"><span>Account active (untick to suspend — sign-in keeps working but they see nothing)</span>
+    </div>
+
+    <div class="row2" style="margin-top:16px;">
+      <button class="btn ghost" onclick="closeEdit()">Cancel</button>
+      <button class="btn gold" id="btn-save-user">Save</button>
+    </div>
+    <div id="edit-msg"></div>
+  </div>
+</div>
+
+<script>
+/* =============================== CONFIG ====================================
+   Fill these two values from your Supabase project:
+   Dashboard -> Project Settings -> Data API  (URL)  and  API Keys (anon public)
+   The anon key is PUBLIC by design — safety lives in the database (RLS). The
+   service_role key must NEVER appear in this file or any browser code.       */
+const SUPABASE_URL      = "https://qkytrfvmamgtyxvivppu.supabase.co";      // e.g. https://abcd1234.supabase.co
+const SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
+/* ========================================================================== */
+
+/* The module registry. Phase 0 ships with only the Control Panel live; each
+   future build session adds a file + flips its entry here to live:true.     */
+const MODULES = [
+  {key:'sales',   ico:'🧾', name:'Sales & Orders',   desc:'Distributor orders, dispatch, outstanding', live:false},
+  {key:'party',   ico:'🤝', name:'Party Master',     desc:'Distributors, corporations, vendors',       live:false},
+  {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Labels, pack sizes, rate cards',            live:false},
+  {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up',                    live:false},
+  {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',           live:false},
+  {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',                  live:false},
+  {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',                live:true, adminOnly:true},
+];
+const PERM_ACTIONS = ['view','add','edit','admin'];
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let me = null;          // my adm.users row
+let editing = null;     // row being edited in the modal
+
+/* ---------- tiny view router ---------- */
+function show(view){
+  for (const v of ['login','home','admin'])
+    document.getElementById('view-'+v).classList.toggle('hidden', v!==view);
+  window.scrollTo(0,0);
+}
+const $ = id => document.getElementById(id);
+function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${text}</div>` : ''; }
+
+/* ---------- auth ---------- */
+async function init(){
+  const { data:{ session } } = await db.auth.getSession();
+  if (!session) { show('login'); return; }
+  const { data, error } = await db.schema('adm').from('users').select('*').eq('id', session.user.id).single();
+  if (error || !data){ show('login'); say('login-msg','Signed in, but your profile was not found. Contact a Director.',false); return; }
+  me = data;
+  if (!me.is_active){
+    show('login');
+    say('login-msg','Your account is currently suspended. Please contact a Director.',false);
+    return;
+  }
+  $('who').classList.remove('hidden');
+  $('who-name').textContent = me.full_name;
+  $('who-role').textContent = me.role + (me.designation ? ' · ' + me.designation : '');
+  $('home-hello').textContent = 'Welcome, ' + me.full_name.split(' ')[0];
+  drawModules();
+  show('home');
+}
+
+$('btn-magic').onclick = async () => {
+  const email = $('login-email').value.trim();
+  if (!email) { say('login-msg','Please enter your email.',false); return; }
+  $('btn-magic').disabled = true;
+  const { error } = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.href.split('#')[0] } });
+  $('btn-magic').disabled = false;
+  if (error) say('login-msg','Could not send the link: '+error.message,false);
+  else say('login-msg','Link sent. Open the email on this device and tap it.',true);
+};
+
+$('btn-signout').onclick = async () => { await db.auth.signOut(); location.reload(); };
+db.auth.onAuthStateChange((event) => { if (event === 'SIGNED_IN') init(); });
+
+/* ---------- home ---------- */
+function drawModules(){
+  const grid = $('module-grid'); grid.innerHTML = '';
+  for (const m of MODULES){
+    if (m.adminOnly && me.role !== 'DIRECTOR') continue;
+    const el = document.createElement('div');
+    el.className = 'mod' + (m.live ? '' : ' soon');
+    el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
+                   (m.live ? '' : '<span class="tag">COMING SOON</span>');
+    if (m.live && m.key === 'control') el.onclick = openAdmin;
+    grid.appendChild(el);
+  }
+}
+
+/* ---------- admin: users & roles ---------- */
+async function openAdmin(){
+  const { data, error } = await db.schema('adm').from('users').select('*').order('full_name');
+  if (error){ alert('Could not load users: '+error.message); return; }
+  const tb = $('user-rows'); tb.innerHTML = '';
+  for (const u of data){
+    const tr = document.createElement('tr');
+    if (!u.is_active) tr.className = 'inactive';
+    tr.innerHTML =
+      `<td><b>${esc(u.full_name)}</b><br><span style="font-size:11px;color:#777">${esc(u.email)}</span></td>` +
+      `<td><span class="pill ${u.role}">${u.role}</span>${u.is_superadmin?' <span class="lock" title="Founder lock">🔒</span>':''}</td>` +
+      `<td>${esc(u.designation||'—')}</td>` +
+      `<td>${u.is_active?'✔':'✖'}</td>` +
+      `<td><button class="mini">Edit</button></td>`;
+    tr.querySelector('button').onclick = () => openEdit(u);
+    tb.appendChild(tr);
+  }
+  show('admin');
+}
+function esc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function openEdit(u){
+  editing = u;
+  $('edit-name').textContent  = u.full_name;
+  $('edit-email').textContent = u.email + (u.is_superadmin ? '  ·  🔒 founder-locked' : '');
+  $('edit-fullname').value    = u.full_name;
+  $('edit-designation').value = u.designation || '';
+  $('edit-role').value        = u.role;
+  $('edit-active').checked    = u.is_active;
+
+  const g = $('permgrid');
+  g.innerHTML = '<div class="permrow"><div>Module</div>' + PERM_ACTIONS.map(a=>`<div>${a}</div>`).join('') + '</div>';
+  for (const m of MODULES){
+    if (m.key === 'control') continue;   // control panel is tier-gated, not grant-gated
+    const p = (u.permissions_json||{})[m.key] || {};
+    g.insertAdjacentHTML('beforeend',
+      `<div class="permrow"><div>${m.ico} ${m.name}</div>` +
+      PERM_ACTIONS.map(a=>`<div><input type="checkbox" data-mod="${m.key}" data-act="${a}" ${p[a]?'checked':''}></div>`).join('') +
+      '</div>');
+  }
+  say('edit-msg','');
+  $('edit-overlay').classList.remove('hidden');
+}
+function closeEdit(){ $('edit-overlay').classList.add('hidden'); editing = null; }
+
+$('btn-save-user').onclick = async () => {
+  if (!editing) return;
+  const perms = {};
+  document.querySelectorAll('#permgrid input[type=checkbox]').forEach(cb=>{
+    if (cb.checked){ (perms[cb.dataset.mod] ??= {})[cb.dataset.act] = true; }
+  });
+  const patch = {
+    full_name:        $('edit-fullname').value.trim() || editing.full_name,
+    designation:      $('edit-designation').value.trim() || null,
+    role:             $('edit-role').value,
+    is_active:        $('edit-active').checked,
+    permissions_json: perms
+  };
+  const { error } = await db.schema('adm').from('users').update(patch).eq('id', editing.id);
+  if (error){ say('edit-msg','Save failed: '+error.message,false); return; }
+  closeEdit();
+  openAdmin();  // refresh list
+};
+
+/* ---------- go ---------- */
+init();
+</script>
+</body>
+</html>
