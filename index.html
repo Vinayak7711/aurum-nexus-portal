@@ -4,14 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Aurum Nexus — Aurum Spirits India Limited</title>
-<!-- ==========================================================================
-  AURUM NEXUS — the company portal.  Phase 0 edition:
-    · Sign-in (email magic link via Supabase Auth)
-    · Home portal shell (module cards — modules light up as we build them)
-    · Users & Roles admin screen (Directors only)
-  ONE self-contained file. To deploy: fill in the two CONFIG values below,
-  upload this file to your web host, open it in a browser. That's the release.
-=========================================================================== -->
+<!-- =============================================================================
+  AURUM NEXUS — company portal.  v2: Phase 0 + Module 1 (Sales & Distributor Orders)
+  Views: login · home · control panel (users) · orders · new order · order detail ·
+         parties · brands & SKUs · rates & outstanding (Director-only)
+  ONE self-contained file. The database (RLS) is the security; this UI only decides
+  what to draw. Reissued whole on every change; GitHub history is the backup.
+============================================================================== -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   :root{
@@ -23,8 +22,6 @@
   body{font-family:-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
        background:var(--paper); color:var(--ink); min-height:100vh;}
   .hidden{display:none !important;}
-
-  /* ---------- header ---------- */
   header{background:var(--ink); color:#fff; padding:14px 18px;
          display:flex; align-items:center; justify-content:space-between;
          position:sticky; top:0; z-index:10;}
@@ -38,28 +35,26 @@
   #who b{display:block; font-size:13px;}
   #btn-signout{margin-top:4px; background:none; border:1px solid rgba(255,255,255,.35);
         color:#fff; border-radius:8px; padding:3px 10px; font-size:11px; cursor:pointer;}
-
-  main{max-width:960px; margin:0 auto; padding:20px 16px 60px;}
-
-  /* ---------- login card ---------- */
+  main{max-width:1080px; margin:0 auto; padding:20px 16px 60px;}
   .login-wrap{max-width:400px; margin:8vh auto 0;}
   .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
         padding:22px; box-shadow:0 2px 10px rgba(26,26,46,.05);}
   .card h2{font-size:19px; margin-bottom:6px;}
   .card p.sub{color:var(--ink-soft); font-size:13px; margin-bottom:16px;}
   label{font-size:12px; font-weight:600; color:var(--ink-soft); display:block; margin:10px 0 4px;}
-  input[type=email], input[type=text], select{
-        width:100%; padding:12px; border:1px solid var(--line); border-radius:10px;
+  input[type=email], input[type=text], input[type=number], input[type=date], select, textarea{
+        width:100%; padding:11px; border:1px solid var(--line); border-radius:10px;
         font-size:15px; background:#fff;}
   .btn{width:100%; margin-top:14px; padding:13px; border:none; border-radius:10px;
         background:var(--ink); color:#fff; font-size:15px; font-weight:600; cursor:pointer;}
   .btn.gold{background:var(--gold); color:var(--ink);}
+  .btn.ghost{background:#fff; color:var(--ink); border:1px solid var(--line);}
+  .btn.danger{background:#fbeae8; color:var(--bad); border:1px solid #f0cfcb;}
   .btn:disabled{opacity:.5;}
+  .btn.sm{width:auto; margin:0; padding:8px 14px; font-size:12px; border-radius:8px;}
   .msg{margin-top:12px; font-size:13px; padding:10px 12px; border-radius:8px;}
   .msg.ok{background:#e8f4ec; color:var(--ok);}
   .msg.err{background:#fbeae8; color:var(--bad);}
-
-  /* ---------- home portal ---------- */
   .welcome{margin:6px 0 18px;}
   .welcome h2{font-size:21px;}
   .welcome p{color:var(--ink-soft); font-size:13px; margin-top:3px;}
@@ -74,32 +69,35 @@
   .mod.soon .tag{display:inline-block; margin-top:6px; font-size:9px; font-weight:700;
        letter-spacing:.6px; background:var(--gold-soft); color:var(--gold);
        padding:2px 7px; border-radius:20px;}
-
-  /* ---------- admin screen ---------- */
   .crumb{font-size:13px; color:var(--ink-soft); margin-bottom:14px; cursor:pointer;}
   .crumb:hover{color:var(--gold);}
   table{width:100%; border-collapse:collapse; background:var(--card);
         border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;
         font-size:13px;}
   th{background:var(--ink); color:#fff; text-align:left; padding:10px 12px; font-size:11px;
-     letter-spacing:.5px; text-transform:uppercase;}
+     letter-spacing:.5px; text-transform:uppercase; white-space:nowrap;}
   td{padding:10px 12px; border-top:1px solid var(--line); vertical-align:middle;}
   tr.inactive td{opacity:.45;}
+  tr.rowlink{cursor:pointer;}
+  tr.rowlink:hover td{background:#faf6ec;}
   .pill{display:inline-block; padding:2px 9px; border-radius:20px; font-size:11px; font-weight:700;}
-  .pill.DIRECTOR{background:#efe3c2; color:#7a5c10;}
-  .pill.ADMIN{background:#dbe7f6; color:#274b77;}
-  .pill.STAFF{background:#e4e4ea; color:#44445e;}
-  .pill.PUBLIC{background:#f0dede; color:#7a3030;}
+  .pill.DIRECTOR{background:#efe3c2; color:#7a5c10;} .pill.ADMIN{background:#dbe7f6; color:#274b77;}
+  .pill.STAFF{background:#e4e4ea; color:#44445e;}   .pill.PUBLIC{background:#f0dede; color:#7a3030;}
+  .pill.RECEIVED{background:#e4e4ea; color:#44445e;} .pill.APPROVED{background:#dbe7f6; color:#274b77;}
+  .pill.DISPATCHED{background:#efe3c2; color:#7a5c10;} .pill.DELIVERED{background:#e8f4ec; color:#1f7a4d;}
+  .pill.CLOSED{background:#d8d8e0; color:#333;} .pill.CANCELLED{background:#f0dede; color:#7a3030;}
   .lock{font-size:12px;}
   td .mini{font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid var(--line);
         background:#fff; cursor:pointer;}
   .table-scroll{overflow-x:auto;}
-
-  /* ---------- edit user modal ---------- */
+  .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center;}
+  .chip{padding:6px 12px; border-radius:20px; border:1px solid var(--line); background:#fff;
+        font-size:12px; cursor:pointer;}
+  .chip.on{background:var(--ink); color:#fff; border-color:var(--ink);}
   .overlay{position:fixed; inset:0; background:rgba(26,26,46,.5); z-index:50;
         display:flex; align-items:flex-end; justify-content:center;}
   @media(min-width:600px){ .overlay{align-items:center;} }
-  .sheet{background:#fff; width:100%; max-width:480px; border-radius:18px 18px 0 0;
+  .sheet{background:#fff; width:100%; max-width:520px; border-radius:18px 18px 0 0;
         padding:22px; max-height:88vh; overflow-y:auto;}
   @media(min-width:600px){ .sheet{border-radius:18px;} }
   .sheet h3{font-size:17px; margin-bottom:2px;}
@@ -114,9 +112,21 @@
   .permrow input[type=checkbox]{width:17px; height:17px; accent-color:var(--gold);}
   .row2{display:flex; gap:10px;}
   .row2 .btn{flex:1;}
-  .btn.ghost{background:#fff; color:var(--ink); border:1px solid var(--line);}
+  .row2c{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
   .switch{display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px;}
   .switch input{width:18px; height:18px; accent-color:var(--ok);}
+  .linegrid{border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-top:6px;}
+  .linerow{display:grid; grid-template-columns:2fr .8fr .5fr; gap:0; border-top:1px solid var(--line);}
+  .linerow:first-child{border-top:none;}
+  .linerow select,.linerow input{border:none; border-radius:0; border-right:1px solid var(--line); font-size:13px;}
+  .linerow button{border:none; background:#fff; color:var(--bad); cursor:pointer;}
+  .statgrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px; margin-bottom:14px;}
+  .stat{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px;}
+  .stat .n{font-size:20px; font-weight:800;}
+  .stat .l{font-size:11px; color:var(--ink-soft);}
+  .subtabs{display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap;}
+  h4.sec{margin:18px 0 8px; font-size:14px;}
+  .amount{font-variant-numeric:tabular-nums; text-align:right;}
 </style>
 </head>
 <body>
@@ -133,8 +143,6 @@
 </header>
 
 <main>
-
-  <!-- ============ VIEW: LOGIN ============ -->
   <section id="view-login" class="login-wrap hidden">
     <div class="card">
       <h2>Sign in</h2>
@@ -146,16 +154,12 @@
     </div>
   </section>
 
-  <!-- ============ VIEW: HOME ============ -->
   <section id="view-home" class="hidden">
-    <div class="welcome">
-      <h2 id="home-hello">Welcome</h2>
-      <p>Your company, one portal. Modules appear here as they go live.</p>
-    </div>
+    <div class="welcome"><h2 id="home-hello">Welcome</h2>
+      <p>Your company, one portal. Modules appear here as they go live.</p></div>
     <div class="grid" id="module-grid"></div>
   </section>
 
-  <!-- ============ VIEW: ADMIN (Users & Roles) ============ -->
   <section id="view-admin" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Users &amp; Roles</h2>
@@ -166,128 +170,278 @@
     </table></div>
   </section>
 
+  <!-- ============ MODULE 1: ORDERS ============ -->
+  <section id="view-orders" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Sales &amp; Orders</h2>
+      <p>Distributor orders. Rates are stamped at approval and never typed.</p></div>
+    <div class="toolbar">
+      <button class="btn gold sm" onclick="openNewOrder()">+ New order</button>
+      <span id="order-filters"></span>
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Order No</th><th>Date</th><th>Party</th><th>Status</th><th class="amount">Cases</th><th class="amount dir-only">Amount ₹</th></tr></thead>
+      <tbody id="order-rows"></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-order-new" class="hidden">
+    <div class="crumb" onclick="openOrders()">&larr; Back to Orders</div>
+    <div class="card" style="max-width:560px;">
+      <h2>New order</h2>
+      <p class="sub">Cases only — billing values appear after Director approval.</p>
+      <label>Distributor</label>
+      <select id="no-party"></select>
+      <label>Lines</label>
+      <div class="linegrid" id="no-lines"></div>
+      <button class="btn ghost sm" style="margin-top:8px;" onclick="addLineRow()">+ Add line</button>
+      <label>Remarks (optional)</label>
+      <input type="text" id="no-remarks" placeholder="e.g. urgent — festival stock">
+      <button class="btn gold" id="btn-create-order">Create order</button>
+      <div id="no-msg"></div>
+    </div>
+  </section>
+
+  <section id="view-order-detail" class="hidden">
+    <div class="crumb" onclick="openOrders()">&larr; Back to Orders</div>
+    <div class="card">
+      <h2 id="od-title">Order</h2>
+      <p class="sub" id="od-sub"></p>
+      <div class="table-scroll"><table>
+        <thead><tr><th>SKU</th><th class="amount">Cases</th><th class="amount dir-only">Rate/case ₹</th><th class="amount dir-only">Amount ₹</th></tr></thead>
+        <tbody id="od-lines"></tbody>
+      </table></div>
+      <div id="od-actions" style="margin-top:14px;"></div>
+      <div id="od-pay" class="dir-only"></div>
+      <div id="od-msg"></div>
+    </div>
+  </section>
+
+  <!-- ============ MODULE 1: PARTIES ============ -->
+  <section id="view-parties" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Party Master</h2>
+      <p>Distributors — one row each, forever. Deactivate, never delete.</p></div>
+    <div class="toolbar"><button class="btn gold sm" onclick="openPartyEdit(null)">+ Add distributor</button></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Code</th><th>Name</th><th>City</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
+      <tbody id="party-rows"></tbody>
+    </table></div>
+  </section>
+
+  <!-- ============ MODULE 1: BRANDS & SKUs ============ -->
+  <section id="view-brands" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Brands &amp; SKUs</h2>
+      <p>Your product masters. New launches enter here; retired items are deactivated (history stays).</p></div>
+    <div class="toolbar dir-only">
+      <button class="btn gold sm" onclick="openBrandAdd()">+ Add brand</button>
+      <button class="btn ghost sm" onclick="openSkuAdd()">+ Add SKU</button>
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>SKU Code</th><th>Brand</th><th>Size</th><th>Units/Case</th><th>Pack</th><th>Mfr</th><th>Active</th><th class="dir-only"></th></tr></thead>
+      <tbody id="sku-rows"></tbody>
+    </table></div>
+  </section>
+
+  <!-- ============ MODULE 1: RATES & OUTSTANDING (Director) ============ -->
+  <section id="view-rates" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Rates, Cost Card &amp; Outstanding</h2>
+      <p>Director-only. Billing rates are effective-dated — a change is a new row, history stays.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="rt-rates" onclick="ratesTab('rates')">Billing rates</button>
+      <button class="chip" id="rt-struct" onclick="ratesTab('struct')">Duty structure (MH)</button>
+      <button class="chip" id="rt-out" onclick="ratesTab('out')">Outstanding</button>
+      <button class="chip" id="rt-cm" onclick="ratesTab('cm')">MMC payable</button>
+    </div>
+    <div id="rates-body"></div>
+  </section>
 </main>
 
-<!-- ============ MODAL: EDIT USER ============ -->
+<!-- MODAL: EDIT USER -->
 <div class="overlay hidden" id="edit-overlay">
   <div class="sheet">
     <h3 id="edit-name"></h3>
     <p class="email" id="edit-email"></p>
-
-    <label>Full name</label>
-    <input type="text" id="edit-fullname">
-    <label>Designation</label>
-    <input type="text" id="edit-designation" placeholder="e.g. Area Sales Manager">
+    <label>Full name</label><input type="text" id="edit-fullname">
+    <label>Designation</label><input type="text" id="edit-designation" placeholder="e.g. Area Sales Manager">
     <label>Role (tier)</label>
     <select id="edit-role">
-      <option value="DIRECTOR">DIRECTOR — sees & approves everything</option>
+      <option value="DIRECTOR">DIRECTOR — sees &amp; approves everything</option>
       <option value="ADMIN">ADMIN — runs a domain day-to-day</option>
       <option value="STAFF">STAFF — own world only</option>
       <option value="PUBLIC">PUBLIC — outside surfaces only</option>
     </select>
-
-    <label style="margin-top:14px;">Module permissions (fine grain — ignored for Directors, who get all)</label>
+    <label style="margin-top:14px;">Module permissions (ignored for Directors, who get all)</label>
     <div class="permgrid" id="permgrid"></div>
-
-    <div class="switch">
-      <input type="checkbox" id="edit-active"><span>Account active (untick to suspend — sign-in keeps working but they see nothing)</span>
-    </div>
-
+    <div class="switch"><input type="checkbox" id="edit-active"><span>Account active</span></div>
     <div class="row2" style="margin-top:16px;">
-      <button class="btn ghost" onclick="closeEdit()">Cancel</button>
+      <button class="btn ghost" onclick="closeSheet('edit-overlay')">Cancel</button>
       <button class="btn gold" id="btn-save-user">Save</button>
     </div>
     <div id="edit-msg"></div>
   </div>
 </div>
 
-<script>
-/* =============================== CONFIG ====================================
-   Fill these two values from your Supabase project:
-   Dashboard -> Project Settings -> Data API  (URL)  and  API Keys (anon public)
-   The anon key is PUBLIC by design — safety lives in the database (RLS). The
-   service_role key must NEVER appear in this file or any browser code.       */
-const SUPABASE_URL      = "https://qkytrfvmamgtyxvivppu.supabase.co";      // e.g. https://abcd1234.supabase.co
-const SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
-/* ========================================================================== */
+<!-- MODAL: PARTY -->
+<div class="overlay hidden" id="party-overlay">
+  <div class="sheet">
+    <h3 id="pe-title">Distributor</h3>
+    <p class="email" id="pe-code"></p>
+    <label>Name *</label><input type="text" id="pe-name">
+    <div class="row2c">
+      <div><label>City</label><input type="text" id="pe-city"></div>
+      <div><label>Credit days</label><input type="number" id="pe-credit" value="0"></div>
+    </div>
+    <div class="row2c">
+      <div><label>License no.</label><input type="text" id="pe-license"></div>
+      <div><label>GSTIN</label><input type="text" id="pe-gstin"></div>
+    </div>
+    <div class="row2c">
+      <div><label>Contact person</label><input type="text" id="pe-contact"></div>
+      <div><label>Phone</label><input type="text" id="pe-phone"></div>
+    </div>
+    <label>Email</label><input type="text" id="pe-email">
+    <label>Salesperson (owner)</label><select id="pe-owner"></select>
+    <div class="switch"><input type="checkbox" id="pe-active" checked><span>Active</span></div>
+    <div class="row2" style="margin-top:16px;">
+      <button class="btn ghost" onclick="closeSheet('party-overlay')">Cancel</button>
+      <button class="btn gold" id="btn-save-party">Save</button>
+    </div>
+    <div id="pe-msg"></div>
+  </div>
+</div>
 
-/* The module registry. Phase 0 ships with only the Control Panel live; each
-   future build session adds a file + flips its entry here to live:true.     */
+<!-- MODAL: BRAND / SKU -->
+<div class="overlay hidden" id="brand-overlay">
+  <div class="sheet">
+    <h3>Add brand</h3>
+    <label>Brand name *</label><input type="text" id="ba-name" placeholder="e.g. Frost 91 Mango">
+    <label>Category</label><select id="ba-cat"></select>
+    <div class="row2" style="margin-top:16px;">
+      <button class="btn ghost" onclick="closeSheet('brand-overlay')">Cancel</button>
+      <button class="btn gold" id="btn-save-brand">Save</button>
+    </div>
+    <div id="ba-msg"></div>
+  </div>
+</div>
+<div class="overlay hidden" id="sku-overlay">
+  <div class="sheet">
+    <h3>Add SKU</h3>
+    <label>Brand</label><select id="sa-brand"></select>
+    <div class="row2c">
+      <div><label>Size (ml) *</label><input type="number" id="sa-size" placeholder="750"></div>
+      <div><label>Units per case *</label><input type="number" id="sa-upc" placeholder="12"></div>
+    </div>
+    <label>Pack material</label>
+    <select id="sa-material"><option value="PET">PET</option><option value="GLASS">GLASS</option></select>
+    <label>Manufacturer</label><select id="sa-mfr"></select>
+    <div class="row2" style="margin-top:16px;">
+      <button class="btn ghost" onclick="closeSheet('sku-overlay')">Cancel</button>
+      <button class="btn gold" id="btn-save-sku">Save</button>
+    </div>
+    <div id="sa-msg"></div>
+  </div>
+</div>
+
+<script>
+/* ================================ CONFIG ==================================== */
+const SUPABASE_URL      = "https://qkytrfvmamgtyxvivppu.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
+/* ============================================================================ */
+
 const MODULES = [
-  {key:'sales',   ico:'🧾', name:'Sales & Orders',   desc:'Distributor orders, dispatch, outstanding', live:false},
-  {key:'party',   ico:'🤝', name:'Party Master',     desc:'Distributors, corporations, vendors',       live:false},
-  {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Labels, pack sizes, rate cards',            live:false},
-  {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up',                    live:false},
-  {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',           live:false},
-  {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',                  live:false},
-  {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',                live:true, adminOnly:true},
+  {key:'sales',   ico:'🧾', name:'Sales & Orders',   desc:'Distributor orders, approval, dispatch', live:true,  open:()=>openOrders()},
+  {key:'party',   ico:'🤝', name:'Party Master',     desc:'Distributors & their salespersons',      live:true,  open:()=>openParties()},
+  {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Deccan Crest, Frost 91 family, packs',   live:true,  open:()=>openBrands()},
+  {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
+  {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up',                 live:false},
+  {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:false},
+  {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
+  {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
 ];
 const PERM_ACTIONS = ['view','add','edit','admin'];
-
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-let me = null;          // my adm.users row
-let editing = null;     // row being edited in the modal
+let me = null, editing = null, editingParty = null;
+let M = { brands:[], skus:[], mfrs:[], cats:[], users:[], parties:[] };  // master cache
+let orderFilter = 'ALL';
 
-/* ---------- tiny view router ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin'])
-    document.getElementById('view-'+v).classList.toggle('hidden', v!==view);
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates'])
+    $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
-const $ = id => document.getElementById(id);
-function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${text}</div>` : ''; }
+function closeSheet(id){ $(id).classList.add('hidden'); }
+function isDir(){ return me && me.role === 'DIRECTOR'; }
+function applyDirOnly(){
+  document.querySelectorAll('.dir-only').forEach(el => el.classList.toggle('hidden', !isDir()));
+}
 
-/* ---------- auth ---------- */
+/* ---------------- auth ---------------- */
 async function init(){
   const { data:{ session } } = await db.auth.getSession();
   if (!session) { show('login'); return; }
   const { data, error } = await db.schema('adm').from('users').select('*').eq('id', session.user.id).single();
   if (error || !data){ show('login'); say('login-msg','Signed in, but your profile was not found. Contact a Director.',false); return; }
   me = data;
-  if (!me.is_active){
-    show('login');
-    say('login-msg','Your account is currently suspended. Please contact a Director.',false);
-    return;
-  }
+  if (!me.is_active){ show('login'); say('login-msg','Your account is currently suspended. Please contact a Director.',false); return; }
   $('who').classList.remove('hidden');
   $('who-name').textContent = me.full_name;
   $('who-role').textContent = me.role + (me.designation ? ' · ' + me.designation : '');
   $('home-hello').textContent = 'Welcome, ' + me.full_name.split(' ')[0];
-  drawModules();
-  show('home');
+  drawModules(); applyDirOnly(); show('home');
 }
-
 $('btn-magic').onclick = async () => {
   const email = $('login-email').value.trim();
   if (!email) { say('login-msg','Please enter your email.',false); return; }
   $('btn-magic').disabled = true;
   const { error } = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.href.split('#')[0] } });
   $('btn-magic').disabled = false;
-  if (error) say('login-msg','Could not send the link: '+error.message,false);
-  else say('login-msg','Link sent. Open the email on this device and tap it.',true);
+  say('login-msg', error ? 'Could not send the link: '+error.message : 'Link sent. Open the email on this device and tap it.', !error);
 };
-
 $('btn-signout').onclick = async () => { await db.auth.signOut(); location.reload(); };
-db.auth.onAuthStateChange((event) => { if (event === 'SIGNED_IN') init(); });
+db.auth.onAuthStateChange((event) => { if (event === 'SIGNED_IN' && !me) init(); });
 
-/* ---------- home ---------- */
+/* ---------------- home ---------------- */
 function drawModules(){
   const grid = $('module-grid'); grid.innerHTML = '';
   for (const m of MODULES){
-    if (m.adminOnly && me.role !== 'DIRECTOR') continue;
+    if (m.dirOnly && !isDir()) continue;
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
     el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
                    (m.live ? '' : '<span class="tag">COMING SOON</span>');
-    if (m.live && m.key === 'control') el.onclick = openAdmin;
+    if (m.live && m.open) el.onclick = m.open;
     grid.appendChild(el);
   }
 }
 
-/* ---------- admin: users & roles ---------- */
+/* ---------------- masters cache ---------------- */
+async function loadMasters(){
+  const S = db.schema('sales');
+  const [b, s, f, c, p] = await Promise.all([
+    S.from('brands').select('*').order('name'),
+    S.from('skus').select('*, brand:brands(name)').order('sku_code'),
+    S.from('manufacturers').select('*'),
+    S.from('categories').select('*'),
+    S.from('parties').select('*').order('name'),
+  ]);
+  M.brands=b.data||[]; M.skus=s.data||[]; M.mfrs=f.data||[]; M.cats=c.data||[]; M.parties=p.data||[];
+  if (isDir() && !M.users.length){
+    const u = await db.schema('adm').from('users').select('id, full_name').order('full_name');
+    M.users = u.data||[];
+  }
+}
+
+/* ================= CONTROL PANEL (users) ================= */
 async function openAdmin(){
   const { data, error } = await db.schema('adm').from('users').select('*').order('full_name');
-  if (error){ alert('Could not load users: '+error.message); return; }
+  if (error){ say('od-msg','Could not load users: '+error.message,false); return; }
   const tb = $('user-rows'); tb.innerHTML = '';
   for (const u of data){
     const tr = document.createElement('tr');
@@ -295,16 +449,13 @@ async function openAdmin(){
     tr.innerHTML =
       `<td><b>${esc(u.full_name)}</b><br><span style="font-size:11px;color:#777">${esc(u.email)}</span></td>` +
       `<td><span class="pill ${u.role}">${u.role}</span>${u.is_superadmin?' <span class="lock" title="Founder lock">🔒</span>':''}</td>` +
-      `<td>${esc(u.designation||'—')}</td>` +
-      `<td>${u.is_active?'✔':'✖'}</td>` +
+      `<td>${esc(u.designation||'—')}</td><td>${u.is_active?'✔':'✖'}</td>` +
       `<td><button class="mini">Edit</button></td>`;
     tr.querySelector('button').onclick = () => openEdit(u);
     tb.appendChild(tr);
   }
   show('admin');
 }
-function esc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
 function openEdit(u){
   editing = u;
   $('edit-name').textContent  = u.full_name;
@@ -313,11 +464,10 @@ function openEdit(u){
   $('edit-designation').value = u.designation || '';
   $('edit-role').value        = u.role;
   $('edit-active').checked    = u.is_active;
-
   const g = $('permgrid');
   g.innerHTML = '<div class="permrow"><div>Module</div>' + PERM_ACTIONS.map(a=>`<div>${a}</div>`).join('') + '</div>';
   for (const m of MODULES){
-    if (m.key === 'control') continue;   // control panel is tier-gated, not grant-gated
+    if (m.key === 'control' || m.key === 'rates') continue;
     const p = (u.permissions_json||{})[m.key] || {};
     g.insertAdjacentHTML('beforeend',
       `<div class="permrow"><div>${m.ico} ${m.name}</div>` +
@@ -327,8 +477,6 @@ function openEdit(u){
   say('edit-msg','');
   $('edit-overlay').classList.remove('hidden');
 }
-function closeEdit(){ $('edit-overlay').classList.add('hidden'); editing = null; }
-
 $('btn-save-user').onclick = async () => {
   if (!editing) return;
   const perms = {};
@@ -336,19 +484,348 @@ $('btn-save-user').onclick = async () => {
     if (cb.checked){ (perms[cb.dataset.mod] ??= {})[cb.dataset.act] = true; }
   });
   const patch = {
-    full_name:        $('edit-fullname').value.trim() || editing.full_name,
-    designation:      $('edit-designation').value.trim() || null,
-    role:             $('edit-role').value,
-    is_active:        $('edit-active').checked,
+    full_name: $('edit-fullname').value.trim() || editing.full_name,
+    designation: $('edit-designation').value.trim() || null,
+    role: $('edit-role').value,
+    is_active: $('edit-active').checked,
     permissions_json: perms
   };
   const { error } = await db.schema('adm').from('users').update(patch).eq('id', editing.id);
   if (error){ say('edit-msg','Save failed: '+error.message,false); return; }
-  closeEdit();
-  openAdmin();  // refresh list
+  closeSheet('edit-overlay'); openAdmin();
 };
 
-/* ---------- go ---------- */
+/* ================= ORDERS ================= */
+async function openOrders(){
+  await loadMasters();
+  const S = db.schema('sales');
+  let q = S.from('orders').select('*, party:parties(code,name)').order('created_at',{ascending:false}).limit(200);
+  if (orderFilter !== 'ALL') q = q.eq('status', orderFilter);
+  const { data: orders, error } = await q;
+  if (error){ say('no-msg','Load failed: '+error.message,false); return; }
+  const ids = (orders||[]).map(o=>o.id);
+  let caseTotals = {}, amtTotals = {};
+  if (ids.length){
+    const { data: lines } = await S.from('order_lines').select('id, order_id, cases').in('order_id', ids);
+    (lines||[]).forEach(l => caseTotals[l.order_id] = (caseTotals[l.order_id]||0) + Number(l.cases));
+    if (isDir() && lines && lines.length){
+      const { data: vals } = await S.from('order_values').select('line_id, amount').in('line_id', lines.map(l=>l.id));
+      const byLine = {}; (vals||[]).forEach(v => byLine[v.line_id] = Number(v.amount));
+      (lines||[]).forEach(l => { if (byLine[l.id]!=null) amtTotals[l.order_id] = (amtTotals[l.order_id]||0) + byLine[l.id]; });
+    }
+  }
+  const chips = ['ALL','RECEIVED','APPROVED','DISPATCHED','DELIVERED','CLOSED','CANCELLED'];
+  $('order-filters').innerHTML = chips.map(c=>`<button class="chip ${orderFilter===c?'on':''}" onclick="orderFilter='${c}';openOrders()">${c}</button>`).join(' ');
+  const tb = $('order-rows'); tb.innerHTML = '';
+  for (const o of (orders||[])){
+    const tr = document.createElement('tr'); tr.className = 'rowlink';
+    tr.innerHTML =
+      `<td><b>${esc(o.so_no)}</b></td><td>${o.order_date}</td>` +
+      `<td>${esc(o.party?.name||'')}<br><span style="font-size:11px;color:#777">${esc(o.party?.code||'')}</span></td>` +
+      `<td><span class="pill ${o.status}">${o.status}</span></td>` +
+      `<td class="amount">${caseTotals[o.id]||0}</td>` +
+      (isDir()?`<td class="amount">${amtTotals[o.id]!=null?inr(amtTotals[o.id]):'—'}</td>`:'');
+    tr.onclick = () => openOrderDetail(o.id);
+    tb.appendChild(tr);
+  }
+  applyDirOnly(); show('orders');
+}
+
+let lineCounter = 0;
+function addLineRow(){
+  const opts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
+  $('no-lines').insertAdjacentHTML('beforeend',
+    `<div class="linerow" id="lr-${++lineCounter}">
+       <select data-k="sku">${opts}</select>
+       <input type="number" data-k="cases" placeholder="cases" min="1">
+       <button onclick="document.getElementById('lr-${lineCounter}').remove()">✕</button>
+     </div>`);
+}
+async function openNewOrder(){
+  await loadMasters();
+  const mine = M.parties.filter(p=>p.is_active);
+  $('no-party').innerHTML = mine.map(p=>`<option value="${p.id}">${esc(p.code)} — ${esc(p.name)}</option>`).join('');
+  $('no-lines').innerHTML = ''; lineCounter = 0; addLineRow();
+  $('no-remarks').value = ''; say('no-msg','');
+  show('order-new');
+}
+$('btn-create-order').onclick = async () => {
+  const lines = [];
+  document.querySelectorAll('#no-lines .linerow').forEach(r=>{
+    const sku = r.querySelector('[data-k=sku]').value;
+    const cases = Number(r.querySelector('[data-k=cases]').value);
+    if (sku && cases > 0) lines.push({sku_id: sku, cases});
+  });
+  if (!lines.length){ say('no-msg','Add at least one line with cases.',false); return; }
+  $('btn-create-order').disabled = true;
+  const { data, error } = await db.schema('sales').rpc('create_order',
+    { p_party: $('no-party').value, p_lines: lines, p_remarks: $('no-remarks').value.trim() || null });
+  $('btn-create-order').disabled = false;
+  if (error){ say('no-msg', error.message, false); return; }
+  openOrderDetail(data);
+};
+
+async function openOrderDetail(id){
+  const S = db.schema('sales');
+  const { data: o, error } = await S.from('orders')
+    .select('*, party:parties(code,name,city), approver:approved_by(full_name)').eq('id', id).single();
+  if (error){ say('od-msg','Load failed: '+error.message,false); return; }
+  const { data: lines } = await S.from('order_lines')
+    .select('*, sku:skus(sku_code, units_per_case)').eq('order_id', id).order('id');
+  let vals = {};
+  if (isDir() && lines && lines.length){
+    const { data: v } = await S.from('order_values').select('*').in('line_id', lines.map(l=>l.id));
+    (v||[]).forEach(x => vals[x.line_id] = x);
+  }
+  $('od-title').textContent = o.so_no;
+  $('od-sub').innerHTML = `${esc(o.party?.name)} (${esc(o.party?.code)}) · ${o.order_date} · ` +
+    `<span class="pill ${o.status}">${o.status}</span>` +
+    (o.invoice_no ? ` · Invoice ${esc(o.invoice_no)}` : '') +
+    (o.remarks ? `<br>Remarks: ${esc(o.remarks)}` : '');
+  const tb = $('od-lines'); tb.innerHTML = '';
+  let totAmt = 0, totCases = 0;
+  for (const l of (lines||[])){
+    const v = vals[l.id]; totCases += Number(l.cases);
+    if (v) totAmt += Number(v.amount);
+    tb.insertAdjacentHTML('beforeend',
+      `<tr><td>${esc(l.sku?.sku_code)}</td><td class="amount">${l.cases}</td>` +
+      (isDir()?`<td class="amount">${v?inr(v.rate_per_case):'—'}</td><td class="amount">${v?inr(v.amount):'—'}</td>`:'') + '</tr>');
+  }
+  tb.insertAdjacentHTML('beforeend',
+    `<tr><td><b>Total</b></td><td class="amount"><b>${totCases}</b></td>` +
+    (isDir()?`<td></td><td class="amount"><b>${totAmt?inr(totAmt):'—'}</b></td>`:'') + '</tr>');
+
+  // stage buttons
+  const A = $('od-actions'); A.innerHTML = '';
+  const btn = (label, cls, fn) => { const b=document.createElement('button'); b.className='btn sm '+cls; b.style.marginRight='8px'; b.textContent=label; b.onclick=fn; A.appendChild(b); };
+  if (isDir()){
+    if (o.status==='RECEIVED'){
+      btn('Approve (stamp rates)','gold', async()=>{ await act('approve_order',{p_order:id}, id); });
+      btn('Cancel order','danger', async()=>{ await act('set_order_status',{p_order:id,p_status:'CANCELLED'}, id); });
+    }
+    if (o.status==='APPROVED'){
+      A.insertAdjacentHTML('beforeend','<input type="text" id="od-inv" placeholder="Invoice no." style="width:180px;display:inline-block;margin-right:8px;">');
+      btn('Dispatch','gold', async()=>{
+        const inv = $('od-inv').value.trim();
+        if (!inv){ say('od-msg','Enter the invoice number first.',false); return; }
+        await act('dispatch_order',{p_order:id,p_invoice:inv}, id);
+      });
+      btn('Cancel order','danger', async()=>{ await act('set_order_status',{p_order:id,p_status:'CANCELLED'}, id); });
+    }
+    if (o.status==='DISPATCHED') btn('Mark delivered','gold', async()=>{ await act('set_order_status',{p_order:id,p_status:'DELIVERED'}, id); });
+    if (o.status==='DELIVERED')  btn('Close order','ghost', async()=>{ await act('set_order_status',{p_order:id,p_status:'CLOSED'}, id); });
+  }
+
+  // payments (director)
+  const P = $('od-pay');
+  if (isDir()){
+    const { data: pays } = await S.from('payments').select('*').eq('order_id', id).order('pay_date');
+    P.innerHTML = '<h4 class="sec">Payments</h4>' +
+      ((pays&&pays.length) ? '<div class="table-scroll"><table><thead><tr><th>Date</th><th class="amount">Amount ₹</th><th>Mode</th><th>Ref</th></tr></thead><tbody>' +
+        pays.map(p=>`<tr><td>${p.pay_date}</td><td class="amount">${inr(p.amount)}</td><td>${esc(p.mode||'')}</td><td>${esc(p.ref_no||'')}</td></tr>`).join('') +
+        '</tbody></table></div>' : '<p style="font-size:12px;color:#777">No payments recorded.</p>') +
+      `<div class="row2c" style="margin-top:8px;">
+         <input type="number" id="pay-amt" placeholder="Amount ₹">
+         <select id="pay-mode"><option>NEFT</option><option>RTGS</option><option>UPI</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select>
+       </div>
+       <div class="row2c" style="margin-top:8px;">
+         <input type="text" id="pay-ref" placeholder="Reference no.">
+         <button class="btn gold sm" id="btn-add-pay" style="padding:11px;">Record payment</button>
+       </div>`;
+    $('btn-add-pay').onclick = async () => {
+      const amt = Number($('pay-amt').value);
+      if (!(amt>0)){ say('od-msg','Enter a valid amount.',false); return; }
+      const { error: e2 } = await S.from('payments').insert({
+        party_id: o.party_id, order_id: id, amount: amt,
+        mode: $('pay-mode').value, ref_no: $('pay-ref').value.trim()||null, created_by: me.id });
+      if (e2){ say('od-msg','Could not record payment: '+e2.message,false); return; }
+      openOrderDetail(id);
+    };
+  } else P.innerHTML = '';
+  say('od-msg',''); applyDirOnly(); show('order-detail');
+
+  async function act(fn, args, oid){
+    const { error: e } = await db.schema('sales').rpc(fn, args);
+    if (e){ say('od-msg', e.message, false); return; }
+    openOrderDetail(oid);
+  }
+}
+
+/* ================= PARTIES ================= */
+async function openParties(){
+  await loadMasters();
+  const tb = $('party-rows'); tb.innerHTML = '';
+  const ownerName = id => (M.users.find(u=>u.id===id)||{}).full_name || (id===me.id?'me':'—');
+  for (const p of M.parties){
+    const tr = document.createElement('tr');
+    if (!p.is_active) tr.className='inactive';
+    tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td>` +
+      `<td>${esc(ownerName(p.owner_id))}</td><td>${p.is_active?'✔':'✖'}</td>` +
+      `<td><button class="mini">Edit</button></td>`;
+    tr.querySelector('button').onclick = ()=>openPartyEdit(p);
+    tb.appendChild(tr);
+  }
+  show('parties');
+}
+function openPartyEdit(p){
+  editingParty = p;
+  $('pe-title').textContent = p ? 'Edit distributor' : 'Add distributor';
+  $('pe-code').textContent = p ? p.code : 'Code will be issued automatically (DST-…)';
+  $('pe-name').value = p?.name||''; $('pe-city').value = p?.city||'';
+  $('pe-credit').value = p?.credit_days??0; $('pe-license').value = p?.license_no||'';
+  $('pe-gstin').value = p?.gstin||''; $('pe-contact').value = p?.contact_person||'';
+  $('pe-phone').value = p?.phone||''; $('pe-email').value = p?.email||'';
+  $('pe-active').checked = p ? p.is_active : true;
+  const owners = isDir() ? M.users : [{id:me.id, full_name:me.full_name}];
+  $('pe-owner').innerHTML = owners.map(u=>`<option value="${u.id}" ${p&&p.owner_id===u.id?'selected':(!p&&u.id===me.id?'selected':'')}>${esc(u.full_name)}</option>`).join('');
+  say('pe-msg','');
+  $('party-overlay').classList.remove('hidden');
+}
+$('btn-save-party').onclick = async () => {
+  const name = $('pe-name').value.trim();
+  if (!name){ say('pe-msg','Name is required.',false); return; }
+  const patch = {
+    name, city: $('pe-city').value.trim()||null, credit_days: Number($('pe-credit').value)||0,
+    license_no: $('pe-license').value.trim()||null, gstin: $('pe-gstin').value.trim()||null,
+    contact_person: $('pe-contact').value.trim()||null, phone: $('pe-phone').value.trim()||null,
+    email: $('pe-email').value.trim()||null, owner_id: $('pe-owner').value, is_active: $('pe-active').checked
+  };
+  let error;
+  if (editingParty){
+    ({ error } = await db.schema('sales').from('parties').update(patch).eq('id', editingParty.id));
+  } else {
+    const { data: code, error: e1 } = await db.schema('app').rpc('next_party_code');
+    if (e1){ say('pe-msg', e1.message, false); return; }
+    ({ error } = await db.schema('sales').from('parties').insert({ ...patch, code, state_id:'MH', created_by: me.id }));
+  }
+  if (error){ say('pe-msg','Save failed: '+error.message,false); return; }
+  closeSheet('party-overlay'); openParties();
+};
+
+/* ================= BRANDS & SKUs ================= */
+async function openBrands(){
+  await loadMasters();
+  const tb = $('sku-rows'); tb.innerHTML = '';
+  const mfrName = id => (M.mfrs.find(m=>m.id===id)||{}).code || '—';
+  for (const s of M.skus){
+    const tr = document.createElement('tr');
+    if (!s.is_active) tr.className='inactive';
+    tr.innerHTML = `<td><b>${esc(s.sku_code)}</b></td><td>${esc(s.brand?.name)}</td>` +
+      `<td>${s.size_ml} ml</td><td>${s.units_per_case}</td><td>${s.material}</td><td>${mfrName(s.manufacturer_id)}</td>` +
+      `<td>${s.is_active?'✔':'✖'}</td>` +
+      (isDir()?`<td><button class="mini">${s.is_active?'Deactivate':'Reactivate'}</button></td>`:'');
+    if (isDir()) tr.querySelector('button').onclick = async ()=>{
+      const { error } = await db.schema('sales').from('skus').update({is_active: !s.is_active}).eq('id', s.id);
+      if (!error) openBrands();
+    };
+    tb.appendChild(tr);
+  }
+  applyDirOnly(); show('brands');
+}
+function openBrandAdd(){
+  $('ba-name').value=''; say('ba-msg','');
+  $('ba-cat').innerHTML = M.cats.map(c=>`<option value="${c.id}" ${c.id==='MML'?'selected':''}>${esc(c.id)} — ${esc(c.name)}</option>`).join('');
+  $('brand-overlay').classList.remove('hidden');
+}
+$('btn-save-brand').onclick = async () => {
+  const name = $('ba-name').value.trim();
+  if (!name){ say('ba-msg','Brand name is required.',false); return; }
+  const { error } = await db.schema('sales').from('brands').insert({ name, category_id: $('ba-cat').value });
+  if (error){ say('ba-msg', error.message, false); return; }
+  closeSheet('brand-overlay'); openBrands();
+};
+function openSkuAdd(){
+  say('sa-msg','');
+  $('sa-brand').innerHTML = M.brands.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('sa-mfr').innerHTML = M.mfrs.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('');
+  $('sa-size').value=''; $('sa-upc').value='';
+  $('sku-overlay').classList.remove('hidden');
+}
+$('btn-save-sku').onclick = async () => {
+  const size = Number($('sa-size').value), upc = Number($('sa-upc').value);
+  if (!(size>0 && upc>0)){ say('sa-msg','Size and units per case are required.',false); return; }
+  const brand = M.brands.find(b=>b.id===$('sa-brand').value);
+  const code = (brand.name.toUpperCase().replace(/ /g,'')) + '-' + size + '-' + $('sa-material').value;
+  const { error } = await db.schema('sales').from('skus').insert({
+    sku_code: code, brand_id: brand.id, size_ml: size, units_per_case: upc,
+    material: $('sa-material').value, manufacturer_id: $('sa-mfr').value });
+  if (error){ say('sa-msg', error.message, false); return; }
+  closeSheet('sku-overlay'); openBrands();
+};
+
+/* ================= RATES / STRUCTURE / OUTSTANDING / CM ================= */
+async function openRates(){ await loadMasters(); ratesTab('rates'); show('rates'); }
+async function ratesTab(which){
+  ['rates','struct','out','cm'].forEach(k => $('rt-'+k).classList.toggle('on', k===which));
+  const B = $('rates-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
+  const S = db.schema('sales');
+  if (which === 'rates'){
+    const { data: rates, error } = await S.from('rate_cards').select('*').is('party_id', null).eq('state_id','MH')
+      .order('effective_from',{ascending:false});
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    const latest = {};
+    (rates||[]).forEach(r => { if (!latest[r.sku_id]) latest[r.sku_id] = r; });
+    let html = '<div class="table-scroll"><table><thead><tr><th>SKU</th><th class="amount">Current rate/case ₹</th><th>Effective</th><th style="width:280px;">New rate (adds a dated row)</th></tr></thead><tbody>';
+    for (const s of M.skus.filter(x=>x.is_active)){
+      const r = latest[s.id];
+      html += `<tr><td><b>${esc(s.sku_code)}</b></td>
+        <td class="amount">${r?inr(r.rate_per_case):'<span style="color:#b3382c">not set</span>'}</td>
+        <td>${r?r.effective_from:'—'}</td>
+        <td><div style="display:flex;gap:6px;">
+          <input type="number" id="nr-${s.id}" placeholder="₹/case" style="padding:7px;font-size:12px;">
+          <input type="date" id="nd-${s.id}" style="padding:7px;font-size:12px;">
+          <button class="mini" onclick="saveRate('${s.id}')">Set</button>
+        </div></td></tr>`;
+    }
+    B.innerHTML = html + '</tbody></table></div><div id="rates-msg"></div>';
+  }
+  if (which === 'struct'){
+    const { data, error } = await S.from('v_sku_structures').select('*').eq('state_id','MH').order('sku_code');
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    const latest = {}; (data||[]).sort((a,b)=>b.effective_from.localeCompare(a.effective_from)).forEach(r=>{ if(!latest[r.sku_id]) latest[r.sku_id]=r; });
+    let html = '<div class="table-scroll"><table><thead><tr><th>SKU</th><th class="amount">MC/btl</th><th class="amount">MC/case</th><th class="amount">MC actual</th><th class="amount">MRP base</th><th class="amount">VAT/case</th><th class="amount">Excise/case</th><th class="amount">MRP/case</th></tr></thead><tbody>';
+    for (const r of Object.values(latest)){
+      html += `<tr><td><b>${esc(r.sku_code)}</b></td><td class="amount">${inr(r.mc_per_bottle)}</td>
+        <td class="amount">${inr(r.mc_per_case)}</td>
+        <td class="amount"><input type="number" id="mca-${r.id}" value="${r.mc_actual??''}" placeholder="—" style="width:90px;padding:5px;font-size:12px;text-align:right;" onchange="saveMcActual('${r.id}')"></td>
+        <td class="amount">${inr(r.mrp_base)}</td><td class="amount">${inr(r.vat_per_case)}</td>
+        <td class="amount">${inr(r.excise_per_case)}</td><td class="amount">${inr(r.mrp_per_case)}</td></tr>`;
+    }
+    B.innerHTML = html + '</tbody></table></div><p style="font-size:11px;color:#777;margin-top:8px;">Per-case figures are computed by the database from per-bottle inputs — they cannot be mistyped. New states get their own structure rows when you expand.</p><div id="rates-msg"></div>';
+  }
+  if (which === 'out'){
+    const { data, error } = await S.from('v_party_outstanding').select('*').order('outstanding',{ascending:false});
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    let html = '<div class="table-scroll"><table><thead><tr><th>Party</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th class="amount">Outstanding ₹</th></tr></thead><tbody>';
+    for (const r of (data||[])) html += `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${inr(r.billed)}</td><td class="amount">${inr(r.paid)}</td><td class="amount"><b>${inr(r.outstanding)}</b></td></tr>`;
+    B.innerHTML = html + '</tbody></table></div>';
+  }
+  if (which === 'cm'){
+    const { data, error } = await S.from('cm_payables').select('*, order:orders(so_no)').order('accrued_at',{ascending:false}).limit(200);
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    const total = (data||[]).reduce((a,r)=>a+Number(r.amount),0);
+    let html = `<div class="statgrid"><div class="stat"><div class="n">₹ ${inr(total)}</div><div class="l">Total accrued to MMC (dispatched orders)</div></div></div>`;
+    html += '<div class="table-scroll"><table><thead><tr><th>Order</th><th class="amount">Cases</th><th class="amount">CM ₹/case</th><th class="amount">Amount ₹</th><th>Accrued</th></tr></thead><tbody>';
+    for (const r of (data||[])) html += `<tr><td>${esc(r.order?.so_no)}</td><td class="amount">${r.cases}</td><td class="amount">${inr(r.cm_charge_per_case)}</td><td class="amount">${inr(r.amount)}</td><td>${r.accrued_at.slice(0,10)}</td></tr>`;
+    B.innerHTML = html + '</tbody></table></div>';
+  }
+}
+async function saveRate(skuId){
+  const rate = Number($('nr-'+skuId).value);
+  const eff = $('nd-'+skuId).value || new Date().toISOString().slice(0,10);
+  if (!(rate>0)){ say('rates-msg','Enter a valid rate.',false); return; }
+  const { error } = await db.schema('sales').from('rate_cards').insert({
+    sku_id: skuId, state_id:'MH', party_id:null, rate_per_case: rate, effective_from: eff, created_by: me.id });
+  if (error){ say('rates-msg', error.message, false); return; }
+  ratesTab('rates');
+}
+async function saveMcActual(structId){
+  const v = $('mca-'+structId).value;
+  const { error } = await db.schema('sales').from('sku_structures')
+    .update({ mc_actual: v===''?null:Number(v) }).eq('id', structId);
+  if (error) say('rates-msg', error.message, false);
+}
+
 init();
 </script>
 </body>
