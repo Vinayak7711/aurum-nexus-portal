@@ -684,7 +684,9 @@ async function openOrderDetail(id){
        </div>`;
     $('btn-add-pay').onclick = async () => {
       const amt = Number($('pay-amt').value);
-      if (!(amt>0)){ say('od-msg','Enter a valid amount.',false); return; }
+      if (!amt){ say('od-msg','Enter a valid amount.',false); return; }
+      if (amt < 0 && !isDir()){ say('od-msg','Only a Director may enter a reversal (negative) amount.',false); return; }
+      if (amt < 0 && !confirm('Record a REVERSAL of ₹' + Math.abs(amt).toLocaleString('en-IN') + '? This corrects a wrong payment while keeping its history.')) return;
       const { error: e2 } = await S.from('payments').insert({
         party_id: o.party_id, order_id: id, amount: amt,
         mode: $('pay-mode').value, ref_no: $('pay-ref').value.trim()||null, created_by: me.id });
