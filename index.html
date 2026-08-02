@@ -284,6 +284,20 @@
     <div id="reports-body"></div>
   </section>
 
+  <!-- ============ MODULE 8: PURCHASES & RM STORE ============ -->
+  <section id="view-purchase" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Purchases &amp; RM Store</h2>
+      <p>Accounts places purchase orders on registered vendors and tracks them — placed, dispatched, received. Production raises material requests. Receipts fill the company store; issues to MMC draw it down, never below zero.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="pu-pos" onclick="purchaseTab('pos')">Purchase orders</button>
+      <button class="chip" id="pu-new" onclick="purchaseTab('new')">New PO</button>
+      <button class="chip" id="pu-req" onclick="purchaseTab('req')">Material requests</button>
+      <button class="chip" id="pu-store" onclick="purchaseTab('store')">RM store</button>
+    </div>
+    <div id="purchase-body"></div>
+  </section>
+
   <!-- ============ MODULE 4: EXCISE & RENEWALS ============ -->
   <section id="view-comp" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -421,6 +435,7 @@ const MODULES = [
   {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
   {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
   {key:'reports', ico:'📈', name:'Sales Reports',    desc:'Daily activity, monthly reports, targets', live:true, open:()=>openReports()},
+  {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
@@ -437,7 +452,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp','reports'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp','reports','purchase'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -537,7 +552,7 @@ function openEdit(u){
   const g = $('permgrid');
   g.innerHTML = '<div class="permrow"><div>Module</div>' + PERM_ACTIONS.map(a=>`<div>${a}</div>`).join('') + '</div>';
   for (const m of MODULES){
-    if (m.key === 'control' || m.key === 'rates' || m.key === 'reports') continue;  // reports uses the sales grants
+    if (m.key === 'control' || m.key === 'rates' || m.key === 'reports' || m.key === 'purchase') continue;  // reports/purchase use the sales, finance & mfg grants
     const p = (u.permissions_json||{})[m.key] || {};
     g.insertAdjacentHTML('beforeend',
       `<div class="permrow"><div>${m.ico} ${m.name}</div>` +
@@ -1364,6 +1379,221 @@ async function rpReview(kind, id, uid, name){
   const { error } = await db.schema('sales').rpc('review_report', { p_kind: kind, p_id: id });
   if (error){ say('reports-body','',false); $('rp-member').insertAdjacentHTML('afterbegin', `<div class="msg err">Could not review: ${esc(error.message)}</div>`); return; }
   rpMember(uid, name);
+}
+
+/* ================= MODULE 8: PURCHASES & RM STORE ================= */
+function canFin(){ return isDir() || !!(me?.permissions_json?.finance?.view); }
+function canFinEdit(){ return isDir() || !!(me?.permissions_json?.finance?.edit); }
+function canMfgAdd(){ return isDir() || !!(me?.permissions_json?.mfg?.add); }
+let poLines = [], reqLines = [], rmItems = [], poLinkReq = null;
+async function openPurchase(){
+  const { data } = await db.schema('mfg').from('rm_items').select('*').eq('is_active', true).order('code');
+  rmItems = data || [];
+  purchaseTab('pos'); applyDirOnly(); show('purchase');
+}
+const PO_COL = { PLACED:'#b8860b', DISPATCHED:'#0b57d0', PARTIAL:'#b8860b', RECEIVED:'#1a7f37', CANCELLED:'#777' };
+async function purchaseTab(t){
+  for (const k of ['pos','new','req','store']) $('pu-'+k).classList.toggle('on', k === t);
+  const B = $('purchase-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
+  const G = db.schema('mfg');
+
+  if (t === 'pos'){
+    const { data: pos, error } = await G.from('v_po_tracking').select('*').order('order_date', {ascending:false}).limit(200);
+    if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    let amounts = {};
+    if (canFin() && (pos||[]).length){
+      const { data: lines } = await G.from('po_lines').select('id, po_id').in('po_id', pos.map(p=>p.id));
+      if (lines && lines.length){
+        const { data: vals } = await G.from('po_values').select('line_id, amount').in('line_id', lines.map(l=>l.id));
+        const byLine = {}; (vals||[]).forEach(v => byLine[v.line_id] = Number(v.amount));
+        lines.forEach(l => { if (byLine[l.id]!=null) amounts[l.po_id] = (amounts[l.po_id]||0) + byLine[l.id]; });
+      }
+    }
+    B.innerHTML = `
+      <h4 class="sec">Purchase orders — placed → dispatched → received</h4>
+      <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹</th>':''}<th>Status</th><th></th></tr></thead><tbody>
+      ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b></td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
+        `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
+        (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
+        `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${p.status}</span></td>` +
+        `<td>${canFinEdit() ? (p.status==='PLACED' ? `<button class="mini" onclick="poDispatch('${p.id}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
+              (['PLACED','DISPATCHED','PARTIAL'].includes(p.status) ? `<button class="mini" onclick="poReceiveForm('${p.id}','${esc(p.po_no)}')">Receive…</button>` : '') : ''}</td></tr>`).join('')
+        || '<tr><td colspan="8" style="color:#777">No purchase orders yet — place one from the New PO tab.</td></tr>'}
+      </tbody></table></div>
+      <div id="po-recv"></div><div id="po-msg"></div>`;
+    return;
+  }
+
+  if (t === 'new'){
+    if (!canFinEdit()){ B.innerHTML = '<p style="color:#777">Purchase orders are placed by Accounts (finance) or the Director.</p>'; return; }
+    const { data: vendors } = await db.schema('sales').from('vendors').select('id, code, name, status').neq('status','INACTIVE').order('name');
+    const { data: reqs } = await G.from('rm_requests').select('*').eq('status','REQUESTED').order('created_at');
+    if (!poLines.length && poLinkReq){
+      const { data: rl } = await G.from('rm_request_lines').select('*').eq('request_id', poLinkReq);
+      (rl||[]).forEach(l => poLines.push({ rm_item_id: l.rm_item_id, qty: Number(l.qty), rate: 0 }));
+    }
+    const itemName = id => (rmItems.find(i=>i.id===id)||{}).name || '?';
+    B.innerHTML = `
+      <h4 class="sec">New purchase order</h4>
+      <div class="row2c">
+        <div><label>Vendor (registered) *</label><select id="po-vendor">${(vendors||[]).map(v=>`<option value="${v.id}">${esc(v.name)} (${esc(v.code)})${v.status==='PENDING'?' — pending':''}</option>`).join('')}</select></div>
+        <div><label>Expected delivery</label><input type="date" id="po-expected"></div>
+      </div>
+      <label>Fulfils material request</label>
+      <select id="po-req" onchange="poLinkReq=this.value||null; poLines=[]; purchaseTab('new')"><option value="">— none —</option>${(reqs||[]).map(r=>`<option value="${r.id}" ${poLinkReq===r.id?'selected':''}>${esc(r.req_no)}${r.needed_by?' · needed by '+r.needed_by:''}</option>`).join('')}</select>
+      <h4 class="sec" style="margin-top:14px;">Lines</h4>
+      <div class="row2c">
+        <div><label>Material</label><select id="pol-item">${rmItems.map(i=>`<option value="${i.id}">${esc(i.code)} — ${esc(i.name)} (${i.unit})</option>`).join('')}</select></div>
+        <div class="row2c"><div><label>Qty *</label><input type="number" id="pol-qty" min="0.01" step="any"></div>
+        <div><label>Rate ₹/unit *</label><input type="number" id="pol-rate" min="0" step="any"></div></div>
+      </div>
+      <button class="btn ghost sm" style="margin-top:8px;" onclick="poAddLine()">+ Add line</button>
+      <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Amount ₹</th><th></th></tr></thead><tbody id="pol-rows">
+      ${poLines.map((l,i)=>`<tr><td>${esc(itemName(l.rm_item_id))}</td><td class="amount">${l.qty}</td><td class="amount">${inr(l.rate)}</td><td class="amount">${inr(l.qty*l.rate)}</td><td><button class="mini" onclick="poLines.splice(${i},1);purchaseTab('new')">✖</button></td></tr>`).join('')}
+      </tbody></table></div>
+      <p style="font-size:13px;"><b>Total: ₹ ${inr(poLines.reduce((s,l)=>s+l.qty*l.rate,0))}</b></p>
+      <label>Remarks</label><input type="text" id="po-remarks">
+      <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">Place purchase order</button>
+      <div id="pon-msg"></div>`;
+    return;
+  }
+
+  if (t === 'req'){
+    const { data: reqs, error } = await G.from('rm_requests').select('*').order('created_at', {ascending:false}).limit(100);
+    if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    const ids = (reqs||[]).map(r=>r.id);
+    let linesBy = {};
+    if (ids.length){
+      const { data: rl } = await G.from('rm_request_lines').select('*').in('request_id', ids);
+      (rl||[]).forEach(l => { (linesBy[l.request_id] ??= []).push(l); });
+    }
+    const itemLabel = id => { const i = rmItems.find(x=>x.id===id)||{}; return (i.code||'?') + ' ' + (i.qtyu||''); };
+    const RQ_COL = { REQUESTED:'#b8860b', ORDERED:'#0b57d0', FULFILLED:'#1a7f37', REJECTED:'#b3261e' };
+    B.innerHTML = `
+      ${canMfgAdd() ? `
+      <h4 class="sec">Raise a material request (production)</h4>
+      <div class="row2c">
+        <div><label>Material</label><select id="rql-item">${rmItems.map(i=>`<option value="${i.id}">${esc(i.code)} — ${esc(i.name)} (${i.unit})</option>`).join('')}</select></div>
+        <div class="row2c"><div><label>Qty *</label><input type="number" id="rql-qty" min="0.01" step="any"></div>
+        <div><label>Needed by</label><input type="date" id="rq-needed"></div></div>
+      </div>
+      <button class="btn ghost sm" style="margin-top:8px;" onclick="reqAddLine()">+ Add line</button>
+      <div id="rql-list" style="font-size:13px;margin-top:6px;">${reqLines.map((l,i)=>{const it=rmItems.find(x=>x.id===l.rm_item_id)||{};return `<span class="pill" style="margin-right:6px;">${esc(it.code||'?')} × ${l.qty} <a href="#" onclick="reqLines.splice(${i},1);purchaseTab('req');return false;">✖</a></span>`;}).join('')}</div>
+      <label>Remarks</label><input type="text" id="rq-remarks">
+      <button class="btn gold" style="margin-top:8px;" onclick="reqRaise()">Submit request</button>
+      <div id="rq-msg"></div>` : ''}
+      <h4 class="sec" style="margin-top:16px;">Material requests</h4>
+      <div class="table-scroll"><table><thead><tr><th>Request</th><th>Materials</th><th>Needed by</th><th>Status</th><th>Remarks</th><th></th></tr></thead><tbody>
+      ${(reqs||[]).map(r=>`<tr><td><b>${esc(r.req_no)}</b></td>` +
+        `<td>${(linesBy[r.id]||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};return esc(i.code||'?')+' × '+Number(l.qty)+' '+(i.unit||'');}).join(', ')}</td>` +
+        `<td>${r.needed_by||'—'}</td><td><span style="color:${RQ_COL[r.status]||'#333'};font-weight:600">${r.status}</span></td><td style="max-width:220px">${esc(r.remarks||'')}</td>` +
+        `<td>${canFinEdit() && r.status==='REQUESTED' ? `<button class="mini" onclick="poLinkReq='${r.id}';poLines=[];purchaseTab('new')">Create PO</button> <button class="mini" onclick="reqReject('${r.id}')">Reject</button>` : ''}</td></tr>`).join('')
+        || '<tr><td colspan="6" style="color:#777">No material requests yet.</td></tr>'}
+      </tbody></table></div>`;
+    return;
+  }
+
+  if (t === 'store'){
+    const [st, mmc] = await Promise.all([
+      G.from('v_rm_store').select('*').order('code'),
+      G.from('v_rm_stock').select('*').order('code')
+    ]);
+    const mmcBy = {}; (mmc.data||[]).forEach(r => mmcBy[r.rm_item_id] = r);
+    B.innerHTML = `
+      <h4 class="sec">Raw material inventory</h4>
+      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it.</p>
+      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th><th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th></tr></thead><tbody>
+      ${(st.data||[]).map(r=>{const m=mmcBy[r.rm_item_id]||{};return `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td>${r.unit}</td>` +
+        `<td class="amount">${Number(r.received)}</td><td class="amount">${Number(r.issued_to_mmc)}</td>` +
+        `<td class="amount" style="font-weight:700;color:${Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance)}</td>` +
+        `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td></tr>`;}).join('') || '<tr><td colspan="6" style="color:#777">No materials.</td></tr>'}
+      </tbody></table></div>`;
+    return;
+  }
+}
+function poAddLine(){
+  const qty = Number($('pol-qty').value), rate = Number($('pol-rate').value);
+  if (!(qty > 0)){ say('pon-msg','Quantity must be above zero.',false); return; }
+  if (!(rate >= 0) || $('pol-rate').value === ''){ say('pon-msg','Enter the rate (0 or more).',false); return; }
+  const id = $('pol-item').value;
+  const ex = poLines.find(l=>l.rm_item_id===id);
+  if (ex){ ex.qty += qty; ex.rate = rate; } else poLines.push({ rm_item_id: id, qty, rate });
+  purchaseTab('new');
+}
+async function poPlace(){
+  if (!poLines.length){ say('pon-msg','Add at least one line.',false); return; }
+  const { data, error } = await db.schema('mfg').rpc('create_po', {
+    p_vendor: $('po-vendor').value,
+    p_lines: poLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty, rate: l.rate })),
+    p_expected: $('po-expected').value || null,
+    p_request: poLinkReq, p_remarks: $('po-remarks').value.trim() || null });
+  if (error){ say('pon-msg','Could not place the order: '+error.message,false); return; }
+  poLines = []; poLinkReq = null; purchaseTab('pos');
+}
+async function poDispatch(id){
+  const { error } = await db.schema('mfg').rpc('po_set_status', { p_po: id, p_status: 'DISPATCHED' });
+  if (error){ say('po-msg','Could not update: '+error.message,false); return; }
+  purchaseTab('pos');
+}
+async function poCancel(id){
+  const { error } = await db.schema('mfg').rpc('po_set_status', { p_po: id, p_status: 'CANCELLED' });
+  if (error){ say('po-msg','Could not cancel: '+error.message,false); return; }
+  purchaseTab('pos');
+}
+async function poReceiveForm(id, poNo){
+  const G = db.schema('mfg');
+  const { data: lines } = await G.from('po_lines').select('*').eq('po_id', id);
+  const { data: recd } = await G.from('rm_receipts').select('rm_item_id, qty').eq('po_id', id);
+  const recdBy = {}; (recd||[]).forEach(r => recdBy[r.rm_item_id] = (recdBy[r.rm_item_id]||0) + Number(r.qty));
+  $('po-recv').innerHTML = `
+    <h4 class="sec" style="margin-top:16px;">Receive against ${esc(poNo)}</h4>
+    <div class="table-scroll"><table><thead><tr><th>Material</th><th class="amount">Ordered</th><th class="amount">Received</th><th class="amount">Pending</th><th style="width:130px;">Receive now</th></tr></thead><tbody>
+    ${(lines||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};const got=recdBy[l.rm_item_id]||0;const pend=Number(l.qty)-got;
+      return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${Number(l.qty)}</td><td class="amount">${got}</td><td class="amount">${pend}</td>` +
+        `<td><input type="number" class="rcv-qty" data-item="${l.rm_item_id}" min="0" max="${pend}" step="any" placeholder="0" style="width:110px;"></td></tr>`;}).join('')}
+    </tbody></table></div>
+    <div class="row2c" style="margin-top:8px;">
+      <div><label>Challan no.</label><input type="text" id="rcv-challan"></div>
+      <div><label>Invoice no.</label><input type="text" id="rcv-invoice"></div>
+    </div>
+    <button class="btn gold" style="margin-top:8px;" onclick="poReceiveSave('${id}')">Record receipt</button>
+    <div id="rcv-msg"></div>`;
+  $('po-recv').scrollIntoView({behavior:'smooth'});
+}
+async function poReceiveSave(id){
+  const lines = [];
+  document.querySelectorAll('.rcv-qty').forEach(inp => {
+    const q = Number(inp.value);
+    if (q > 0) lines.push({ rm_item_id: inp.dataset.item, qty: q });
+  });
+  if (!lines.length){ say('rcv-msg','Enter a received quantity on at least one line.',false); return; }
+  const { error } = await db.schema('mfg').rpc('po_receive', {
+    p_po: id, p_lines: lines,
+    p_challan: $('rcv-challan').value.trim() || null,
+    p_invoice: $('rcv-invoice').value.trim() || null, p_date: null });
+  if (error){ say('rcv-msg','Could not record: '+error.message,false); return; }
+  purchaseTab('pos');
+}
+function reqAddLine(){
+  const qty = Number($('rql-qty').value);
+  if (!(qty > 0)){ say('rq-msg','Quantity must be above zero.',false); return; }
+  const id = $('rql-item').value;
+  const ex = reqLines.find(l=>l.rm_item_id===id);
+  if (ex) ex.qty += qty; else reqLines.push({ rm_item_id: id, qty });
+  purchaseTab('req');
+}
+async function reqRaise(){
+  if (!reqLines.length){ say('rq-msg','Add at least one material line.',false); return; }
+  const { error } = await db.schema('mfg').rpc('create_rm_request', {
+    p_lines: reqLines, p_needed: $('rq-needed').value || null,
+    p_remarks: $('rq-remarks').value.trim() || null });
+  if (error){ say('rq-msg','Could not submit: '+error.message,false); return; }
+  reqLines = []; purchaseTab('req');
+}
+async function reqReject(id){
+  const { error } = await db.schema('mfg').rpc('rm_request_reject', { p_req: id, p_note: null });
+  if (error){ say('rq-msg','Could not reject: '+error.message,false); return; }
+  purchaseTab('req');
 }
 
 /* ================= MODULE 4: EXCISE & RENEWALS ================= */
