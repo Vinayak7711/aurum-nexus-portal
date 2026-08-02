@@ -559,6 +559,18 @@ function openEdit(u){
       PERM_ACTIONS.map(a=>`<div><input type="checkbox" data-mod="${m.key}" data-act="${a}" ${p[a]?'checked':''}></div>`).join('') +
       '</div>');
   }
+  // Accounts / Finance: view (payments, outstanding, POs) · edit (record payments,
+  // initiate POs & receipts) · approve (approve purchase orders). No "add".
+  {
+    const p = (u.permissions_json||{}).finance || {};
+    g.insertAdjacentHTML('beforeend',
+      `<div class="permrow"><div>💼 Accounts / Finance <span style="font-size:10px;color:#777">(last box = approve POs)</span></div>` +
+      `<div><input type="checkbox" data-mod="finance" data-act="view" ${p.view?'checked':''}></div>` +
+      `<div></div>` +
+      `<div><input type="checkbox" data-mod="finance" data-act="edit" ${p.edit?'checked':''}></div>` +
+      `<div><input type="checkbox" data-mod="finance" data-act="approve" ${p.approve?'checked':''}></div>` +
+      '</div>');
+  }
   say('edit-msg','');
   $('edit-overlay').classList.remove('hidden');
 }
@@ -1384,6 +1396,7 @@ async function rpReview(kind, id, uid, name){
 /* ================= MODULE 8: PURCHASES & RM STORE ================= */
 function canFin(){ return isDir() || !!(me?.permissions_json?.finance?.view); }
 function canFinEdit(){ return isDir() || !!(me?.permissions_json?.finance?.edit); }
+function canFinApprove(){ return isDir() || !!(me?.permissions_json?.finance?.approve); }
 function canMfgAdd(){ return isDir() || !!(me?.permissions_json?.mfg?.add); }
 let poLines = [], reqLines = [], rmItems = [], poLinkReq = null;
 async function openPurchase(){
@@ -1391,7 +1404,8 @@ async function openPurchase(){
   rmItems = data || [];
   purchaseTab('pos'); applyDirOnly(); show('purchase');
 }
-const PO_COL = { PLACED:'#b8860b', DISPATCHED:'#0b57d0', PARTIAL:'#b8860b', RECEIVED:'#1a7f37', CANCELLED:'#777' };
+const PO_COL = { PENDING_APPROVAL:'#b3261e', PLACED:'#b8860b', DISPATCHED:'#0b57d0', PARTIAL:'#b8860b', RECEIVED:'#1a7f37', CANCELLED:'#777' };
+const PO_LABEL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 async function purchaseTab(t){
   for (const k of ['pos','new','req','store']) $('pu-'+k).classList.toggle('on', k === t);
   const B = $('purchase-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
@@ -1415,9 +1429,11 @@ async function purchaseTab(t){
       ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b></td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
-        `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${p.status}</span></td>` +
-        `<td>${canFinEdit() ? (p.status==='PLACED' ? `<button class="mini" onclick="poDispatch('${p.id}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
-              (['PLACED','DISPATCHED','PARTIAL'].includes(p.status) ? `<button class="mini" onclick="poReceiveForm('${p.id}','${esc(p.po_no)}')">Receive…</button>` : '') : ''}</td></tr>`).join('')
+        `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${PO_LABEL[p.status]||p.status}</span></td>` +
+        `<td>${(p.status==='PENDING_APPROVAL' && canFinApprove() ? `<button class="mini" onclick="poApprove('${p.id}')">Approve</button> ` : '') +
+              (canFinEdit() ? (p.status==='PENDING_APPROVAL' ? `<button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
+              (p.status==='PLACED' ? `<button class="mini" onclick="poDispatch('${p.id}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
+              (['PLACED','DISPATCHED','PARTIAL'].includes(p.status) ? `<button class="mini" onclick="poReceiveForm('${p.id}','${esc(p.po_no)}')">Receive…</button>` : '') : '')}</td></tr>`).join('')
         || '<tr><td colspan="8" style="color:#777">No purchase orders yet — place one from the New PO tab.</td></tr>'}
       </tbody></table></div>
       <div id="po-recv"></div><div id="po-msg"></div>`;
@@ -1453,7 +1469,8 @@ async function purchaseTab(t){
       </tbody></table></div>
       <p style="font-size:13px;"><b>Total: ₹ ${inr(poLines.reduce((s,l)=>s+l.qty*l.rate,0))}</b></p>
       <label>Remarks</label><input type="text" id="po-remarks">
-      <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">Place purchase order</button>
+      ${canFinApprove() ? '' : '<p style="font-size:12px;color:#b8860b;margin-top:6px;">This order will wait for approval by the Accounts head or the Director before it can be dispatched or received.</p>'}
+      <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">${canFinApprove() ? 'Place purchase order' : 'Submit for approval'}</button>
       <div id="pon-msg"></div>`;
     return;
   }
@@ -1529,6 +1546,11 @@ async function poPlace(){
     p_request: poLinkReq, p_remarks: $('po-remarks').value.trim() || null });
   if (error){ say('pon-msg','Could not place the order: '+error.message,false); return; }
   poLines = []; poLinkReq = null; purchaseTab('pos');
+}
+async function poApprove(id){
+  const { error } = await db.schema('mfg').rpc('po_approve', { p_po: id });
+  if (error){ say('po-msg','Could not approve: '+error.message,false); return; }
+  purchaseTab('pos');
 }
 async function poDispatch(id){
   const { error } = await db.schema('mfg').rpc('po_set_status', { p_po: id, p_status: 'DISPATCHED' });
