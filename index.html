@@ -270,6 +270,20 @@
     <div id="tasks-body"></div>
   </section>
 
+  <!-- ============ MODULE 7: SALES REPORTS & TARGETS ============ -->
+  <section id="view-reports" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Sales Reports &amp; Targets</h2>
+      <p>Daily activity, monthly reports, and progress against monthly &amp; quarterly targets — in cases. Cases booked are counted from the order book, never self-declared.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="rp-today" onclick="reportsTab('today')">Today</button>
+      <button class="chip" id="rp-mine" onclick="reportsTab('mine')">My month</button>
+      <button class="chip hidden" id="rp-team" onclick="reportsTab('team')">Team</button>
+      <button class="chip dir-only" id="rp-targets" onclick="reportsTab('targets')">Targets</button>
+    </div>
+    <div id="reports-body"></div>
+  </section>
+
   <!-- ============ MODULE 4: EXCISE & RENEWALS ============ -->
   <section id="view-comp" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -312,6 +326,7 @@
     <p class="email" id="edit-email"></p>
     <label>Full name</label><input type="text" id="edit-fullname">
     <label>Designation</label><input type="text" id="edit-designation" placeholder="e.g. Area Sales Manager">
+    <label>Reports to (team leader — for sales reports)</label><select id="edit-reports-to"></select>
     <label>Role (tier)</label>
     <select id="edit-role">
       <option value="DIRECTOR">DIRECTOR — sees &amp; approves everything</option>
@@ -405,6 +420,7 @@ const MODULES = [
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
   {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
+  {key:'reports', ico:'📈', name:'Sales Reports',    desc:'Daily activity, monthly reports, targets', live:true, open:()=>openReports()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
@@ -412,7 +428,7 @@ const MODULES = [
 ];
 const PERM_ACTIONS = ['view','add','edit','admin'];
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-let me = null, editing = null, editingParty = null;
+let me = null, editing = null, editingParty = null, allUsers = [];
 let M = { brands:[], skus:[], mfrs:[], cats:[], users:[], parties:[] };  // master cache
 let orderFilter = 'ALL';
 
@@ -421,7 +437,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp','reports'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -492,6 +508,7 @@ async function loadMasters(){
 async function openAdmin(){
   const { data, error } = await db.schema('adm').from('users').select('*').order('full_name');
   if (error){ say('od-msg','Could not load users: '+error.message,false); return; }
+  allUsers = data || [];
   const tb = $('user-rows'); tb.innerHTML = '';
   for (const u of data){
     const tr = document.createElement('tr');
@@ -514,10 +531,13 @@ function openEdit(u){
   $('edit-designation').value = u.designation || '';
   $('edit-role').value        = u.role;
   $('edit-active').checked    = u.is_active;
+  $('edit-reports-to').innerHTML = '<option value="">— none —</option>' +
+    allUsers.filter(x => x.id !== u.id && x.is_active)
+            .map(x => `<option value="${x.id}" ${u.reports_to === x.id ? 'selected' : ''}>${esc(x.full_name)}${x.designation ? ' — ' + esc(x.designation) : ''}</option>`).join('');
   const g = $('permgrid');
   g.innerHTML = '<div class="permrow"><div>Module</div>' + PERM_ACTIONS.map(a=>`<div>${a}</div>`).join('') + '</div>';
   for (const m of MODULES){
-    if (m.key === 'control' || m.key === 'rates') continue;
+    if (m.key === 'control' || m.key === 'rates' || m.key === 'reports') continue;  // reports uses the sales grants
     const p = (u.permissions_json||{})[m.key] || {};
     g.insertAdjacentHTML('beforeend',
       `<div class="permrow"><div>${m.ico} ${m.name}</div>` +
@@ -538,7 +558,8 @@ $('btn-save-user').onclick = async () => {
     designation: $('edit-designation').value.trim() || null,
     role: $('edit-role').value,
     is_active: $('edit-active').checked,
-    permissions_json: perms
+    permissions_json: perms,
+    reports_to: $('edit-reports-to').value || null
   };
   const { error } = await db.schema('adm').from('users').update(patch).eq('id', editing.id);
   if (error){ say('edit-msg','Save failed: '+error.message,false); return; }
@@ -1168,6 +1189,181 @@ async function dutyDone(id){
     .update({ status:'DONE', done_at: new Date().toISOString(), done_by: me.id }).eq('id', id);
   if (error){ say('tk-msg', error.message, false); return; }
   tasksTab('duties');
+}
+
+/* ================= MODULE 7: SALES REPORTS & TARGETS ================= */
+let teamMembers = [];
+function monthLabelJS(){ const x = new Date(); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0'); }
+function quarterLabelJS(){
+  const now = new Date(); const m = now.getMonth() + 1;
+  const fyStart = m >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+  const q = m >= 4 ? Math.floor((m-4)/3) + 1 : Math.floor((m+8)/3) + 1;
+  return String(fyStart%100).padStart(2,'0') + '-' + String((fyStart+1)%100).padStart(2,'0') + '-Q' + q;
+}
+function todayISO(){ const x = new Date(); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0'); }
+function bar(pct){
+  const p = Math.max(0, Math.min(100, Number(pct)||0));
+  const col = p >= 100 ? '#1a7f37' : (p >= 60 ? '#b8860b' : '#b3261e');
+  return `<div style="background:#eee;border-radius:6px;height:10px;min-width:90px;"><div style="width:${p}%;background:${col};height:10px;border-radius:6px;"></div></div><span style="font-size:11px;color:#555">${p}%</span>`;
+}
+async function openReports(){
+  const { data: tm } = await db.schema('adm').from('users').select('id, full_name, designation').eq('reports_to', me.id).eq('is_active', true);
+  teamMembers = tm || [];
+  $('rp-team').classList.toggle('hidden', !(isDir() || teamMembers.length));
+  reportsTab('today'); applyDirOnly(); show('reports');
+}
+async function reportsTab(t){
+  for (const k of ['today','mine','team','targets']) $('rp-'+k).classList.toggle('on', k === t);
+  const B = $('reports-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
+  const S = db.schema('sales');
+
+  if (t === 'today'){
+    const { data: rows, error } = await S.from('v_activity_reports').select('*').eq('user_id', me.id).eq('report_date', todayISO());
+    if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    const r = (rows||[])[0] || {};
+    const locked = !!r.reviewed_by;
+    B.innerHTML = `
+      <h4 class="sec">Daily activity report — ${todayISO()}</h4>
+      ${locked ? '<div class="msg ok">Reviewed by your leader — locked.</div>' : ''}
+      <div class="row2c">
+        <div><label>Outlets visited</label><input type="number" id="da-outlets" min="0" value="${r.outlets_visited ?? ''}" placeholder="0"></div>
+        <div><label>Productive calls (orders taken)</label><input type="number" id="da-calls" min="0" value="${r.productive_calls ?? ''}" placeholder="0"></div>
+      </div>
+      <div class="row2c">
+        <div><label>New outlet leads</label><input type="number" id="da-leads" min="0" value="${r.new_leads ?? ''}" placeholder="0"></div>
+        <div><label>Payment follow-ups done</label><input type="number" id="da-fups" min="0" value="${r.payment_followups ?? ''}" placeholder="0"></div>
+      </div>
+      <label>Market feedback / competitor notes</label><input type="text" id="da-feed" value="${esc(r.market_feedback||'')}" placeholder="What did the market say today?">
+      <label>Remarks</label><input type="text" id="da-rem" value="${esc(r.remarks||'')}">
+      <p style="font-size:12px;color:#555;margin-top:8px;">Cases booked today (counted automatically from your orders): <b>${r.cases_booked ?? 0}</b></p>
+      ${locked ? '' : `<button class="btn gold" id="btn-da-save" style="margin-top:8px;">${r.id ? 'Update today’s report' : 'Submit today’s report'}</button>`}
+      <div id="da-msg"></div>`;
+    if (!locked) $('btn-da-save').onclick = async () => {
+      const { error: e } = await S.rpc('submit_daily_report', {
+        p_date: todayISO(),
+        p_outlets: Number($('da-outlets').value)||0, p_calls: Number($('da-calls').value)||0,
+        p_leads: Number($('da-leads').value)||0, p_followups: Number($('da-fups').value)||0,
+        p_feedback: $('da-feed').value.trim()||null, p_remarks: $('da-rem').value.trim()||null });
+      if (e){ say('da-msg','Could not save: '+e.message,false); return; }
+      say('da-msg','Report saved for '+todayISO()+'.',true);
+    };
+    return;
+  }
+
+  if (t === 'mine'){
+    const mon = monthLabelJS(), qtr = quarterLabelJS();
+    const [tp, ar, mr] = await Promise.all([
+      S.from('v_target_progress').select('*').eq('user_id', me.id).in('period', [mon, qtr]),
+      S.from('v_activity_reports').select('*').eq('user_id', me.id).order('report_date', {ascending:false}).limit(31),
+      S.from('monthly_reports').select('*').eq('user_id', me.id).eq('period', mon)
+    ]);
+    const prog = tp.data || [], mrep = (mr.data||[])[0] || {}, mlocked = !!mrep.reviewed_by;
+    const progRow = p => `<tr><td>${p.period_type === 'MONTH' ? 'This month ('+p.period+')' : 'This quarter ('+p.period+')'}</td>` +
+      `<td class="amount">${Number(p.achieved_cases)}</td><td class="amount">${Number(p.target_cases)}</td><td>${bar(p.pct)}</td></tr>`;
+    B.innerHTML = `
+      <h4 class="sec">My score — cases booked vs target</h4>
+      ${prog.length ? `<div class="table-scroll"><table><thead><tr><th>Period</th><th class="amount">Achieved</th><th class="amount">Target</th><th>Progress</th></tr></thead><tbody>${prog.map(progRow).join('')}</tbody></table></div>`
+                    : '<p style="font-size:12px;color:#777">No targets set for you yet — the Director sets them in the Targets tab.</p>'}
+      <h4 class="sec" style="margin-top:18px;">My monthly report — ${mon}</h4>
+      ${mlocked ? '<div class="msg ok">Reviewed by your leader — locked.</div>' : ''}
+      <label>Month summary *</label><input type="text" id="mr-sum" value="${esc(mrep.summary||'')}" placeholder="How did the month go?">
+      <label>Challenges</label><input type="text" id="mr-chal" value="${esc(mrep.challenges||'')}">
+      <label>Plan for next month</label><input type="text" id="mr-plan" value="${esc(mrep.next_month_plan||'')}">
+      ${mlocked ? '' : `<button class="btn gold" id="btn-mr-save" style="margin-top:8px;">${mrep.id ? 'Update monthly report' : 'Submit monthly report'}</button>`}
+      <div id="mr-msg"></div>
+      <h4 class="sec" style="margin-top:18px;">My daily reports (last 31 days)</h4>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Outlets</th><th>Calls</th><th>Leads</th><th>Follow-ups</th><th>Cases booked</th><th>Reviewed</th></tr></thead><tbody>
+      ${(ar.data||[]).map(x=>`<tr><td>${x.report_date}</td><td>${x.outlets_visited}</td><td>${x.productive_calls}</td><td>${x.new_leads}</td><td>${x.payment_followups}</td><td>${Number(x.cases_booked)}</td><td>${x.reviewed_by?'✔':'—'}</td></tr>`).join('') || '<tr><td colspan="7" style="color:#777">No reports yet.</td></tr>'}
+      </tbody></table></div>`;
+    if (!mlocked) $('btn-mr-save').onclick = async () => {
+      const { error: e } = await S.rpc('submit_monthly_report', {
+        p_period: mon, p_summary: $('mr-sum').value.trim(),
+        p_challenges: $('mr-chal').value.trim()||null, p_plan: $('mr-plan').value.trim()||null });
+      if (e){ say('mr-msg','Could not save: '+e.message,false); return; }
+      say('mr-msg','Monthly report saved for '+mon+'.',true);
+    };
+    return;
+  }
+
+  if (t === 'team'){
+    const mon = monthLabelJS(), qtr = quarterLabelJS();
+    const [tp, td] = await Promise.all([
+      S.from('v_target_progress').select('*').in('period', [mon, qtr]).neq('user_id', me.id),
+      S.from('v_activity_reports').select('*').eq('report_date', todayISO()).neq('user_id', me.id)
+    ]);
+    const byUser = {};
+    (tp.data||[]).forEach(p => { (byUser[p.user_id] ??= {name:p.full_name}); byUser[p.user_id][p.period_type] = p; });
+    (td.data||[]).forEach(r => { (byUser[r.user_id] ??= {name:r.full_name}); byUser[r.user_id].today = r; });
+    const ids = Object.keys(byUser);
+    B.innerHTML = `
+      <h4 class="sec">Team today &amp; targets — ${todayISO()}</h4>
+      <div class="table-scroll"><table><thead><tr><th>Salesperson</th><th>Today's report</th><th>Month (cases)</th><th>Progress</th><th>Quarter</th><th>Progress</th><th></th></tr></thead><tbody>
+      ${ids.map(id => { const u = byUser[id]; const m0 = u.MONTH, q0 = u.QUARTER;
+        return `<tr><td><b>${esc(u.name)}</b></td>` +
+          `<td>${u.today ? '✔ filed' + (u.today.reviewed_by ? ' · reviewed' : '') : '<span style="color:#b3261e">— not filed</span>'}</td>` +
+          `<td class="amount">${m0 ? Number(m0.achieved_cases) + ' / ' + Number(m0.target_cases) : '—'}</td><td>${m0 ? bar(m0.pct) : '—'}</td>` +
+          `<td class="amount">${q0 ? Number(q0.achieved_cases) + ' / ' + Number(q0.target_cases) : '—'}</td><td>${q0 ? bar(q0.pct) : '—'}</td>` +
+          `<td><button class="mini" onclick="rpMember('${id}', '${esc(u.name)}')">Reports</button></td></tr>`; }).join('')
+        || '<tr><td colspan="7" style="color:#777">No team members with targets or reports yet. Set each salesman’s “Reports to” in the Control Panel, and their targets in the Targets tab.</td></tr>'}
+      </tbody></table></div>
+      <div id="rp-member"></div>`;
+    return;
+  }
+
+  if (t === 'targets'){
+    if (!isDir()){ B.innerHTML = '<p style="color:#777">Targets are set by the Director.</p>'; return; }
+    const { data: users } = await db.schema('adm').from('users').select('id, full_name, designation').eq('is_active', true).order('full_name');
+    const { data: allt } = await S.from('v_target_progress').select('*').order('period', {ascending:false});
+    B.innerHTML = `
+      <h4 class="sec">Set a target (cases)</h4>
+      <div class="row2c">
+        <div><label>Salesperson</label><select id="tg-user">${(users||[]).map(u=>`<option value="${u.id}">${esc(u.full_name)}${u.designation?' — '+esc(u.designation):''}</option>`).join('')}</select></div>
+        <div><label>Period type</label><select id="tg-type" onchange="$('tg-period').value = this.value==='MONTH' ? monthLabelJS() : quarterLabelJS()"><option value="MONTH">Monthly</option><option value="QUARTER">Quarterly</option></select></div>
+      </div>
+      <div class="row2c">
+        <div><label>Period</label><input type="text" id="tg-period" value="${monthLabelJS()}"><span style="font-size:11px;color:#777">Month: ${monthLabelJS()} · Quarter: ${quarterLabelJS()}</span></div>
+        <div><label>Target (cases) *</label><input type="number" id="tg-cases" min="1" placeholder="e.g. 500"></div>
+      </div>
+      <button class="btn gold" id="btn-tg-save" style="margin-top:8px;">Save target</button>
+      <div id="tg-msg"></div>
+      <h4 class="sec" style="margin-top:18px;">All targets &amp; progress</h4>
+      <div class="table-scroll"><table><thead><tr><th>Salesperson</th><th>Type</th><th>Period</th><th class="amount">Target</th><th class="amount">Achieved</th><th>Progress</th></tr></thead><tbody>
+      ${(allt||[]).map(p=>`<tr><td>${esc(p.full_name)}</td><td>${p.period_type}</td><td>${p.period}</td><td class="amount">${Number(p.target_cases)}</td><td class="amount">${Number(p.achieved_cases)}</td><td>${bar(p.pct)}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">No targets yet.</td></tr>'}
+      </tbody></table></div>`;
+    $('btn-tg-save').onclick = async () => {
+      const cases = Number($('tg-cases').value);
+      if (!(cases > 0)){ say('tg-msg','Enter a target above zero cases.',false); return; }
+      const { error: e } = await S.rpc('set_target', {
+        p_user: $('tg-user').value, p_type: $('tg-type').value,
+        p_period: $('tg-period').value.trim(), p_cases: cases });
+      if (e){ say('tg-msg','Could not save: '+e.message,false); return; }
+      say('tg-msg','Target saved.',true); reportsTab('targets');
+    };
+    return;
+  }
+}
+async function rpMember(uid, name){
+  const S = db.schema('sales');
+  const [ar, mr] = await Promise.all([
+    S.from('v_activity_reports').select('*').eq('user_id', uid).order('report_date',{ascending:false}).limit(14),
+    S.from('monthly_reports').select('*').eq('user_id', uid).order('period',{ascending:false}).limit(3)
+  ]);
+  $('rp-member').innerHTML = `
+    <h4 class="sec" style="margin-top:18px;">${esc(name)} — last 14 daily reports</h4>
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Outlets</th><th>Calls</th><th>Leads</th><th>Follow-ups</th><th>Cases</th><th>Feedback</th><th>Review</th></tr></thead><tbody>
+    ${(ar.data||[]).map(x=>`<tr><td>${x.report_date}</td><td>${x.outlets_visited}</td><td>${x.productive_calls}</td><td>${x.new_leads}</td><td>${x.payment_followups}</td><td>${Number(x.cases_booked)}</td><td style="max-width:220px">${esc(x.market_feedback||'')}</td>` +
+      `<td>${x.reviewed_by ? '✔' : `<button class="mini" onclick="rpReview('DAILY','${x.id}','${uid}','${esc(name)}')">Mark reviewed</button>`}</td></tr>`).join('') || '<tr><td colspan="8" style="color:#777">No daily reports.</td></tr>'}
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:12px;">${esc(name)} — monthly reports</h4>
+    <div class="table-scroll"><table><thead><tr><th>Month</th><th>Summary</th><th>Challenges</th><th>Next month</th><th>Review</th></tr></thead><tbody>
+    ${(mr.data||[]).map(x=>`<tr><td>${x.period}</td><td style="max-width:220px">${esc(x.summary)}</td><td style="max-width:180px">${esc(x.challenges||'')}</td><td style="max-width:180px">${esc(x.next_month_plan||'')}</td>` +
+      `<td>${x.reviewed_by ? '✔' : `<button class="mini" onclick="rpReview('MONTHLY','${x.id}','${uid}','${esc(name)}')">Mark reviewed</button>`}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#777">No monthly reports.</td></tr>'}
+    </tbody></table></div>`;
+}
+async function rpReview(kind, id, uid, name){
+  const { error } = await db.schema('sales').rpc('review_report', { p_kind: kind, p_id: id });
+  if (error){ say('reports-body','',false); $('rp-member').insertAdjacentHTML('afterbegin', `<div class="msg err">Could not review: ${esc(error.message)}</div>`); return; }
+  rpMember(uid, name);
 }
 
 /* ================= MODULE 4: EXCISE & RENEWALS ================= */
