@@ -298,6 +298,15 @@
     <div id="purchase-body"></div>
   </section>
 
+  <!-- ============ MODULE 9: DEPARTMENT MAIL ============ -->
+  <section id="view-mail" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Department Mail</h2>
+      <p>Your department inboxes inside the ERP — read, reply, compose and mark handled. Passwords stay in the server vault; the browser never sees them.</p></div>
+    <div class="subtabs" id="mail-tabs"></div>
+    <div id="mail-body"></div>
+  </section>
+
   <!-- ============ MODULE 4: EXCISE & RENEWALS ============ -->
   <section id="view-comp" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -436,6 +445,7 @@ const MODULES = [
   {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
   {key:'reports', ico:'📈', name:'Sales Reports',    desc:'Daily activity, monthly reports, targets', live:true, open:()=>openReports()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
+  {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
@@ -452,7 +462,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp','reports','purchase'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp','reports','purchase','mail'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -552,7 +562,7 @@ function openEdit(u){
   const g = $('permgrid');
   g.innerHTML = '<div class="permrow"><div>Module</div>' + PERM_ACTIONS.map(a=>`<div>${a}</div>`).join('') + '</div>';
   for (const m of MODULES){
-    if (m.key === 'control' || m.key === 'rates' || m.key === 'reports' || m.key === 'purchase') continue;  // reports/purchase use the sales, finance & mfg grants
+    if (['control','rates','reports','purchase','mail'].includes(m.key)) continue;  // these use the sales, finance & mfg grants / roles
     const p = (u.permissions_json||{})[m.key] || {};
     g.insertAdjacentHTML('beforeend',
       `<div class="permrow"><div>${m.ico} ${m.name}</div>` +
@@ -1616,6 +1626,118 @@ async function reqReject(id){
   const { error } = await db.schema('mfg').rpc('rm_request_reject', { p_req: id, p_note: null });
   if (error){ say('rq-msg','Could not reject: '+error.message,false); return; }
   purchaseTab('req');
+}
+
+/* ================= MODULE 9: DEPARTMENT MAIL ================= */
+let mailBoxes = [], mailBox = null, mailFolder = 'IN', mailMsgs = [], mailOpen = null;
+const FN_BASE = SUPABASE_URL + '/functions/v1';
+async function mailToken(){ const { data:{ session } } = await db.auth.getSession(); return session ? session.access_token : null; }
+async function openMail(){
+  const { data, error } = await db.schema('mail').from('mailboxes').select('*').eq('is_active', true).order('key');
+  if (error){ $('mail-tabs').innerHTML=''; $('mail-body').innerHTML = `<div class="msg err">Could not load mailboxes: ${esc(error.message)}</div>`; show('mail'); return; }
+  mailBoxes = data || [];
+  if (!mailBoxes.length){ $('mail-tabs').innerHTML=''; $('mail-body').innerHTML = '<p style="color:#777">No mailbox is assigned to your role yet — the Director grants department access in the Control Panel.</p>'; show('mail'); return; }
+  mailBox = mailBoxes[0].key; mailFolder = 'IN'; mailOpen = null;
+  drawMailTabs(); mailList(); show('mail');
+}
+function drawMailTabs(){
+  $('mail-tabs').innerHTML = mailBoxes.map(b =>
+    `<button class="chip ${b.key===mailBox?'on':''}" onclick="mailBox='${b.key}';mailOpen=null;drawMailTabs();mailList()">📬 ${esc(b.display)}</button>`).join('') +
+    `<button class="chip" onclick="mailCompose()">✍️ Compose</button>`;
+}
+async function mailList(){
+  const B = $('mail-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
+  const box = mailBoxes.find(b=>b.key===mailBox); if (!box) return;
+  const { data: msgs, error } = await db.schema('mail').from('messages').select('*')
+    .eq('mailbox_id', box.id).eq('folder', mailFolder)
+    .order('sent_at', {ascending:false, nullsFirst:false}).limit(100);
+  if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+  mailMsgs = msgs || [];
+  B.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+      <b style="font-size:14px;">${esc(box.address)}</b>
+      <button class="chip ${mailFolder==='IN'?'on':''}" onclick="mailFolder='IN';mailOpen=null;mailList()">Inbox</button>
+      <button class="chip ${mailFolder==='SENT'?'on':''}" onclick="mailFolder='SENT';mailOpen=null;mailList()">Sent</button>
+      <button class="btn ghost sm" id="btn-mail-sync" onclick="mailSync()">⟳ Check for new mail</button>
+    </div>
+    <div id="mail-sync-msg"></div>
+    <div class="table-scroll"><table><thead><tr><th style="width:150px;">${mailFolder==='IN'?'From':'To'}</th><th>Subject</th><th style="width:120px;">When</th><th style="width:80px;">${mailFolder==='IN'?'Handled':''}</th></tr></thead><tbody>
+    ${mailMsgs.map(m=>`<tr style="cursor:pointer;${m.is_handled&&mailFolder==='IN'?'opacity:.55;':''}" onclick="mailRead('${m.id}')">` +
+      `<td>${esc(((mailFolder==='IN'?m.from_addr:m.to_addr)||'—').replace(/<.*>/,'').trim().slice(0,30))}</td>` +
+      `<td>${m.is_handled||mailFolder==='SENT'?'':'<b>'}${esc((m.subject||'(no subject)').slice(0,80))}${m.is_handled||mailFolder==='SENT'?'':'</b>'}</td>` +
+      `<td style="font-size:12px;">${m.sent_at? new Date(m.sent_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—'}</td>` +
+      `<td>${mailFolder==='IN'?(m.is_handled?'✔':'—'):''}</td></tr>`).join('')
+      || `<tr><td colspan="4" style="color:#777">Nothing here yet — press “Check for new mail”.</td></tr>`}
+    </tbody></table></div>
+    <div id="mail-read"></div>`;
+}
+async function mailSync(){
+  const btn = $('btn-mail-sync'); btn.disabled = true; btn.textContent = '⟳ Checking…';
+  try {
+    const t = await mailToken();
+    const r = await fetch(FN_BASE + '/mail-sync', { method:'POST',
+      headers: { 'content-type':'application/json', authorization: 'Bearer ' + t },
+      body: JSON.stringify({ mailbox: mailBox }) });
+    const j = await r.json();
+    if (!r.ok){ say('mail-sync-msg', j.error || 'Sync failed.', false); }
+    else { say('mail-sync-msg', j.new_messages ? j.new_messages + ' new message(s).' : 'No new mail.', true); mailList(); return; }
+  } catch(e){ say('mail-sync-msg','Could not reach the mail service: '+e.message,false); }
+  btn.disabled = false; btn.textContent = '⟳ Check for new mail';
+}
+function mailRead(id){
+  const m = mailMsgs.find(x=>x.id===id); if (!m) return;
+  mailOpen = m;
+  $('mail-read').innerHTML = `
+    <div class="card" style="margin-top:14px;">
+      <h3 style="font-size:15px;">${esc(m.subject||'(no subject)')}</h3>
+      <p style="font-size:12px;color:#555;margin:6px 0;">${esc(m.from_addr||'')} → ${esc(m.to_addr||'')} · ${m.sent_at? new Date(m.sent_at).toLocaleString('en-IN') : ''}</p>
+      <pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;background:#faf8f4;padding:12px;border-radius:8px;max-height:420px;overflow:auto;">${esc(m.body_text||'(empty)')}</pre>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+        ${mailFolder==='IN' ? `<button class="btn gold sm" onclick="mailCompose('${m.id}')">Reply</button>
+        <button class="btn ghost sm" onclick="mailHandled('${m.id}', ${m.is_handled})">${m.is_handled?'Mark unhandled':'Mark handled'}</button>` : ''}
+      </div>
+      <div id="mail-read-msg"></div>
+    </div>`;
+  $('mail-read').scrollIntoView({behavior:'smooth'});
+}
+async function mailHandled(id, undo){
+  const { error } = await db.schema('mail').rpc('mark_handled', { p_msg: id, p_undo: undo });
+  if (error){ say('mail-read-msg','Could not update: '+error.message,false); return; }
+  mailList();
+}
+function mailCompose(replyTo){
+  const m = replyTo ? mailMsgs.find(x=>x.id===replyTo) : null;
+  const box = mailBoxes.find(b=>b.key===mailBox);
+  const toAddr = m ? ((m.from_addr||'').match(/<([^>]+)>/)?.[1] || m.from_addr || '') : '';
+  const sub = m ? ('Re: ' + (m.subject||'').replace(/^Re:\s*/i,'')) : '';
+  const quoted = m ? ('\n\n----- On ' + (m.sent_at? new Date(m.sent_at).toLocaleString('en-IN') : '') + ', ' + (m.from_addr||'') + ' wrote:\n' + (m.body_text||'').split('\n').slice(0,20).map(l=>'> '+l).join('\n')) : '';
+  $('mail-read').innerHTML = `
+    <div class="card" style="margin-top:14px;">
+      <h3 style="font-size:15px;">${m?'Reply':'New mail'} from ${esc(box.address)}</h3>
+      <label>To *</label><input type="text" id="mc-to" value="${esc(toAddr)}" placeholder="someone@example.com (comma for more)">
+      <label>Subject *</label><input type="text" id="mc-sub" value="${esc(sub)}">
+      <label>Message *</label><textarea id="mc-body" rows="8" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;">${esc(quoted)}</textarea>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn gold sm" id="btn-mail-send" onclick="mailSendNow()">Send</button>
+        <button class="btn ghost sm" onclick="$('mail-read').innerHTML=''">Discard</button>
+      </div>
+      <div id="mail-send-msg"></div>
+    </div>`;
+  $('mail-read').scrollIntoView({behavior:'smooth'});
+}
+async function mailSendNow(){
+  const to = $('mc-to').value.trim(), sub = $('mc-sub').value.trim(), body = $('mc-body').value.trim();
+  if (!to || !sub || !body){ say('mail-send-msg','To, subject and message are all needed.',false); return; }
+  const btn = $('btn-mail-send'); btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const t = await mailToken();
+    const r = await fetch(FN_BASE + '/mail-send', { method:'POST',
+      headers: { 'content-type':'application/json', authorization: 'Bearer ' + t },
+      body: JSON.stringify({ mailbox: mailBox, to, subject: sub, body }) });
+    const j = await r.json();
+    if (!r.ok){ say('mail-send-msg', j.error || 'Send failed.', false); btn.disabled = false; btn.textContent = 'Send'; return; }
+    mailFolder = 'SENT'; mailOpen = null; mailList();
+  } catch(e){ say('mail-send-msg','Could not reach the mail service: '+e.message,false); btn.disabled = false; btn.textContent = 'Send'; }
 }
 
 /* ================= MODULE 4: EXCISE & RENEWALS ================= */
