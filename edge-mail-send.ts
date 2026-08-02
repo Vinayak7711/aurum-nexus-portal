@@ -33,10 +33,11 @@ export default {
       const rcpts = String(to).split(/[,;]/).map((s: string) => s.trim()).filter(Boolean);
       if (!rcpts.length || rcpts.some((r: string) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r))) return J({ error: "Check the To address(es)." }, 400);
       const url = Deno.env.get("SUPABASE_URL")!;
-      const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { authorization: auth } } });
-      const { data: claims } = await userClient.auth.getClaims(auth.replace(/^Bearer /i, ""));
+      const anon = Deno.env.get("SUPABASE_ANON_KEY")!;
+      const { data: claims } = await createClient(url, anon).auth.getClaims(auth.replace(/^Bearer /i, ""));
       const uid = claims?.claims?.sub;
       if (!uid) return J({ error: "Sign in first." }, 401);
+      const userClient = createClient(url, anon, { global: { headers: { authorization: auth } } });
       const { data: box } = await userClient.schema("mail").from("mailboxes").select("*").eq("key", mailbox).maybeSingle();
       if (!box) return J({ error: "You do not have access to this mailbox." }, 403);
       const pass = Deno.env.get("MAIL_PASS_" + String(mailbox).toUpperCase());

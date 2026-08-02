@@ -60,10 +60,11 @@ export default {
       const { mailbox } = await req.json().catch(() => ({}));
       if (!mailbox) return J({ error: "Which mailbox?" }, 400);
       const url = Deno.env.get("SUPABASE_URL")!;
-      const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { authorization: auth } } });
-      const { data: claims } = await userClient.auth.getClaims(auth.replace(/^Bearer /i, ""));
+      const anon = Deno.env.get("SUPABASE_ANON_KEY")!;
+      const { data: claims } = await createClient(url, anon).auth.getClaims(auth.replace(/^Bearer /i, ""));
       const uid = claims?.claims?.sub;
       if (!uid) return J({ error: "Sign in first." }, 401);
+      const userClient = createClient(url, anon, { global: { headers: { authorization: auth } } });
       // RLS answers the access question: the row is only visible if this user may open the box.
       const { data: box } = await userClient.schema("mail").from("mailboxes").select("*").eq("key", mailbox).maybeSingle();
       if (!box) return J({ error: "You do not have access to this mailbox." }, 403);
