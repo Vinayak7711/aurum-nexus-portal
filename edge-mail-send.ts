@@ -34,8 +34,9 @@ export default {
       if (!rcpts.length || rcpts.some((r: string) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r))) return J({ error: "Check the To address(es)." }, 400);
       const url = Deno.env.get("SUPABASE_URL")!;
       const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { authorization: auth } } });
-      const { data: userData } = await userClient.auth.getUser(auth.replace(/^Bearer /i, ""));
-      if (!userData?.user) return J({ error: "Sign in first." }, 401);
+      const { data: claims } = await userClient.auth.getClaims(auth.replace(/^Bearer /i, ""));
+      const uid = claims?.claims?.sub;
+      if (!uid) return J({ error: "Sign in first." }, 401);
       const { data: box } = await userClient.schema("mail").from("mailboxes").select("*").eq("key", mailbox).maybeSingle();
       if (!box) return J({ error: "You do not have access to this mailbox." }, 403);
       const pass = Deno.env.get("MAIL_PASS_" + String(mailbox).toUpperCase());
@@ -72,7 +73,7 @@ export default {
       await svc.schema("mail").from("messages").insert({
         mailbox_id: box.id, folder: "SENT", from_addr: box.address, to_addr: rcpts.join(", "),
         subject, sent_at: new Date().toISOString(), body_text: String(body).slice(0, 20000),
-        created_by: userData.user.id, is_handled: true,
+        created_by: uid, is_handled: true,
       });
       return J({ ok: true, sent_to: rcpts });
     } catch (e) {
