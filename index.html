@@ -298,6 +298,20 @@
     <div id="purchase-body"></div>
   </section>
 
+  <!-- ============ MODULE 10: ACCOUNTING ============ -->
+  <section id="view-acct" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Accounting</h2>
+      <p>Bank records, the finance ledger, staff salary slips and advances. Accounts and Director only. Entries wait for approval before money moves; the Director can edit, delete or approve anything.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="ac-banks" onclick="acctTab('banks')">Banks</button>
+      <button class="chip" id="ac-ledger" onclick="acctTab('ledger')">Ledger</button>
+      <button class="chip" id="ac-salary" onclick="acctTab('salary')">Salary</button>
+      <button class="chip" id="ac-adv" onclick="acctTab('adv')">Advances</button>
+    </div>
+    <div id="acct-body"></div>
+  </section>
+
   <!-- ============ MODULE 9: DEPARTMENT MAIL ============ -->
   <section id="view-mail" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -446,6 +460,7 @@ const MODULES = [
   {key:'reports', ico:'📈', name:'Sales Reports',    desc:'Daily activity, monthly reports, targets', live:true, open:()=>openReports()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
+  {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary slips, advances',   live:true, finOnly:true, open:()=>openAcct()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
@@ -462,7 +477,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp','reports','purchase','mail'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp','reports','purchase','mail','acct'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -502,6 +517,7 @@ function drawModules(){
   const grid = $('module-grid'); grid.innerHTML = '';
   for (const m of MODULES){
     if (m.dirOnly && !isDir()) continue;
+    if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view)) continue;
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
     el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
@@ -1626,6 +1642,319 @@ async function reqReject(id){
   const { error } = await db.schema('mfg').rpc('rm_request_reject', { p_req: id, p_note: null });
   if (error){ say('rq-msg','Could not reject: '+error.message,false); return; }
   purchaseTab('req');
+}
+
+/* ================= MODULE 10: ACCOUNTING ================= */
+let acBanks = [], acStaff = [];
+const AC_ST = { PENDING_APPROVAL:'#b3261e', APPROVED:'#1a7f37', REJECTED:'#777', DRAFT:'#b8860b', PAID:'#1a7f37', CANCELLED:'#777', CLOSED:'#777' };
+const AC_STL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
+function acLbl(s){ return AC_STL[s] || s; }
+async function openAcct(){
+  const [b, u] = await Promise.all([
+    db.schema('acct').from('bank_accounts').select('*').order('name'),
+    db.schema('adm').from('users').select('id, full_name, designation').eq('is_active', true).order('full_name')
+  ]);
+  acBanks = b.data || []; acStaff = u.data || [];
+  acctTab('banks'); show('acct');
+}
+function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
+function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
+async function acctTab(t){
+  for (const k of ['banks','ledger','salary','adv']) $('ac-'+k).classList.toggle('on', k===t);
+  const B = $('acct-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
+  const A = db.schema('acct');
+
+  if (t === 'banks'){
+    const { data: bals, error } = await A.from('v_bank_balances').select('*').order('name');
+    if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    B.innerHTML = `
+      <h4 class="sec">Bank accounts &amp; balances</h4>
+      <div class="table-scroll"><table><thead><tr><th>Account</th><th>Bank</th><th>A/C</th><th class="amount">Opening ₹</th><th class="amount">Balance ₹</th><th></th></tr></thead><tbody>
+      ${(bals||[]).map(b=>`<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(b.name)}</b></td><td>${esc(b.bank_name||'—')}</td><td>${b.account_tail?'····'+esc(b.account_tail):'—'}</td>` +
+        `<td class="amount">${inr(b.opening_balance)}</td><td class="amount" style="font-weight:700;color:${Number(b.balance)>=0?'#1a7f37':'#b3261e'}">${inr(b.balance)}</td>` +
+        `<td>${canFinEdit()?`<button class="mini" onclick="acBankEdit('${b.id}')">Edit</button>`:''}</td></tr>`).join('')
+        || '<tr><td colspan="6" style="color:#777">No bank accounts yet.</td></tr>'}
+      </tbody></table></div>
+      ${canFinEdit()?`<button class="btn gold sm" style="margin-top:10px;" onclick="acBankEdit()">+ Add bank account</button>`:''}
+      <div id="ac-bank-form"></div>`;
+    return;
+  }
+
+  if (t === 'ledger'){
+    const { data: es, error } = await A.from('v_entries').select('*').order('entry_date', {ascending:false}).order('created_at', {ascending:false}).limit(200);
+    if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    B.innerHTML = `
+      ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button>`:''}
+      <div id="ac-entry-form"></div>
+      <h4 class="sec" style="margin-top:12px;">Finance ledger</h4>
+      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
+      ${(es||[]).map(e=>{const who=e.staff_name||e.party_name||e.payee||'';const inA=e.direction==='IN'?inr(e.amount):'';const outA=e.direction==='OUT'?inr(e.amount):'';
+        return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
+          `<td>${esc(who)}${e.narration?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,50))+'</span>':''}</td>` +
+          `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}</td>` +
+          `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` +
+          `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
+          `<td>${(e.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acApprove('${e.id}',false)">Approve</button> <button class="mini" onclick="acApprove('${e.id}',true)">Reject</button> `:'')+
+                (isDir()?`<button class="mini" onclick="acEdit('${e.id}',${e.amount})">Edit</button> <button class="mini" onclick="acDelEntry('${e.id}')">Delete</button>`:'')}</td></tr>`;}).join('')
+        || '<tr><td colspan="9" style="color:#777">No entries yet.</td></tr>'}
+      </tbody></table></div>`;
+    return;
+  }
+
+  if (t === 'salary'){
+    const [sl, st] = await Promise.all([
+      A.from('salary_slips').select('*').order('period', {ascending:false}).order('created_at', {ascending:false}).limit(100),
+      A.from('staff_salary').select('*').eq('is_active', true)
+    ]);
+    const structBy = {}; (st.data||[]).forEach(s=>structBy[s.staff_id]=s);
+    B.innerHTML = `
+      ${canFinEdit()?`<div class="row2c">
+        <button class="btn ghost sm" onclick="acStructForm()">Set / revise a salary structure</button>
+        <button class="btn gold sm" onclick="acSlipForm()">+ Generate salary slip</button></div>`:''}
+      <div id="ac-sal-form"></div>
+      <h4 class="sec" style="margin-top:12px;">Salary slips</h4>
+      <div class="table-scroll"><table><thead><tr><th>Slip</th><th>Staff</th><th>Month</th><th class="amount">Gross ₹</th><th class="amount">Deductions ₹</th><th class="amount">Net ₹</th><th>Status</th><th></th></tr></thead><tbody>
+      ${(sl.data||[]).map(s=>`<tr><td><b>${esc(s.slip_no)}</b></td><td>${esc(acStaffName(s.staff_id))}</td><td>${s.period}</td>` +
+        `<td class="amount">${inr(s.gross)}</td><td class="amount">${inr(s.total_deductions)}</td><td class="amount" style="font-weight:700">${inr(s.net_pay)}</td>` +
+        `<td><span style="color:${AC_ST[s.status]};font-weight:600;font-size:12px">${s.status}</span></td>` +
+        `<td><button class="mini" onclick="acSlipView('${s.id}')">Slip</button> ` +
+          (s.status==='DRAFT'&&canFinApprove()?`<button class="mini" onclick="acSlipApprove('${s.id}',false)">Approve</button> `:'')+
+          (s.status==='APPROVED'&&canFinApprove()?`<button class="mini" onclick="acSlipPay('${s.id}')">Pay</button> `:'')+
+          (isDir()?`<button class="mini" onclick="acSlipDelete('${s.id}')">Delete</button>`:'')+
+        `</td></tr>`).join('') || '<tr><td colspan="8" style="color:#777">No salary slips yet.</td></tr>'}
+      </tbody></table></div>
+      <div id="ac-slip-view"></div>`;
+    return;
+  }
+
+  if (t === 'adv'){
+    const { data: advs, error } = await A.from('v_advances').select('*').order('given_on', {ascending:false}).limit(100);
+    if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    B.innerHTML = `
+      ${canFinEdit()?`<button class="btn gold sm" onclick="acAdvForm()">+ Record advance</button>`:''}
+      <div id="ac-adv-form"></div>
+      <h4 class="sec" style="margin-top:12px;">Staff advances</h4>
+      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Staff</th><th>Given</th><th class="amount">Amount ₹</th><th class="amount">Recovered ₹</th><th class="amount">Outstanding ₹</th><th>Status</th><th></th></tr></thead><tbody>
+      ${(advs||[]).map(a=>`<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td>` +
+        `<td class="amount">${inr(a.amount)}</td><td class="amount">${inr(a.recovered)}</td><td class="amount" style="font-weight:700">${inr(a.outstanding)}</td>` +
+        `<td><span style="color:${AC_ST[a.status]};font-weight:600;font-size:12px">${acLbl(a.status)}</span></td>` +
+        `<td>${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button>`:''}</td></tr>`).join('')
+        || '<tr><td colspan="8" style="color:#777">No advances yet.</td></tr>'}
+      </tbody></table></div>`;
+    return;
+  }
+}
+/* ----- banks ----- */
+function acBankEdit(id){
+  const b = id ? acBanks.find(x=>x.id===id) : null;
+  $('ac-bank-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:560px;"><h3 style="font-size:15px;">${b?'Edit':'Add'} bank account</h3>
+    <label>Account name *</label><input type="text" id="bk-name" value="${esc(b?.name||'')}" placeholder="Aurum Current A/C — HDFC">
+    <div class="row2c"><div><label>Bank</label><input type="text" id="bk-bank" value="${esc(b?.bank_name||'')}"></div>
+    <div><label>A/C last 4</label><input type="text" id="bk-tail" maxlength="4" value="${esc(b?.account_tail||'')}"></div></div>
+    <div class="row2c"><div><label>IFSC</label><input type="text" id="bk-ifsc" value="${esc(b?.ifsc||'')}"></div>
+    <div><label>Opening balance ₹</label><input type="number" id="bk-open" value="${b?b.opening_balance:0}" ${b?'disabled':''}></div></div>
+    ${b?`<div class="switch"><input type="checkbox" id="bk-active" ${b.is_active?'checked':''}><span>Active</span></div>`:''}
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acBankSave('${id||''}')">Save</button>
+    <div id="bk-msg"></div></div>`;
+  $('ac-bank-form').scrollIntoView({behavior:'smooth'});
+}
+async function acBankSave(id){
+  const A = db.schema('acct');
+  const row = { name: $('bk-name').value.trim(), bank_name: $('bk-bank').value.trim()||null,
+    account_tail: $('bk-tail').value.trim()||null, ifsc: $('bk-ifsc').value.trim()||null };
+  if (!row.name){ say('bk-msg','Account name is needed.',false); return; }
+  let error;
+  if (id){ row.is_active = $('bk-active').checked; ({ error } = await A.from('bank_accounts').update(row).eq('id', id)); }
+  else { row.opening_balance = Number($('bk-open').value)||0; row.created_by = me.id; ({ error } = await A.from('bank_accounts').insert(row)); }
+  if (error){ say('bk-msg','Save failed: '+error.message,false); return; }
+  openAcct();
+}
+/* ----- ledger ----- */
+function acEntryForm(){
+  const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
+  $('ac-entry-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">New finance entry</h3>
+    <div class="row2c"><div><label>Kind *</label><select id="en-kind" onchange="acKindChange()">
+      <option value="BANK_IN">Money IN (deposit / receipt)</option>
+      <option value="BANK_OUT">Money OUT (withdrawal)</option>
+      <option value="PAYMENT">Payment (vendor / expense)</option>
+      <option value="TRANSFER">Transfer between accounts</option>
+      <option value="RECOVERY">Advance recovery (cash in)</option>
+      <option value="OTHER">Other</option></select></div>
+    <div><label>Amount ₹ *</label><input type="number" id="en-amt" min="0.01" step="any"></div></div>
+    <div class="row2c"><div><label id="en-bank-lbl">Bank account *</label><select id="en-bank">${bankOpts}</select></div>
+    <div id="en-counter-wrap" style="display:none"><label>Transfer to *</label><select id="en-counter">${bankOpts}</select></div>
+    <div id="en-dir-wrap" style="display:none"><label>Direction *</label><select id="en-dir"><option value="OUT">Money OUT</option><option value="IN">Money IN</option></select></div></div>
+    <div class="row2c"><div><label>Date</label><input type="date" id="en-date"></div>
+    <div><label>Mode</label><select id="en-mode"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div></div>
+    <div class="row2c"><div><label>Reference no.</label><input type="text" id="en-ref"></div>
+    <div><label>Staff (if any)</label><select id="en-staff">${staffOpts}</select></div></div>
+    <label>Payee / narration</label><input type="text" id="en-narr" placeholder="Who / what for">
+    ${canFinApprove()?'':'<p style="font-size:12px;color:#b8860b;margin-top:6px;">This entry will wait for approval by the Accounts head or Director before money moves.</p>'}
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acEntrySave()">${canFinApprove()?'Post entry':'Submit for approval'}</button>
+    <div id="en-msg"></div></div>`;
+  $('ac-entry-form').scrollIntoView({behavior:'smooth'});
+}
+function acKindChange(){
+  const k = $('en-kind').value;
+  $('en-counter-wrap').style.display = k==='TRANSFER'?'block':'none';
+  $('en-dir-wrap').style.display = k==='OTHER'?'block':'none';
+}
+async function acEntrySave(){
+  const k = $('en-kind').value, amt = Number($('en-amt').value);
+  if (!(amt>0)){ say('en-msg','Amount must be above zero.',false); return; }
+  const { error } = await db.schema('acct').rpc('create_entry', {
+    p_kind: k, p_amount: amt, p_bank: $('en-bank').value,
+    p_direction: k==='OTHER' ? $('en-dir').value : null,
+    p_counter_bank: k==='TRANSFER' ? $('en-counter').value : null,
+    p_date: $('en-date').value||null, p_mode: $('en-mode').value||null, p_ref: $('en-ref').value.trim()||null,
+    p_staff: $('en-staff').value||null, p_payee: $('en-narr').value.trim()||null, p_narration: $('en-narr').value.trim()||null });
+  if (error){ say('en-msg','Could not post: '+error.message,false); return; }
+  acctTab('ledger');
+}
+async function acApprove(id, reject){
+  const { error } = await db.schema('acct').rpc('approve_entry', { p_entry: id, p_reject: reject, p_note: reject?'—':null });
+  if (error){ alert('Could not update: '+error.message); return; }
+  acctTab('ledger');
+}
+async function acEdit(id, cur){
+  const v = prompt('New amount (₹) for this entry:', cur);
+  if (v===null) return;
+  const amt = Number(v); if (!(amt>0)){ alert('Enter a valid amount.'); return; }
+  const { error } = await db.schema('acct').rpc('edit_entry', { p_entry: id, p_amount: amt });
+  if (error){ alert('Could not edit: '+error.message); return; }
+  acctTab('ledger');
+}
+async function acDelEntry(id){
+  const { error } = await db.schema('acct').rpc('delete_entry', { p_entry: id });
+  if (error){ alert('Could not delete: '+error.message); return; }
+  acctTab('ledger');
+}
+/* ----- salary ----- */
+function acStructForm(){
+  $('ac-sal-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Salary structure (monthly)</h3>
+    <label>Staff *</label><select id="ss-staff">${acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}${s.designation?' — '+esc(s.designation):''}</option>`).join('')}</select>
+    <div class="row2c"><div><label>Basic ₹</label><input type="number" id="ss-basic" value="0"></div><div><label>HRA ₹</label><input type="number" id="ss-hra" value="0"></div></div>
+    <div class="row2c"><div><label>Allowances ₹</label><input type="number" id="ss-allow" value="0"></div><div><label>PF ₹</label><input type="number" id="ss-pf" value="0"></div></div>
+    <div class="row2c"><div><label>Prof. tax ₹</label><input type="number" id="ss-pt" value="0"></div><div><label>TDS ₹</label><input type="number" id="ss-tds" value="0"></div></div>
+    <label>Other deductions ₹</label><input type="number" id="ss-od" value="0">
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acStructSave()">Save structure</button>
+    <div id="ss-msg"></div></div>`;
+  $('ac-sal-form').scrollIntoView({behavior:'smooth'});
+}
+async function acStructSave(){
+  const n = id => Number($(id).value)||0;
+  const { error } = await db.schema('acct').rpc('set_salary_structure', {
+    p_staff: $('ss-staff').value, p_basic: n('ss-basic'), p_hra: n('ss-hra'), p_allow: n('ss-allow'),
+    p_pf: n('ss-pf'), p_ptax: n('ss-pt'), p_tds: n('ss-tds'), p_other_ded: n('ss-od') });
+  if (error){ say('ss-msg','Save failed: '+error.message,false); return; }
+  say('ss-msg','Structure saved. Now generate the slip.',true);
+}
+async function acSlipForm(){
+  const A = db.schema('acct');
+  const { data: advs } = await A.from('v_advances').select('*').eq('status','APPROVED').gt('outstanding',0);
+  const advByStaff = {}; (advs||[]).forEach(a=>{ (advByStaff[a.staff_id] ??= []).push(a); });
+  window.__acAdvByStaff = advByStaff;
+  $('ac-sal-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Generate salary slip</h3>
+    <div class="row2c"><div><label>Staff *</label><select id="sp-staff" onchange="acSlipStaffChange()">${acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('')}</select></div>
+    <div><label>Month *</label><input type="month" id="sp-period" value="${monthLabelJS()}"></div></div>
+    <div class="row2c"><div><label>Recover from advance</label><select id="sp-adv"><option value="">— none —</option></select></div>
+    <div><label>Recovery amount ₹</label><input type="number" id="sp-rec" value="0"></div></div>
+    <label>Extra one-off deduction ₹</label><input type="number" id="sp-extra" value="0">
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acSlipGen()">Generate (draft)</button>
+    <div id="sp-msg"></div></div>`;
+  acSlipStaffChange();
+  $('ac-sal-form').scrollIntoView({behavior:'smooth'});
+}
+function acSlipStaffChange(){
+  const list = (window.__acAdvByStaff||{})[$('sp-staff').value] || [];
+  $('sp-adv').innerHTML = '<option value="">— none —</option>' + list.map(a=>`<option value="${a.id}">${esc(a.adv_no)} (outstanding ₹${inr(a.outstanding)})</option>`).join('');
+}
+async function acSlipGen(){
+  const { error } = await db.schema('acct').rpc('generate_salary_slip', {
+    p_staff: $('sp-staff').value, p_period: $('sp-period').value,
+    p_advance_recovery: Number($('sp-rec').value)||0, p_advance: $('sp-adv').value||null,
+    p_extra_deduction: Number($('sp-extra').value)||0 });
+  if (error){ say('sp-msg','Could not generate: '+error.message,false); return; }
+  acctTab('salary');
+}
+async function acSlipApprove(id, reject){
+  const { error } = await db.schema('acct').rpc('approve_salary_slip', { p_slip: id, p_reject: reject });
+  if (error){ alert('Could not update: '+error.message); return; }
+  acctTab('salary');
+}
+async function acSlipPay(id){
+  const active = acBanks.filter(b=>b.is_active);
+  if (!active.length){ alert('Add a bank account first.'); return; }
+  const bank = active.length===1 ? active[0].id : (function(){
+    const name = prompt('Pay from which bank?\n'+active.map((b,i)=>(i+1)+'. '+b.name).join('\n'), '1');
+    const idx = Number(name)-1; return active[idx] ? active[idx].id : null; })();
+  if (!bank) return;
+  const ref = prompt('Payment reference no. (optional):','')||null;
+  const { error } = await db.schema('acct').rpc('pay_salary_slip', { p_slip: id, p_bank: bank, p_mode: 'NEFT', p_ref: ref });
+  if (error){ alert('Could not pay: '+error.message); return; }
+  acctTab('salary');
+}
+async function acSlipDelete(id){
+  const { error } = await db.schema('acct').rpc('delete_salary_slip', { p_slip: id });
+  if (error){ alert('Could not delete: '+error.message); return; }
+  acctTab('salary');
+}
+async function acSlipView(id){
+  const { data: s } = await db.schema('acct').from('salary_slips').select('*').eq('id', id).single();
+  if (!s) return;
+  const row = (l,v)=>`<tr><td>${l}</td><td class="amount">${inr(v)}</td></tr>`;
+  $('ac-slip-view').innerHTML = `
+    <div class="card" style="margin-top:14px;max-width:520px;">
+      <h3 style="font-size:15px;">${esc(s.slip_no)} · ${esc(acStaffName(s.staff_id))} · ${s.period}</h3>
+      <table style="margin-top:8px;"><tbody>
+      <tr><td colspan="2"><b>Earnings</b></td></tr>${row('Basic',s.basic)}${row('HRA',s.hra)}${row('Allowances',s.allowances)}
+      <tr style="border-top:1px solid #ddd"><td><b>Gross</b></td><td class="amount"><b>${inr(s.gross)}</b></td></tr>
+      <tr><td colspan="2" style="padding-top:8px"><b>Deductions</b></td></tr>${row('PF',s.pf)}${row('Prof. tax',s.prof_tax)}${row('TDS',s.tds)}${row('Other',s.other_deductions)}${row('Advance recovery',s.advance_recovery)}
+      <tr style="border-top:1px solid #ddd"><td><b>Total deductions</b></td><td class="amount"><b>${inr(s.total_deductions)}</b></td></tr>
+      <tr style="border-top:2px solid #333"><td><b>NET PAY</b></td><td class="amount" style="font-weight:700;font-size:15px">${inr(s.net_pay)}</td></tr>
+      </tbody></table>
+      <p style="font-size:12px;color:#777;margin-top:8px;">Status: ${s.status}</p></div>`;
+  $('ac-slip-view').scrollIntoView({behavior:'smooth'});
+}
+/* ----- advances ----- */
+function acAdvForm(){
+  $('ac-adv-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:560px;"><h3 style="font-size:15px;">Record staff advance</h3>
+    <label>Staff *</label><select id="av-staff">${acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('')}</select>
+    <div class="row2c"><div><label>Amount ₹ *</label><input type="number" id="av-amt" min="0.01" step="any"></div>
+    <div><label>Date</label><input type="date" id="av-date"></div></div>
+    <label>Reason</label><input type="text" id="av-reason">
+    ${canFinApprove()?'':'<p style="font-size:12px;color:#b8860b;margin-top:6px;">This advance will wait for approval before it is paid.</p>'}
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acAdvSave()">${canFinApprove()?'Record':'Submit for approval'}</button>
+    <div id="av-msg"></div></div>`;
+  $('ac-adv-form').scrollIntoView({behavior:'smooth'});
+}
+async function acAdvSave(){
+  const amt = Number($('av-amt').value);
+  if (!(amt>0)){ say('av-msg','Amount must be above zero.',false); return; }
+  const { error } = await db.schema('acct').rpc('create_advance', {
+    p_staff: $('av-staff').value, p_amount: amt, p_reason: $('av-reason').value.trim()||null, p_date: $('av-date').value||null });
+  if (error){ say('av-msg','Could not record: '+error.message,false); return; }
+  acctTab('adv');
+}
+async function acAdvApprove(id, reject){
+  let bank = null;
+  if (!reject){
+    const active = acBanks.filter(b=>b.is_active);
+    if (!active.length){ alert('Add a bank account first.'); return; }
+    bank = active.length===1 ? active[0].id : (function(){
+      const n = prompt('Pay advance from which bank?\n'+active.map((b,i)=>(i+1)+'. '+b.name).join('\n'), '1');
+      const idx = Number(n)-1; return active[idx]?active[idx].id:null; })();
+    if (!bank) return;
+  }
+  const { error } = await db.schema('acct').rpc('approve_advance', { p_adv: id, p_bank: bank, p_reject: reject, p_mode:'NEFT', p_ref:null });
+  if (error){ alert('Could not update: '+error.message); return; }
+  acctTab('adv');
 }
 
 /* ================= MODULE 9: DEPARTMENT MAIL ================= */
