@@ -257,6 +257,18 @@
     <div id="mfg-body"></div>
   </section>
 
+  <!-- ============ MODULE 13: PRODUCTION (TARGETS & COMPLETION) ============ -->
+  <section id="view-prod" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Production</h2>
+      <p>Monthly production targets per SKU, set by the Director. The production team marks completion here; <b>Produced</b> is cross-checked from the batch book.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="pd-targets" onclick="prodTab('targets')">Targets &amp; completion</button>
+      <button class="chip" id="pd-log" onclick="prodTab('log')">Update log</button>
+    </div>
+    <div id="prod-body"></div>
+  </section>
+
   <!-- ============ MODULE 3: TASKS ============ -->
   <section id="view-tasks" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -302,12 +314,13 @@
   <section id="view-acct" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Accounting</h2>
-      <p>Bank records, the finance ledger, staff salary slips and advances. Accounts and Director only. Entries wait for approval before money moves; the Director can edit, delete or approve anything.</p></div>
+      <p>Bank records, the finance ledger, staff salary slips, advances and the asset register. Accounts and Director only. Entries wait for approval before money moves; the Director can edit, delete or approve anything.</p></div>
     <div class="subtabs">
       <button class="chip on" id="ac-banks" onclick="acctTab('banks')">Banks</button>
       <button class="chip" id="ac-ledger" onclick="acctTab('ledger')">Ledger</button>
       <button class="chip" id="ac-salary" onclick="acctTab('salary')">Salary</button>
       <button class="chip" id="ac-adv" onclick="acctTab('adv')">Advances</button>
+      <button class="chip" id="ac-assets" onclick="acctTab('assets')">Assets</button>
     </div>
     <div id="acct-body"></div>
   </section>
@@ -456,11 +469,12 @@ const MODULES = [
   {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Deccan Crest, Frost 91 family, packs',   live:true,  open:()=>openBrands()},
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
+  {key:'prod',    ico:'🎯', name:'Production',       desc:'Monthly targets & completion status',   live:true, mfgOnly:true, open:()=>openProd()},
   {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
   {key:'reports', ico:'📈', name:'Sales Reports',    desc:'Daily activity, monthly reports, targets', live:true, open:()=>openReports()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
-  {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary slips, advances',   live:true, finOnly:true, open:()=>openAcct()},
+  {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
@@ -477,7 +491,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','onboard','tasks','comp','reports','purchase','mail','acct'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','comp','reports','purchase','mail','acct'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -518,6 +532,7 @@ function drawModules(){
   for (const m of MODULES){
     if (m.dirOnly && !isDir()) continue;
     if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view)) continue;
+    if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit)) continue;
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
     el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
@@ -578,7 +593,7 @@ function openEdit(u){
   const g = $('permgrid');
   g.innerHTML = '<div class="permrow"><div>Module</div>' + PERM_ACTIONS.map(a=>`<div>${a}</div>`).join('') + '</div>';
   for (const m of MODULES){
-    if (['control','rates','reports','purchase','mail'].includes(m.key)) continue;  // these use the sales, finance & mfg grants / roles
+    if (['control','rates','reports','purchase','mail','prod'].includes(m.key)) continue;  // these use the sales, finance & mfg grants / roles
     const p = (u.permissions_json||{})[m.key] || {};
     g.insertAdjacentHTML('beforeend',
       `<div class="permrow"><div>${m.ico} ${m.name}</div>` +
@@ -1017,6 +1032,93 @@ async function mfgTab(which){
     B.innerHTML = html + '</tbody></table></div>';
   }
 }
+/* ================= MODULE 13: PRODUCTION SECTION ================= */
+async function openProd(){ await loadMasters(); prodTab('targets'); show('prod'); }
+async function prodTab(t){
+  ['targets','log'].forEach(k => $('pd-'+k).classList.toggle('on', k===t));
+  const B = $('prod-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
+  const MF = db.schema('mfg');
+
+  if (t === 'targets'){
+    const { data, error } = await MF.from('v_prod_targets').select('*').order('period', {ascending:false}).order('sku_code');
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    const rows = data || [];
+    const now = monthLabelJS();
+    const cur = rows.filter(r=>r.period===now);
+    const curTgt = cur.reduce((a,r)=>a+Number(r.target_cases||0),0);
+    const curDone = cur.reduce((a,r)=>a+Number(r.reported_cases||0),0);
+    const curPct = curTgt ? Math.round(curDone*100/curTgt) : 0;
+    let html = `<div class="statgrid">
+      <div class="stat"><div class="n">${inr(curTgt)}</div><div class="l">This month's target (cases)</div></div>
+      <div class="stat"><div class="n">${inr(curDone)}</div><div class="l">Marked completed</div></div>
+      <div class="stat"><div class="n" style="color:${curPct>=100?'#1f7a4d':(curPct>=60?'#7a5c10':'#b3382c')}">${curPct}%</div><div class="l">This month's progress</div></div></div>`;
+    if (isDir()){
+      const skuOpts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
+      html += `<div class="card" style="margin-bottom:14px;max-width:620px;"><h2 style="font-size:15px;">Set / revise a monthly target</h2>
+        <div class="row2c" style="margin-top:8px;"><select id="pt-sku">${skuOpts}</select>
+        <input type="month" id="pt-month" value="${now}"></div>
+        <div class="row2c" style="margin-top:8px;"><input type="number" id="pt-cases" placeholder="Target cases" min="1">
+        <button class="btn gold sm" style="padding:11px;" onclick="setProdTarget()">Set target</button></div>
+        <input type="text" id="pt-note" placeholder="Note (optional)" style="margin-top:8px;">
+        <div id="pt-msg"></div></div>`;
+    }
+    html += '<div class="table-scroll"><table><thead><tr><th>Month</th><th>SKU</th><th class="amount">Target</th><th class="amount">Completed</th><th class="amount">Produced</th><th>Progress</th><th></th></tr></thead><tbody>';
+    for (const r of rows){
+      const pct = Number(r.pct)||0;
+      const barColor = pct>=100 ? '#1a7f37' : (pct>=60 ? '#b8860b' : '#b3382c');
+      const canUpd = isDir() || canMfgAdd();
+      html += `<tr><td><b>${r.period}</b></td><td>${esc(r.sku_code)}${r.brand_name?'<br><span style="font-size:11px;color:#777">'+esc(r.brand_name)+'</span>':''}</td>` +
+        `<td class="amount">${inr(r.target_cases)}</td>` +
+        `<td class="amount"><b>${r.reported_cases!=null?inr(r.reported_cases):'—'}</b>${r.reported_on?'<br><span style="font-size:11px;color:#777">'+r.reported_on+'</span>':''}</td>` +
+        `<td class="amount" style="color:#555">${inr(r.produced_cases)}</td>` +
+        `<td><div style="background:#eee;border-radius:6px;height:16px;width:120px;overflow:hidden;"><div style="height:16px;width:${Math.min(pct,100)}%;background:${barColor};"></div></div><span style="font-size:11px;color:${barColor};font-weight:600">${pct}%</span></td>` +
+        `<td style="white-space:nowrap">${canUpd?`<button class="mini" onclick="updProdCompletion('${r.id}','${esc(r.sku_code)}',${r.reported_cases||0})">Mark completion</button>`:''}` +
+          `${isDir()?` <button class="mini" onclick="delProdTarget('${r.id}')">Delete</button>`:''}</td></tr>`;
+    }
+    B.innerHTML = html + (rows.length?'':'<tr><td colspan="7" style="color:#777">No production targets set yet.</td></tr>') + '</tbody></table></div><div id="pt-msg2"></div>';
+    return;
+  }
+
+  if (t === 'log'){
+    const { data, error } = await MF.from('prod_updates')
+      .select('*, target:target_id(period, sku_id)').order('created_at', {ascending:false}).limit(100);
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    const skuCode = id => { const s = M.skus.find(x=>x.id===id); return s ? s.sku_code : '—'; };
+    B.innerHTML = `
+      <h4 class="sec">Completion updates (latest first)</h4>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Month</th><th>SKU</th><th class="amount">Completed cases</th><th>Note</th></tr></thead><tbody>
+      ${(data||[]).map(u=>`<tr><td>${u.as_on}</td><td><b>${esc(u.target?.period||'—')}</b></td><td>${esc(skuCode(u.target?.sku_id))}</td>` +
+        `<td class="amount"><b>${inr(u.completed_cases)}</b></td><td>${esc(u.note||'—')}</td></tr>`).join('')
+        || '<tr><td colspan="5" style="color:#777">No completion updates yet.</td></tr>'}
+      </tbody></table></div>`;
+    return;
+  }
+}
+async function setProdTarget(){
+  const cases = Number($('pt-cases').value), month = $('pt-month').value;
+  if (!month){ say('pt-msg','Pick a month.',false); return; }
+  if (!(cases>0)){ say('pt-msg','Target cases must be above zero.',false); return; }
+  const { error } = await db.schema('mfg').rpc('set_prod_target',
+    { p_sku: $('pt-sku').value, p_period: month, p_target_cases: cases, p_note: $('pt-note').value.trim()||null });
+  if (error){ say('pt-msg', error.message, false); return; }
+  prodTab('targets');
+}
+async function updProdCompletion(id, sku, cur){
+  const v = prompt('Completed cases so far for '+sku+':', cur||0);
+  if (v===null) return;
+  const n = Number(v);
+  if (!(n>=0)){ alert('Enter a valid number of cases.'); return; }
+  const note = prompt('Note (optional):','')||null;
+  const { error } = await db.schema('mfg').rpc('update_prod_completion', { p_target: id, p_completed: n, p_as_on: null, p_note: note });
+  if (error){ say('pt-msg2', error.message, false); return; }
+  prodTab('targets');
+}
+async function delProdTarget(id){
+  if (!confirm('Delete this production target and its completion history?')) return;
+  const { error } = await db.schema('mfg').rpc('delete_prod_target', { p_target: id });
+  if (error){ say('pt-msg2', error.message, false); return; }
+  prodTab('targets');
+}
 async function createBatch(){
   const cases = Number($('nb-cases').value);
   if (!(cases>0)){ say('mfg-msg','Enter cases produced.',false); return; }
@@ -1423,6 +1525,9 @@ async function rpReview(kind, id, uid, name){
 function canFin(){ return isDir() || !!(me?.permissions_json?.finance?.view); }
 function canFinEdit(){ return isDir() || !!(me?.permissions_json?.finance?.edit); }
 function canFinApprove(){ return isDir() || !!(me?.permissions_json?.finance?.approve); }
+function canCompView(){ return isDir() || !!(me?.permissions_json?.comp?.view); }
+function canCompAdmin(){ return isDir() || !!(me?.permissions_json?.comp?.admin); }
+function fmtBytes(n){ if(n==null) return '—'; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(0)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
 function canMfgAdd(){ return isDir() || !!(me?.permissions_json?.mfg?.add); }
 let poLines = [], reqLines = [], rmItems = [], poLinkReq = null;
 async function openPurchase(){
@@ -1645,7 +1750,7 @@ async function reqReject(id){
 }
 
 /* ================= MODULE 10: ACCOUNTING ================= */
-let acBanks = [], acStaff = [];
+let acBanks = [], acStaff = [], acAssets = [];
 const AC_ST = { PENDING_APPROVAL:'#b3261e', APPROVED:'#1a7f37', REJECTED:'#777', DRAFT:'#b8860b', PAID:'#1a7f37', CANCELLED:'#777', CLOSED:'#777' };
 const AC_STL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 function acLbl(s){ return AC_STL[s] || s; }
@@ -1660,7 +1765,7 @@ async function openAcct(){
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
 function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
 async function acctTab(t){
-  for (const k of ['banks','ledger','salary','adv']) $('ac-'+k).classList.toggle('on', k===t);
+  for (const k of ['banks','ledger','salary','adv','assets']) $('ac-'+k).classList.toggle('on', k===t);
   const B = $('acct-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const A = db.schema('acct');
 
@@ -1743,6 +1848,59 @@ async function acctTab(t){
       </tbody></table></div>`;
     return;
   }
+
+  if (t === 'assets'){
+    const [asRes, sumRes] = await Promise.all([
+      A.from('v_assets').select('*').order('asset_code'),
+      A.from('v_asset_summary').select('*')
+    ]);
+    if (asRes.error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(asRes.error.message)}</div>`; return; }
+    acAssets = asRes.data || [];
+    const sum = sumRes.data || [];
+    const bookTotal = sum.reduce((s,r)=>s+Number(r.book_total||0),0);
+    const purchTotal = sum.reduce((s,r)=>s+Number(r.purchase_total||0),0);
+    const movBook = sum.filter(r=>r.asset_class==='MOVABLE').reduce((s,r)=>s+Number(r.book_total||0),0);
+    const immBook = sum.filter(r=>r.asset_class==='IMMOVABLE').reduce((s,r)=>s+Number(r.book_total||0),0);
+    const active = acAssets.filter(a=>a.status!=='DISPOSED');
+    const alertN = active.filter(a=>['EXPIRED','RED','AMBER'].includes(a.doc_alert)).length;
+    const tile = (lbl,val,clr)=>`<div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px 10px;"><div style="font-size:12px;color:#777">${lbl}</div><div style="font-size:20px;font-weight:700;${clr?'color:'+clr:''}">${val}</div></div>`;
+    B.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+        ${tile('Book value ₹', inr(bookTotal), '#1a7f37')}
+        ${tile('At cost ₹', inr(purchTotal))}
+        ${tile('Movable ₹', inr(movBook))}
+        ${tile('Immovable ₹', inr(immBook))}
+        ${tile('Active assets', active.length)}
+        ${tile('Licences due', alertN, alertN?'#b3261e':'#1a7f37')}
+      </div>
+      ${canFinEdit()?`<button class="btn gold sm" onclick="acAssetForm()">+ Add asset</button>`:''}
+      <div id="ac-asset-form"></div>
+      <h4 class="sec" style="margin-top:12px;">Asset register</h4>
+      <div class="table-scroll"><table><thead><tr><th>Code</th><th>Asset</th><th>Class · category</th><th>Identifier</th><th>Custodian</th><th class="amount">Cost ₹</th><th class="amount">Book ₹</th><th>Licences</th><th>Status</th><th></th></tr></thead><tbody>
+      ${acAssets.map(a=>{
+        const disp = a.status==='DISPOSED';
+        return `<tr style="${disp?'opacity:.55':''}"><td><b>${esc(a.asset_code)}</b></td>` +
+          `<td>${esc(a.name)}${a.location?'<br><span style="font-size:11px;color:#777">'+esc(a.location)+'</span>':''}</td>` +
+          `<td>${a.asset_class==='MOVABLE'?'Movable':'Immovable'}<br><span style="font-size:11px;color:#777">${esc(a.category)}</span></td>` +
+          `<td>${esc(a.identifier||'—')}</td><td>${esc(a.custodian_name||'—')}</td>` +
+          `<td class="amount">${inr(a.purchase_value)}</td><td class="amount" style="font-weight:700">${inr(a.current_value)}</td>` +
+          `<td>${acDocBadge(a.doc_alert, a.next_expiry)}</td>` +
+          `<td><span style="color:${a.status==='ACTIVE'?'#1a7f37':(a.status==='DISPOSED'?'#777':'#b8860b')};font-weight:600;font-size:12px">${esc(a.status)}</span></td>` +
+          `<td style="white-space:nowrap"><button class="mini" onclick="acAssetPanel('${a.id}')">Licences</button> ` +
+            (canFinEdit()&&!disp?`<button class="mini" onclick="acValueForm('${a.id}')">Revalue</button> <button class="mini" onclick="acAssetForm('${a.id}')">Edit</button> <button class="mini" onclick="acDisposeForm('${a.id}')">Dispose</button> `:'') +
+            (isDir()?`<button class="mini" onclick="acAssetDelete('${a.id}')">Delete</button>`:'') +
+          `</td></tr>`;}).join('')
+        || '<tr><td colspan="10" style="color:#777">No assets yet.</td></tr>'}
+      </tbody></table></div>
+      <div id="ac-asset-panel"></div>`;
+    return;
+  }
+}
+function acDocBadge(level, nextExpiry){
+  const map={EXPIRED:['#b3261e','EXPIRED'],RED:['#b3261e','DUE'],AMBER:['#b8860b','SOON'],OK:['#1a7f37','OK']};
+  if (!level || level==='NONE') return '<span style="color:#aaa;font-size:12px">—</span>';
+  const m=map[level]||['#777',level];
+  return `<span style="background:${m[0]};color:#fff;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:600" title="${nextExpiry?'Next expiry '+nextExpiry:''}">${m[1]}</span>`;
 }
 /* ----- banks ----- */
 function acBankEdit(id){
@@ -1957,6 +2115,155 @@ async function acAdvApprove(id, reject){
   acctTab('adv');
 }
 
+/* ----- assets (Module 11) ----- */
+const AC_CATS = ['VEHICLE','COMPUTER','EQUIPMENT','FURNITURE','LAND','BUILDING','PLANT','OTHER'];
+const AC_DOCTYPES = ['RC','INSURANCE','FITNESS','POLLUTION','PERMIT','ROAD_TAX','WARRANTY','AMC','PROPERTY_TAX','LEASE','LICENCE','OTHER'];
+function acAsset(id){ return acAssets.find(x=>x.id===id); }
+function acAssetForm(id){
+  const a = id ? acAsset(id) : null;
+  const custOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}" ${a&&a.custodian_id===s.id?'selected':''}>${esc(s.full_name)}</option>`).join('');
+  const catOpts = AC_CATS.map(c=>`<option value="${c}" ${a&&a.category===c?'selected':''}>${c.charAt(0)+c.slice(1).toLowerCase()}</option>`).join('');
+  $('ac-asset-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:680px;"><h3 style="font-size:15px;">${a?'Edit asset — '+esc(a.asset_code):'Add asset'}</h3>
+    <label>Name *</label><input type="text" id="as-name" value="${esc(a?.name||'')}" placeholder="Tata Ace — MH04 / Dell OptiPlex / Bhiwandi godown">
+    ${a?`<div class="row2c"><div><label>Class</label><input type="text" value="${a.asset_class==='MOVABLE'?'Movable':'Immovable'}" disabled></div>
+      <div><label>Category</label><input type="text" value="${esc(a.category)}" disabled></div></div>`
+    :`<div class="row2c"><div><label>Class *</label><select id="as-class"><option value="MOVABLE">Movable (vehicle, computer, equipment…)</option><option value="IMMOVABLE">Immovable (land, building, plant)</option></select></div>
+      <div><label>Category *</label><select id="as-cat">${catOpts}</select></div></div>`}
+    <div class="row2c"><div><label>Identifier</label><input type="text" id="as-ident" value="${esc(a?.identifier||'')}" placeholder="Reg / serial / survey no."></div>
+    <div><label>Location</label><input type="text" id="as-loc" value="${esc(a?.location||'')}"></div></div>
+    <div class="row2c"><div><label>Custodian</label><select id="as-cust">${custOpts}</select></div>
+    ${a?`<div><label>Status</label><select id="as-status"><option ${a.status==='ACTIVE'?'selected':''}>ACTIVE</option><option value="UNDER_REPAIR" ${a.status==='UNDER_REPAIR'?'selected':''}>UNDER_REPAIR</option></select></div>`
+    :`<div><label>Supplier</label><input type="text" id="as-supp"></div>`}</div>
+    ${a?'':`<div class="row2c"><div><label>Purchase date</label><input type="date" id="as-pdate"></div>
+    <div><label>Purchase value ₹ *</label><input type="number" id="as-pval" min="0" step="any"></div></div>`}
+    <label>Remarks</label><input type="text" id="as-rem" value="${esc(a?.remarks||'')}">
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acAssetSave('${id||''}')">${a?'Save changes':'Add asset'}</button>
+    <div id="as-msg"></div></div>`;
+  $('ac-asset-form').scrollIntoView({behavior:'smooth'});
+}
+async function acAssetSave(id){
+  const A = db.schema('acct');
+  const name = $('as-name').value.trim();
+  if (!name){ say('as-msg','The asset needs a name.',false); return; }
+  let error;
+  if (id){
+    ({ error } = await A.rpc('update_asset', { p_asset:id, p_name:name, p_identifier:$('as-ident').value.trim()||null,
+      p_location:$('as-loc').value.trim()||null, p_custodian:$('as-cust').value||null,
+      p_status:$('as-status').value, p_remarks:$('as-rem').value.trim()||null }));
+  } else {
+    const pval = Number($('as-pval').value);
+    if (!(pval>=0)){ say('as-msg','Enter a valid purchase value.',false); return; }
+    ({ error } = await A.rpc('create_asset', { p_name:name, p_class:$('as-class').value, p_category:$('as-cat').value,
+      p_purchase_value:pval, p_identifier:$('as-ident').value.trim()||null, p_location:$('as-loc').value.trim()||null,
+      p_custodian:$('as-cust').value||null, p_supplier:$('as-supp').value.trim()||null,
+      p_purchase_date:$('as-pdate').value||null, p_remarks:$('as-rem').value.trim()||null }));
+  }
+  if (error){ say('as-msg','Save failed: '+error.message,false); return; }
+  acctTab('assets');
+}
+function acValueForm(id){
+  const a = acAsset(id); if (!a) return;
+  $('ac-asset-panel').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:560px;"><h3 style="font-size:15px;">Revalue ${esc(a.asset_code)} — ${esc(a.name)}</h3>
+    <p style="font-size:12px;color:#777">Current book value: ₹${inr(a.current_value)}</p>
+    <div class="row2c"><div><label>Kind *</label><select id="rv-kind">
+      <option value="DEPRECIATION">Depreciation (write down)</option>
+      <option value="REVALUATION">Revaluation</option>
+      <option value="IMPROVEMENT">Improvement (add value)</option></select></div>
+    <div><label>New book value ₹ *</label><input type="number" id="rv-val" min="0" step="any" value="${a.current_value}"></div></div>
+    <label>Note</label><input type="text" id="rv-note">
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acValueSave('${id}')">Record</button>
+    <div id="rv-msg"></div></div>`;
+  $('ac-asset-panel').scrollIntoView({behavior:'smooth'});
+}
+async function acValueSave(id){
+  const v = Number($('rv-val').value);
+  if (!(v>=0)){ say('rv-msg','Enter a valid value.',false); return; }
+  const { error } = await db.schema('acct').rpc('set_asset_value', { p_asset:id, p_new_value:v, p_kind:$('rv-kind').value, p_note:$('rv-note').value.trim()||null });
+  if (error){ say('rv-msg','Failed: '+error.message,false); return; }
+  acctTab('assets');
+}
+function acDisposeForm(id){
+  const a = acAsset(id); if (!a) return;
+  $('ac-asset-panel').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:560px;"><h3 style="font-size:15px;">Dispose ${esc(a.asset_code)} — ${esc(a.name)}</h3>
+    <p style="font-size:12px;color:#777">Book value ₹${inr(a.current_value)} will be written to zero and its licences closed.</p>
+    <div class="row2c"><div><label>Disposal date</label><input type="date" id="dp-date"></div>
+    <div><label>Disposal value ₹</label><input type="number" id="dp-val" min="0" step="any" value="0"></div></div>
+    <label>Note</label><input type="text" id="dp-note" placeholder="Sold to / scrapped / reason">
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acDisposeSave('${id}')">Dispose asset</button>
+    <div id="dp-msg"></div></div>`;
+  $('ac-asset-panel').scrollIntoView({behavior:'smooth'});
+}
+async function acDisposeSave(id){
+  const { error } = await db.schema('acct').rpc('dispose_asset', { p_asset:id, p_date:$('dp-date').value||null, p_value:Number($('dp-val').value)||0, p_note:$('dp-note').value.trim()||null });
+  if (error){ say('dp-msg','Failed: '+error.message,false); return; }
+  acctTab('assets');
+}
+async function acAssetDelete(id){
+  const a = acAsset(id);
+  if (!confirm('Delete '+(a?a.asset_code:'this asset')+' and all its value history and licences? This cannot be undone.')) return;
+  const { error } = await db.schema('acct').rpc('delete_asset', { p_asset:id });
+  if (error){ alert('Could not delete: '+error.message); return; }
+  acctTab('assets');
+}
+async function acAssetPanel(id){
+  const a = acAsset(id); if (!a) return;
+  const P = $('ac-asset-panel');
+  P.innerHTML = '<p style="color:#777">Loading licences…</p>';
+  const { data: docs, error } = await db.schema('acct').from('v_asset_documents').select('*').eq('asset_id', id).order('valid_to');
+  if (error){ P.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+  P.innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:820px;"><h3 style="font-size:15px;">Licences &amp; renewals — ${esc(a.asset_code)} · ${esc(a.name)}</h3>
+    <div class="table-scroll"><table><thead><tr><th>Document</th><th>Type</th><th>Ref / authority</th><th>Valid to</th><th>Status</th><th class="amount">Cost ₹</th><th></th></tr></thead><tbody>
+    ${(docs||[]).map(d=>`<tr><td><b>${esc(d.title)}</b></td><td>${esc(d.doc_type)}</td><td>${esc(d.ref_no||'—')}${d.authority?'<br><span style="font-size:11px;color:#777">'+esc(d.authority)+'</span>':''}</td>` +
+      `<td>${d.valid_to}<br><span style="font-size:11px;color:#777">${d.days_left>=0?d.days_left+' days left':(-d.days_left)+' days ago'}</span></td>` +
+      `<td>${acDocBadge(d.alert_level)}</td><td class="amount">${d.cost!=null?inr(d.cost):'—'}</td>` +
+      `<td>${canFinEdit()&&a.status!=='DISPOSED'?`<button class="mini" onclick="acDocRenew('${d.id}','${d.valid_to}','${esc(d.title)}')">Renew</button>`:''}</td></tr>`).join('')
+      || '<tr><td colspan="7" style="color:#777">No licences recorded for this asset.</td></tr>'}
+    </tbody></table></div>
+    ${canFinEdit()&&a.status!=='DISPOSED'?`<button class="btn gold sm" style="margin-top:10px;" onclick="acDocForm('${id}')">+ Add licence / document</button>`:''}
+    <div id="ac-doc-form"></div></div>`;
+  P.scrollIntoView({behavior:'smooth'});
+}
+function acDocForm(assetId){
+  const dtOpts = AC_DOCTYPES.map(d=>`<option value="${d}">${d.replace('_',' ')}</option>`).join('');
+  $('ac-doc-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:640px;background:#fbfaf6;"><h3 style="font-size:15px;">New licence / document</h3>
+    <div class="row2c"><div><label>Title *</label><input type="text" id="dc-title" placeholder="Insurance 2026-27 / RC book"></div>
+    <div><label>Type *</label><select id="dc-type">${dtOpts}</select></div></div>
+    <div class="row2c"><div><label>Reference no.</label><input type="text" id="dc-ref"></div>
+    <div><label>Authority</label><input type="text" id="dc-auth" placeholder="RTO / Insurer / Municipality"></div></div>
+    <div class="row2c"><div><label>Valid from</label><input type="date" id="dc-from"></div>
+    <div><label>Valid to (expiry) *</label><input type="date" id="dc-to"></div></div>
+    <div class="row2c"><div><label>Cost ₹</label><input type="number" id="dc-cost" min="0" step="any"></div><div></div></div>
+    <label>Remarks</label><input type="text" id="dc-rem">
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acDocSave('${assetId}')">Add licence</button>
+    <div id="dc-msg"></div></div>`;
+  $('ac-doc-form').scrollIntoView({behavior:'smooth'});
+}
+async function acDocSave(assetId){
+  const title = $('dc-title').value.trim(), to = $('dc-to').value;
+  if (!title){ say('dc-msg','A title is needed.',false); return; }
+  if (!to){ say('dc-msg','An expiry (valid-to) date is needed.',false); return; }
+  const { error } = await db.schema('acct').rpc('add_asset_document', { p_asset:assetId, p_title:title, p_doc_type:$('dc-type').value,
+    p_valid_to:to, p_ref:$('dc-ref').value.trim()||null, p_authority:$('dc-auth').value.trim()||null,
+    p_valid_from:$('dc-from').value||null, p_cost:$('dc-cost').value?Number($('dc-cost').value):null, p_remarks:$('dc-rem').value.trim()||null });
+  if (error){ say('dc-msg','Failed: '+error.message,false); return; }
+  acAssetPanel(assetId);
+  acctTab('assets');
+}
+async function acDocRenew(docId, oldTo, title){
+  const nv = prompt('Renew "'+title+'"\nCurrent expiry: '+oldTo+'\nNew expiry date (YYYY-MM-DD):', '');
+  if (nv===null) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(nv.trim())){ alert('Please enter a date as YYYY-MM-DD.'); return; }
+  const cost = prompt('Renewal cost ₹ (optional):','');
+  const { error } = await db.schema('acct').rpc('renew_asset_document', { p_doc:docId, p_new_valid_to:nv.trim(), p_cost:cost?Number(cost):null, p_note:null });
+  if (error){ alert('Could not renew: '+error.message); return; }
+  acctTab('assets');
+}
+
 /* ================= MODULE 9: DEPARTMENT MAIL ================= */
 let mailBoxes = [], mailBox = null, mailFolder = 'IN', mailMsgs = [], mailOpen = null;
 const FN_BASE = SUPABASE_URL + '/functions/v1';
@@ -2075,8 +2382,12 @@ const CATS = { EXCISE_LICENSE:'Excise license/permit', LABEL_REGN:'Label registr
 async function openComp(){
   await loadMasters();
   const B = $('comp-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
-  const { data, error } = await db.schema('comp').from('v_expiring').select('*').order('days_left');
+  const [{ data, error }, attRes] = await Promise.all([
+    db.schema('comp').from('v_expiring').select('*').order('days_left'),
+    db.schema('comp').from('v_attachments').select('document_id')
+  ]);
   if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; show('comp'); return; }
+  const attN = {}; (attRes.data||[]).forEach(a=>{ attN[a.document_id]=(attN[a.document_id]||0)+1; });
   const alerts = (data||[]).filter(d => d.alert_level !== 'OK').length;
   const bopts = M.brands.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   let html = `<div class="statgrid">
@@ -2104,10 +2415,12 @@ async function openComp(){
       <td>${CATS[d.category]||d.category}</td><td>${esc(d.ref_no||'—')}</td>
       <td>${d.valid_to}</td><td class="amount">${d.days_left}</td>
       <td><b style="color:${color}">${d.alert_level}</b></td>
-      <td>${isDir()?`<div style="display:flex;gap:4px;"><input type="date" id="rn-${d.id}" style="padding:5px;font-size:11px;width:130px;">
-        <button class="mini" onclick="compRenew('${d.id}')">Renew</button></div>`:''}</td></tr>`;
+      <td><div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+        <button class="mini" onclick="compFiles('${d.id}')" title="Attach or view scanned copies">📎 ${attN[d.id]?attN[d.id]+' file'+(attN[d.id]>1?'s':''):'Attach scan'}</button>
+        ${isDir()?`<input type="date" id="rn-${d.id}" style="padding:5px;font-size:11px;width:130px;">
+        <button class="mini" onclick="compRenew('${d.id}')">Renew</button>`:''}</div></td></tr>`;
   }
-  $('comp-body').innerHTML = html + '</tbody></table></div><div id="cd-msg2"></div>';
+  $('comp-body').innerHTML = html + '</tbody></table></div><div id="cd-msg2"></div><div id="comp-files-panel"></div>';
   show('comp');
 }
 async function compAdd(){
@@ -2126,6 +2439,64 @@ async function compRenew(id){
   const { error } = await db.schema('comp').rpc('renew_document', { p_doc: id, p_new_valid_to: to, p_note: null });
   if (error){ say('cd-msg2', error.message, false); return; }
   openComp();
+}
+/* ----- Module 12: scanned document copies ----- */
+const COMP_BUCKET = 'comp-docs';
+async function compFiles(docId){
+  const P = $('comp-files-panel');
+  P.innerHTML = '<p style="color:#777">Loading files…</p>';
+  const { data, error } = await db.schema('comp').from('v_attachments').select('*').eq('document_id', docId).order('uploaded_at', {ascending:false});
+  if (error){ P.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  const admin = canCompAdmin();
+  const rows = (data||[]).map(a=>{
+    const isImg = (a.mime_type||'').startsWith('image/');
+    return `<tr><td><b>${esc(a.file_name)}</b></td>` +
+      `<td>${isImg?'🖼️ Image':((a.mime_type||'').includes('pdf')?'📄 PDF':'📎 File')}</td>` +
+      `<td class="amount">${fmtBytes(a.size_bytes)}</td>` +
+      `<td>${esc(a.uploaded_by_name||'—')}<br><span style="font-size:11px;color:#777">${(a.uploaded_at||'').slice(0,10)}</span></td>` +
+      `<td style="white-space:nowrap"><button class="mini" onclick="compFileOpen('${esc(a.storage_path)}')">Open</button>` +
+        (admin?` <button class="mini" onclick="compFileDelete('${a.id}','${esc(a.storage_path)}','${docId}')">Remove</button>`:'') +
+      `</td></tr>`;
+  }).join('') || '<tr><td colspan="5" style="color:#777">No copies uploaded yet.</td></tr>';
+  P.innerHTML = `
+    <div class="card" style="margin-top:14px;max-width:820px;"><h3 style="font-size:15px;">Scanned copies &amp; documents</h3>
+    <div class="table-scroll"><table><thead><tr><th>File</th><th>Type</th><th class="amount">Size</th><th>Uploaded</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+    ${admin?`<div style="margin-top:12px;border-top:1px solid #eee;padding-top:10px;">
+      <label>Upload or scan a copy (PDF or image, up to 20 MB)</label>
+      <div class="row2c" style="align-items:end;"><input type="file" id="cf-file" accept="application/pdf,image/*">
+      <button class="btn gold sm" onclick="compUpload('${docId}')">Upload</button></div>
+      <p style="font-size:11px;color:#777;margin-top:4px;">On a phone you can take a photo of the document directly.</p></div>`
+    :'<p style="font-size:12px;color:#777;margin-top:8px;">You can view and open copies. Uploading is done by the compliance team or the Director.</p>'}
+    <div id="cf-msg"></div></div>`;
+  P.scrollIntoView({behavior:'smooth'});
+}
+async function compUpload(docId){
+  const inp = $('cf-file'); const f = inp && inp.files && inp.files[0];
+  if (!f){ say('cf-msg','Choose a file first.',false); return; }
+  if (f.size > 20*1024*1024){ say('cf-msg','That file is over 20 MB — please use a smaller scan.',false); return; }
+  say('cf-msg','Uploading…',true);
+  const safe = f.name.replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80);
+  const path = docId + '/' + Date.now() + '_' + safe;
+  const up = await db.storage.from(COMP_BUCKET).upload(path, f, { contentType: f.type || 'application/octet-stream', upsert:false });
+  if (up.error){ say('cf-msg','Upload failed: '+up.error.message,false); return; }
+  const { error } = await db.schema('comp').from('attachments').insert({
+    document_id: docId, file_name: f.name, storage_path: path, mime_type: f.type||null, size_bytes: f.size, uploaded_by: me.id });
+  if (error){ await db.storage.from(COMP_BUCKET).remove([path]); say('cf-msg','Could not save the record: '+error.message,false); return; }
+  compFiles(docId);
+}
+async function compFileOpen(path){
+  const { data, error } = await db.storage.from(COMP_BUCKET).createSignedUrl(path, 120);
+  if (error){ alert('Could not open the file: '+error.message); return; }
+  window.open(data.signedUrl, '_blank');
+}
+async function compFileDelete(attId, path, docId){
+  if (!confirm('Remove this copy from the ERP? This cannot be undone.')) return;
+  const r = await db.storage.from(COMP_BUCKET).remove([path]);
+  if (r.error){ alert('Could not remove the file: '+r.error.message); return; }
+  const { error } = await db.schema('comp').from('attachments').delete().eq('id', attId);
+  if (error){ alert('File removed, but the record could not be cleared: '+error.message); }
+  compFiles(docId);
 }
 
 init();
