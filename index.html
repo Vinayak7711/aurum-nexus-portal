@@ -137,9 +137,11 @@
     <h1>Aurum Nexus<small>Aurum Spirits India Limited</small></h1>
   </div>
   <div id="who" class="hidden">
+    <span id="notif-bell" onclick="notifToggle(event)" title="Notifications" style="position:relative;cursor:pointer;font-size:20px;margin-right:14px;vertical-align:middle;">🔔<span id="notif-badge" style="display:none;position:absolute;top:-6px;right:-8px;background:#dc2626;color:#fff;font-size:10px;font-weight:700;min-width:16px;height:16px;line-height:16px;text-align:center;border-radius:9px;padding:0 3px;"></span></span>
     <b id="who-name"></b><span id="who-role"></span><br>
     <button id="btn-signout">Sign out</button>
   </div>
+  <div id="notif-pop" class="hidden" style="position:absolute;right:16px;top:60px;width:340px;max-height:70vh;overflow:auto;background:#fff;border:1px solid #ddd;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.18);z-index:9999;"></div>
 </header>
 
 <main>
@@ -292,6 +294,35 @@
     <div id="cal-grid"></div>
     <div id="cal-day"></div>
     <div id="cal-form"></div>
+  </section>
+
+  <!-- ============ MODULE 15: MEETINGS ============ -->
+  <section id="view-meetings" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Meetings</h2>
+      <p>Schedule meetings, set the agenda, record who attended and their views, and write the minutes and conclusion.</p></div>
+    <div id="mtg-list"></div>
+    <div id="mtg-detail"></div>
+  </section>
+
+  <!-- ============ MODULE 16: MARKETING ============ -->
+  <section id="view-mkt" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Marketing</h2>
+      <p>Set the marketing budget month-wise and week-wise, log every spend, and monitor utilisation — budget vs spent vs remaining — and exactly where it went.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="mk-budget" onclick="mktTab('budget')">Budget &amp; utilisation</button>
+      <button class="chip" id="mk-spend" onclick="mktTab('spend')">Spends (where used)</button>
+    </div>
+    <div id="mkt-body"></div>
+  </section>
+
+  <!-- ============ MODULE 17: NOTIFICATION CENTRE ============ -->
+  <section id="view-notif" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Notification Centre</h2>
+      <p>Everything needing your attention — tasks, emails, upcoming to-dos and approvals — in one place.</p></div>
+    <div id="notif-centre"></div>
   </section>
 
   <!-- ============ MODULE 7: SALES REPORTS & TARGETS ============ -->
@@ -489,6 +520,9 @@ const MODULES = [
   {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'calendar',ico:'📅', name:'Calendar',         desc:'Events + task, renewal & PO dates',      live:true,  open:()=>openCalendar()},
+  {key:'meetings',ico:'📝', name:'Meetings',         desc:'Agendas, minutes, participants, views',  live:true,  open:()=>openMeetings()},
+  {key:'mkt',     ico:'📣', name:'Marketing',        desc:'Budget month/week + utilisation',        live:true, mktOnly:true, open:()=>openMkt()},
+  {key:'notif',   ico:'🔔', name:'Notification Centre', desc:'Tasks, emails, to-dos & approvals',  live:true,  open:()=>openNotifCentre()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
@@ -504,7 +538,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','comp','reports','purchase','mail','acct'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','purchase','mail','acct'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -527,6 +561,7 @@ async function init(){
   $('who-role').textContent = me.role + (me.designation ? ' · ' + me.designation : '');
   $('home-hello').textContent = 'Welcome, ' + me.full_name.split(' ')[0];
   drawModules(); applyDirOnly(); show('home');
+  notifLoad(); if(!window.__notifTimer) window.__notifTimer=setInterval(()=>{try{notifLoad();}catch(e){}},60000);
 }
 $('btn-magic').onclick = async () => {
   const email = $('login-email').value.trim();
@@ -546,6 +581,7 @@ function drawModules(){
     if (m.dirOnly && !isDir()) continue;
     if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view)) continue;
     if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit)) continue;
+    if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit)) continue;
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
     el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
@@ -606,7 +642,7 @@ function openEdit(u){
   const g = $('permgrid');
   g.innerHTML = '<div class="permrow"><div>Module</div>' + PERM_ACTIONS.map(a=>`<div>${a}</div>`).join('') + '</div>';
   for (const m of MODULES){
-    if (['control','rates','reports','purchase','mail','prod'].includes(m.key)) continue;  // these use the sales, finance & mfg grants / roles
+    if (['control','rates','reports','purchase','mail','prod','calendar','meetings','notif'].includes(m.key)) continue;  // these use the sales, finance & mfg grants / roles or are open to all
     const p = (u.permissions_json||{})[m.key] || {};
     g.insertAdjacentHTML('beforeend',
       `<div class="permrow"><div>${m.ico} ${m.name}</div>` +
@@ -2621,6 +2657,170 @@ async function calDelete(id){
   if (error){ alert('Could not delete: '+error.message); return; }
   await calLoad(); calRender(); calShowDay(calSelDay);
 }
+
+/* ================= MODULE 15: MEETINGS ================= */
+let mtgUsers = [];
+async function openMeetings(){
+  const [mm, uu] = await Promise.all([
+    db.schema('tasks').from('v_meetings').select('*').order('meeting_date',{ascending:false}),
+    db.schema('adm').from('users').select('id, full_name').eq('is_active',true).order('full_name')
+  ]);
+  mtgUsers = uu.data||[];
+  renderMtgList(mm.data||[]); $('mtg-detail').innerHTML=''; show('meetings');
+}
+function mtgUserName(id){ const u=mtgUsers.find(x=>x.id===id); return u?u.full_name:'—'; }
+function renderMtgList(rows){
+  let html = `<button class="btn gold sm" onclick="mtgForm()">+ New meeting</button><div id="mtg-form"></div>
+    <h4 class="sec" style="margin-top:12px;">Meetings</h4>
+    <div class="table-scroll"><table><thead><tr><th>Code</th><th>Title</th><th>Date</th><th>Organizer</th><th>Status</th><th class="amount">Agenda</th><th class="amount">People</th><th></th></tr></thead><tbody>`;
+  html += rows.map(m=>`<tr><td><b>${esc(m.meeting_code)}</b></td><td>${esc(m.title)}</td><td>${m.meeting_date}${m.start_time?'<br><span style="font-size:11px;color:#777">'+esc(m.start_time.slice(0,5))+'</span>':''}</td>
+    <td>${esc(m.organizer_name||'—')}</td><td><span class="pill ${m.status==='HELD'?'DELIVERED':(m.status==='CANCELLED'?'CANCELLED':'RECEIVED')}">${m.status}</span></td>
+    <td class="amount">${m.agenda_count}</td><td class="amount">${m.participant_count}</td>
+    <td><button class="mini" onclick="mtgOpen('${m.id}')">Open</button></td></tr>`).join('') || '<tr><td colspan="8" style="color:#777">No meetings yet.</td></tr>';
+  $('mtg-list').innerHTML = html + '</tbody></table></div>';
+}
+function mtgForm(){
+  $('mtg-form').innerHTML = `<div class="card" style="margin-top:12px;max-width:620px;"><h3 style="font-size:15px;">New meeting</h3>
+    <label>Title *</label><input type="text" id="mt-title" placeholder="e.g. Monthly sales review">
+    <div class="row2c"><div><label>Date *</label><input type="date" id="mt-date" value="${calFmt(new Date())}"></div>
+    <div><label>Mode</label><select id="mt-mode"><option value="IN_PERSON">In person</option><option value="VIDEO">Video</option><option value="CALL">Call</option></select></div></div>
+    <div class="row2c"><div><label>Start</label><input type="time" id="mt-start"></div><div><label>End</label><input type="time" id="mt-end"></div></div>
+    <label>Location</label><input type="text" id="mt-loc">
+    <div class="switch" style="margin-top:8px;"><input type="checkbox" id="mt-private"><span>Private (only participants &amp; Director)</span></div>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="mtgSave()">Create meeting</button><div id="mt-msg"></div></div>`;
+  $('mtg-form').scrollIntoView({behavior:'smooth'});
+}
+async function mtgSave(){
+  const title=$('mt-title').value.trim(); if(!title){say('mt-msg','A title is needed.',false);return;}
+  const { data, error } = await db.schema('tasks').rpc('create_meeting',{p_title:title,p_date:$('mt-date').value,p_start:$('mt-start').value||null,p_end:$('mt-end').value||null,p_location:$('mt-loc').value.trim()||null,p_mode:$('mt-mode').value,p_private:$('mt-private').checked});
+  if(error){say('mt-msg','Could not create: '+error.message,false);return;}
+  await openMeetings(); mtgOpen(data);
+}
+async function mtgOpen(id){
+  const T=db.schema('tasks');
+  const [mres,ares,pres]=await Promise.all([
+    T.from('v_meetings').select('*').eq('id',id).single(),
+    T.from('meeting_agenda').select('*').eq('meeting_id',id).order('seq'),
+    T.from('meeting_participants').select('*').eq('meeting_id',id).order('created_at')
+  ]);
+  const m=mres.data; if(!m){ $('mtg-detail').innerHTML='<div class="msg err">Meeting not found.</div>'; return; }
+  window.__mtgId=id; window.__mtgParts=pres.data||[];
+  const own = isDir()||m.organizer_id===me.id||m.created_by===me.id;
+  const userOpts='<option value="">— internal participant —</option>'+mtgUsers.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('');
+  let h=`<div class="card" style="margin-top:14px;max-width:820px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+     <div><h3 style="font-size:16px;margin:0;">${esc(m.title)}</h3>
+      <div style="font-size:12px;color:#777;">${esc(m.meeting_code)} · ${m.meeting_date}${m.start_time?' '+esc(m.start_time.slice(0,5)):''} · ${esc(m.mode.replace('_',' ').toLowerCase())}${m.location?' · '+esc(m.location):''} · organizer ${esc(m.organizer_name||'—')}</div></div>
+     <div style="white-space:nowrap">${own?`<select id="mt-status" onchange="mtgStatus()"><option ${m.status==='SCHEDULED'?'selected':''}>SCHEDULED</option><option ${m.status==='HELD'?'selected':''}>HELD</option><option ${m.status==='CANCELLED'?'selected':''}>CANCELLED</option></select> <button class="mini" onclick="mtgDelete('${id}')">Delete</button>`:`<span class="pill">${m.status}</span>`}</div></div>
+    <h4 class="sec" style="margin-top:14px;">Agenda</h4><div class="table-scroll"><table><tbody>`;
+  h+=(ares.data||[]).map(a=>`<tr><td style="width:24px;color:#777;">${a.seq}</td><td><b>${esc(a.item)}</b>${a.presenter_id?' <span style="font-size:11px;color:#777">· '+esc(mtgUserName(a.presenter_id))+'</span>':''}${a.notes?'<br><span style="font-size:12px;color:#555">'+esc(a.notes)+'</span>':''}</td>${own?`<td style="width:40px;"><button class="mini" onclick="mtgDelAgenda('${a.id}')">✕</button></td>`:''}</tr>`).join('')||'<tr><td style="color:#777">No agenda items.</td></tr>';
+  h+='</tbody></table></div>';
+  if(own) h+=`<div class="row2c" style="margin-top:8px;"><input type="text" id="ag-item" placeholder="Agenda item"><select id="ag-pres">${userOpts.replace('internal participant','presenter')}</select></div><div class="row2c"><input type="text" id="ag-notes" placeholder="Notes (optional)"><button class="btn ghost sm" onclick="mtgAddAgenda()">+ Add item</button></div>`;
+  h+=`<h4 class="sec" style="margin-top:14px;">Participants &amp; their views</h4><div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Attended</th><th>Views / points raised</th>${own?'<th></th>':''}</tr></thead><tbody>`;
+  h+=(window.__mtgParts).map(p=>`<tr><td><b>${esc(p.user_id?mtgUserName(p.user_id):p.guest_name)}</b></td><td>${p.role}</td><td>${p.attended?'✔':'—'}</td><td>${esc(p.view_remarks||'—')}</td>${own?`<td style="white-space:nowrap"><button class="mini" onclick="mtgEditPart('${p.id}')">Edit</button> <button class="mini" onclick="mtgDelPart('${p.id}')">✕</button></td>`:''}</tr>`).join('')||`<tr><td colspan="${own?5:4}" style="color:#777">No participants yet.</td></tr>`;
+  h+='</tbody></table></div>';
+  if(own) h+=`<div class="row2c" style="margin-top:8px;"><select id="pt-user">${userOpts}</select><input type="text" id="pt-guest" placeholder="…or external guest name"></div><div class="row2c"><select id="pt-role"><option>MEMBER</option><option>CHAIR</option><option>GUEST</option></select><button class="btn ghost sm" onclick="mtgAddPart()">+ Add participant</button></div>`;
+  h+=`<h4 class="sec" style="margin-top:14px;">Minutes of meeting</h4>`;
+  if(own){ h+=`<textarea id="mt-minutes" rows="5" style="width:100%;box-sizing:border-box;">${esc(m.minutes||'')}</textarea>
+    <h4 class="sec" style="margin-top:10px;">Conclusion</h4><textarea id="mt-concl" rows="2" style="width:100%;box-sizing:border-box;">${esc(m.conclusion||'')}</textarea>
+    <button class="btn gold sm" style="margin-top:8px;" onclick="mtgSaveMinutes()">Save minutes &amp; conclusion</button><div id="mt-mmsg"></div>`; }
+  else { h+=`<div style="white-space:pre-wrap;font-size:13px;">${esc(m.minutes||'—')}</div><h4 class="sec" style="margin-top:10px;">Conclusion</h4><div style="font-size:13px;">${esc(m.conclusion||'—')}</div>`; }
+  h+='</div>';
+  $('mtg-detail').innerHTML=h; $('mtg-detail').scrollIntoView({behavior:'smooth'});
+}
+async function mtgAddAgenda(){ const item=$('ag-item').value.trim(); if(!item)return;
+  const cur=(await db.schema('tasks').from('meeting_agenda').select('seq').eq('meeting_id',window.__mtgId)).data||[];
+  const seq=1+cur.reduce((a,r)=>Math.max(a,r.seq),0);
+  const {error}=await db.schema('tasks').from('meeting_agenda').insert({meeting_id:window.__mtgId,seq,item,presenter_id:$('ag-pres').value||null,notes:$('ag-notes').value.trim()||null});
+  if(error){alert(error.message);return;} mtgOpen(window.__mtgId); }
+async function mtgDelAgenda(id){ await db.schema('tasks').from('meeting_agenda').delete().eq('id',id); mtgOpen(window.__mtgId); }
+async function mtgAddPart(){ const uid=$('pt-user').value||null; const guest=$('pt-guest').value.trim()||null; if(!uid&&!guest){alert('Pick a user or type a guest name.');return;}
+  const {error}=await db.schema('tasks').from('meeting_participants').insert({meeting_id:window.__mtgId,user_id:uid,guest_name:uid?null:guest,role:$('pt-role').value});
+  if(error){alert(error.message);return;} mtgOpen(window.__mtgId); }
+async function mtgEditPart(id){ const p=(window.__mtgParts||[]).find(x=>x.id===id); const v=prompt('Their views / points raised:', p?(p.view_remarks||''):''); if(v===null)return; const att=confirm('Mark this participant as ATTENDED?  (OK = attended, Cancel = not)'); const {error}=await db.schema('tasks').from('meeting_participants').update({view_remarks:v||null,attended:att}).eq('id',id); if(error){alert(error.message);return;} mtgOpen(window.__mtgId); }
+async function mtgDelPart(id){ await db.schema('tasks').from('meeting_participants').delete().eq('id',id); mtgOpen(window.__mtgId); }
+async function mtgSaveMinutes(){ const {error}=await db.schema('tasks').from('meetings').update({minutes:$('mt-minutes').value,conclusion:$('mt-concl').value}).eq('id',window.__mtgId); if(error){say('mt-mmsg','Save failed: '+error.message,false);return;} say('mt-mmsg','Saved.',true); }
+async function mtgStatus(){ await db.schema('tasks').from('meetings').update({status:$('mt-status').value}).eq('id',window.__mtgId); }
+async function mtgDelete(id){ if(!confirm('Delete this meeting and its agenda & participants?'))return; const {error}=await db.schema('tasks').from('meetings').delete().eq('id',id); if(error){alert(error.message);return;} openMeetings(); }
+
+/* ================= MODULE 16: MARKETING ================= */
+function canMkt(){ return isDir() || !!(me?.permissions_json?.mkt?.view) || !!(me?.permissions_json?.mkt?.edit); }
+function canMktEdit(){ return isDir() || !!(me?.permissions_json?.mkt?.edit); }
+function isoWeekJS(){ const d=new Date(); const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=t.getUTCDay()||7; t.setUTCDate(t.getUTCDate()+4-day); const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1)); const wk=Math.ceil((((t-ys)/86400000)+1)/7); return t.getUTCFullYear()+'-W'+String(wk).padStart(2,'0'); }
+async function openMkt(){ mktTab('budget'); show('mkt'); }
+async function mktTab(t){
+  ['budget','spend'].forEach(k=>$('mk-'+k).classList.toggle('on',k===t));
+  const B=$('mkt-body'); B.innerHTML='<p style="color:#777">Loading…</p>'; const S=db.schema('sales');
+  if(t==='budget'){
+    const {data,error}=await S.from('v_mkt_budget').select('*').order('period',{ascending:false});
+    if(error){B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`;return;}
+    let html='';
+    if(canMktEdit()){
+      html+=`<div class="card" style="margin-bottom:14px;max-width:660px;"><h3 style="font-size:15px;">Set / revise marketing budget</h3>
+       <div class="row2c"><div><label>Period type</label><select id="bg-ptype" onchange="mktPeriodField()"><option value="MONTH">Month-wise</option><option value="WEEK">Week-wise</option></select></div>
+       <div id="bg-period-wrap"><label>Month</label><input type="month" id="bg-period" value="${monthLabelJS()}"></div></div>
+       <div class="row2c"><div><label>Category</label><select id="bg-cat"><option value="ALL">All (overall)</option><option>DIGITAL</option><option>PRINT</option><option>EVENTS</option><option>TRADE</option><option>BTL</option><option>SPONSORSHIP</option><option>SAMPLING</option><option>OTHER</option></select></div>
+       <div><label>Budget ₹</label><input type="number" id="bg-amt" min="0"></div></div>
+       <label>Note</label><input type="text" id="bg-note">
+       <button class="btn gold sm" style="margin-top:10px;" onclick="mktSaveBudget()">Save budget</button><div id="bg-msg"></div></div>`;
+    }
+    html+='<div class="table-scroll"><table><thead><tr><th>Period</th><th>Type</th><th>Category</th><th class="amount">Budget ₹</th><th class="amount">Spent ₹</th><th class="amount">Remaining ₹</th><th>Utilisation</th></tr></thead><tbody>';
+    html+=(data||[]).map(b=>{const pct=b.amount>0?Math.round(b.spent*100/b.amount):0;const c=pct>=100?'#b3382c':(pct>=80?'#7a5c10':'#1f7a4d');
+      return `<tr><td><b>${b.period}</b></td><td>${b.period_type==='MONTH'?'Month':'Week'}</td><td>${b.category}</td><td class="amount">${inr(b.amount)}</td><td class="amount">${inr(b.spent)}</td><td class="amount" style="font-weight:700;color:${(b.amount-b.spent)<0?'#b3382c':'#1f7a4d'}">${inr(b.amount-b.spent)}</td>
+      <td><div style="background:#eee;border-radius:6px;height:16px;width:110px;overflow:hidden;display:inline-block;vertical-align:middle;"><div style="height:16px;width:${Math.min(pct,100)}%;background:${c};"></div></div> <span style="font-size:11px;color:${c};font-weight:600">${pct}%</span></td></tr>`;}).join('')||'<tr><td colspan="7" style="color:#777">No budgets set yet.</td></tr>';
+    B.innerHTML=html+'</tbody></table></div>';
+  }
+  if(t==='spend'){
+    const {data,error}=await S.from('v_mkt_expenses').select('*').order('expense_date',{ascending:false}).limit(200);
+    if(error){B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`;return;}
+    let html='';
+    if(canMktEdit()){
+      html+=`<div class="card" style="margin-bottom:14px;max-width:660px;"><h3 style="font-size:15px;">Log a marketing spend</h3>
+       <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
+       <div><label>Category</label><select id="ex-cat"><option>DIGITAL</option><option>PRINT</option><option>EVENTS</option><option>TRADE</option><option>BTL</option><option>SPONSORSHIP</option><option>SAMPLING</option><option>OTHER</option></select></div></div>
+       <div class="row2c"><div><label>Amount ₹</label><input type="number" id="ex-amt" min="0"></div><div><label>Vendor</label><input type="text" id="ex-vendor"></div></div>
+       <label>Where used / description</label><input type="text" id="ex-desc" placeholder="e.g. Diwali hoardings — Bhiwandi">
+       <button class="btn gold sm" style="margin-top:10px;" onclick="mktSaveExpense()">Add spend</button><div id="ex-msg"></div></div>`;
+    }
+    html+='<div class="table-scroll"><table><thead><tr><th>Date</th><th>Month / Week</th><th>Category</th><th class="amount">Amount ₹</th><th>Where used</th><th>Vendor</th></tr></thead><tbody>';
+    html+=(data||[]).map(e=>`<tr><td>${e.expense_date}</td><td>${e.month}<br><span style="font-size:11px;color:#777">${e.week}</span></td><td>${e.category}</td><td class="amount">${inr(e.amount)}</td><td>${esc(e.description||'—')}</td><td>${esc(e.vendor||'—')}</td></tr>`).join('')||'<tr><td colspan="6" style="color:#777">No spends logged yet.</td></tr>';
+    B.innerHTML=html+'</tbody></table></div>';
+  }
+}
+function mktPeriodField(){ const t=$('bg-ptype').value; const w=$('bg-period-wrap'); if(t==='MONTH'){w.innerHTML='<label>Month</label><input type="month" id="bg-period" value="'+monthLabelJS()+'">';} else {w.innerHTML='<label>Week (e.g. 2026-W32)</label><input type="text" id="bg-period" placeholder="2026-W32" value="'+isoWeekJS()+'">';} }
+async function mktSaveBudget(){ const amt=Number($('bg-amt').value); const period=$('bg-period').value.trim(); if(!period){say('bg-msg','Pick a period.',false);return;} if(!(amt>=0)){say('bg-msg','Enter a budget amount.',false);return;}
+  const row={period_type:$('bg-ptype').value,period,category:$('bg-cat').value,amount:amt,note:$('bg-note').value.trim()||null,set_by:me.id};
+  const {error}=await db.schema('sales').from('mkt_budgets').upsert(row,{onConflict:'period_type,period,category'}); if(error){say('bg-msg','Save failed: '+error.message,false);return;} mktTab('budget'); }
+async function mktSaveExpense(){ const amt=Number($('ex-amt').value); if(!(amt>=0)){say('ex-msg','Enter an amount.',false);return;} const {error}=await db.schema('sales').from('mkt_expenses').insert({expense_date:$('ex-date').value||null,category:$('ex-cat').value,amount:amt,description:$('ex-desc').value.trim()||null,vendor:$('ex-vendor').value.trim()||null,created_by:me.id}); if(error){say('ex-msg','Save failed: '+error.message,false);return;} mktTab('spend'); }
+
+/* ================= MODULE 17: NOTIFICATIONS ================= */
+let notifItems=[];
+async function notifLoad(){
+  if(!me) return;
+  const {data,error}=await db.schema('tasks').from('v_notifications').select('*').order('when_ts',{ascending:false}).limit(100);
+  if(error){ return; }
+  notifItems=data||[];
+  const unread=notifItems.filter(n=>!n.is_read).length;
+  const b=$('notif-badge'); if(b){ if(unread>0){b.textContent=unread>99?'99+':unread; b.style.display='inline-block';} else b.style.display='none'; }
+}
+function notifRow(n){ return `<div style="display:flex;gap:8px;padding:9px 12px;border-top:1px solid #f0f0f0;background:${n.is_read?'#fff':'#f6faff'};">
+  <span style="flex:0 0 4px;align-self:stretch;background:${n.color};border-radius:2px;"></span>
+  <div style="flex:1;cursor:pointer;" onclick="notifGo('${n.route}')"><div style="font-size:12.5px;font-weight:${n.is_read?500:700};">${esc(n.title)}</div>
+   <div style="font-size:11px;color:#777;">${esc(n.detail||'')}</div></div>
+  ${!n.is_read?`<button class="mini" title="Mark read" onclick="notifMark('${n.notif_key}')">✓</button>`:''}</div>`; }
+function notifRender(list){ return list.length? list.map(notifRow).join('') : '<p style="color:#777;padding:14px;">Nothing pending right now. 🎉</p>'; }
+function notifToggle(e){ if(e){e.stopPropagation();} const p=$('notif-pop'); if(!p) return;
+  if(p.classList.contains('hidden')){
+    p.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #eee;"><b>Notifications</b><span>${notifItems.some(n=>!n.is_read)?'<button class="mini" onclick="notifMarkAll()">Mark all read</button> ':''}<button class="mini" onclick="openNotifCentre()">Open centre</button></span></div>`+notifRender(notifItems.slice(0,12));
+    p.classList.remove('hidden');
+  } else p.classList.add('hidden');
+}
+document.addEventListener('click',function(e){ const p=$('notif-pop'), b=$('notif-bell'); if(p&&!p.classList.contains('hidden')&&!p.contains(e.target)&&b&&!b.contains(e.target)) p.classList.add('hidden'); });
+async function notifMark(key){ await db.schema('tasks').rpc('notif_mark_read',{p_key:key}); await notifLoad(); notifAfter(); }
+async function notifMarkAll(){ await db.schema('tasks').rpc('notif_mark_all_read'); await notifLoad(); notifAfter(); }
+function notifAfter(){ const p=$('notif-pop'); if(p&&!p.classList.contains('hidden')){ p.classList.add('hidden'); notifToggle(); } if($('view-notif') && !$('view-notif').classList.contains('hidden')) openNotifCentre(); }
+function notifGo(route){ const p=$('notif-pop'); if(p) p.classList.add('hidden'); const map={tasks:openTasks,mail:(window.openMail||null),calendar:openCalendar,acct:openAcct,purchase:openPurchase}; const fn=map[route]; if(fn) try{fn();}catch(e){} }
+async function openNotifCentre(){ await notifLoad(); $('notif-centre').innerHTML=`<div style="max-width:720px;">${notifItems.some(n=>!n.is_read)?'<button class="btn ghost sm" onclick="notifMarkAll()">Mark all read</button>':''}<div class="card" style="margin-top:10px;padding:0;overflow:hidden;">${notifRender(notifItems)}</div></div>`; show('notif'); }
 
 init();
 </script>
