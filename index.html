@@ -282,6 +282,18 @@
     <div id="tasks-body"></div>
   </section>
 
+  <!-- ============ MODULE 14: CALENDAR ============ -->
+  <section id="view-calendar" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Calendar</h2>
+      <p>Your events plus every important date already in the ERP — task deadlines, licence renewals, asset-document expiries, PO due dates and production targets — in one view. You only see dates you're allowed to see.</p></div>
+    <div id="cal-head" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;"></div>
+    <div id="cal-legend" style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#555;margin-bottom:10px;"></div>
+    <div id="cal-grid"></div>
+    <div id="cal-day"></div>
+    <div id="cal-form"></div>
+  </section>
+
   <!-- ============ MODULE 7: SALES REPORTS & TARGETS ============ -->
   <section id="view-reports" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -476,6 +488,7 @@ const MODULES = [
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
   {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
+  {key:'calendar',ico:'📅', name:'Calendar',         desc:'Events + task, renewal & PO dates',      live:true,  open:()=>openCalendar()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
@@ -491,7 +504,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','comp','reports','purchase','mail','acct'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','comp','reports','purchase','mail','acct'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -2497,6 +2510,116 @@ async function compFileDelete(attId, path, docId){
   const { error } = await db.schema('comp').from('attachments').delete().eq('id', attId);
   if (error){ alert('File removed, but the record could not be cleared: '+error.message); }
   compFiles(docId);
+}
+
+/* ================= MODULE 14: CALENDAR ================= */
+let calYear, calMonth, calEvents = [], calSelDay = null;
+const CAL_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const CAL_SRCLBL = { EVENT:'Event', TASK:'Task due', COMPLIANCE:'Licence renewal', ASSET_DOC:'Asset document', PO:'PO due', PROD_TARGET:'Production target' };
+function calFmt(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+async function openCalendar(){
+  const now = new Date();
+  calYear = now.getFullYear(); calMonth = now.getMonth(); calSelDay = calFmt(now);
+  await calLoad(); calRender(); calShowDay(calSelDay); show('calendar');
+}
+async function calLoad(){
+  // 6-week window around the visible month
+  const gridStart = new Date(calYear, calMonth, 1); gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+  const gridEnd = new Date(gridStart); gridEnd.setDate(gridEnd.getDate() + 41);
+  const { data, error } = await db.schema('tasks').from('v_calendar')
+    .select('*').gte('event_date', calFmt(gridStart)).lte('event_date', calFmt(gridEnd)).order('event_date');
+  calEvents = error ? [] : (data || []);
+  if (error) console.warn('calendar load', error.message);
+}
+function calByDay(){ const m={}; for(const e of calEvents){ (m[e.event_date] ??= []).push(e); } return m; }
+function calRender(){
+  $('cal-head').innerHTML =
+    `<button class="btn ghost sm" onclick="calNav(-1)">‹ Prev</button>
+     <h3 style="margin:0;font-size:17px;min-width:190px;text-align:center;">${CAL_MONTHS[calMonth]} ${calYear}</h3>
+     <button class="btn ghost sm" onclick="calNav(1)">Next ›</button>
+     <button class="btn ghost sm" onclick="calToday()">Today</button>
+     <button class="btn gold sm" onclick="calAddForm()">+ Add event</button>`;
+  $('cal-legend').innerHTML = Object.entries(CAL_SRCLBL).map(([k,v])=>{
+    const c = k==='EVENT'?'#3b82f6':k==='TASK'?'#0d9488':k==='COMPLIANCE'?'#b45309':k==='ASSET_DOC'?'#0891b2':k==='PO'?'#7c3aed':'#059669';
+    return `<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};margin-right:4px;"></span>${v}</span>`;
+  }).join('');
+  const byDay = calByDay();
+  const todayStr = calFmt(new Date());
+  const gridStart = new Date(calYear, calMonth, 1); gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+  let html = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">';
+  for (const wd of ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']) html += `<div style="text-align:center;font-size:11px;font-weight:600;color:#777;padding:2px;">${wd}</div>`;
+  for (let i=0;i<42;i++){
+    const d = new Date(gridStart); d.setDate(gridStart.getDate()+i);
+    const ds = calFmt(d), inMonth = d.getMonth()===calMonth, isToday = ds===todayStr, isSel = ds===calSelDay;
+    const evs = byDay[ds] || [];
+    const chips = evs.slice(0,3).map(e=>`<div style="font-size:10px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:3px;padding:0 4px;margin-top:1px;color:#fff;background:${e.color};">${esc(e.title)}</div>`).join('')
+      + (evs.length>3?`<div style="font-size:10px;color:#777;margin-top:1px;">+${evs.length-3} more</div>`:'');
+    html += `<div onclick="calShowDay('${ds}')" style="min-height:82px;border:1px solid ${isSel?'#b8860b':'#e5e5e5'};border-radius:6px;padding:3px;cursor:pointer;background:${isToday?'#fffaf0':(inMonth?'#fff':'#fafafa')};opacity:${inMonth?1:.55};">
+      <div style="font-size:12px;font-weight:${isToday?700:500};color:${isToday?'#b8860b':'#333'};text-align:right;padding-right:2px;">${d.getDate()}</div>${chips}</div>`;
+  }
+  html += '</div>';
+  $('cal-grid').innerHTML = html;
+}
+function calNav(delta){ calMonth += delta; if(calMonth<0){calMonth=11;calYear--;} if(calMonth>11){calMonth=0;calYear++;} calLoad().then(()=>{calRender(); if($('cal-day')) $('cal-day').innerHTML='';}); }
+function calToday(){ const n=new Date(); calYear=n.getFullYear(); calMonth=n.getMonth(); calSelDay=calFmt(n); calLoad().then(()=>{calRender(); calShowDay(calSelDay);}); }
+function calShowDay(ds){
+  calSelDay = ds; calRender();
+  const evs = (calByDay()[ds] || []);
+  const d = new Date(ds+'T00:00:00');
+  const nice = d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  let html = `<div class="card" style="margin-top:12px;max-width:720px;"><div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 style="font-size:15px;margin:0;">${nice}</h3><button class="btn gold sm" onclick="calAddForm('${ds}')">+ Add on this day</button></div>`;
+  if (!evs.length) html += '<p style="color:#777;margin-top:8px;">Nothing on this day.</p>';
+  else html += '<div style="margin-top:8px;">' + evs.map(e=>{
+    const tag = CAL_SRCLBL[e.source]||e.source;
+    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-top:1px solid #eee;">
+      <span style="flex:0 0 4px;align-self:stretch;background:${e.color};border-radius:2px;"></span>
+      <div style="flex:1;"><div style="font-weight:600;font-size:13px;">${esc(e.title)}</div>
+        <div style="font-size:11px;color:#777;">${tag}${e.category?' · '+esc(e.category):''}${!e.all_day&&e.start_time?' · '+esc(e.start_time.slice(0,5)):''}${e.end_date&&e.end_date!==e.event_date?' · until '+e.end_date:''}</div>
+        ${e.notes?`<div style="font-size:12px;color:#555;margin-top:2px;">${esc(e.notes)}</div>`:''}</div>
+      ${e.source==='EVENT'&&(e.owner_id===me.id||isDir())?`<button class="mini" onclick="calDelete('${e.ref_id}')">Delete</button>`:''}
+    </div>`;
+  }).join('') + '</div>';
+  html += '</div>';
+  $('cal-day').innerHTML = html; $('cal-form').innerHTML='';
+}
+function calAddForm(ds){
+  ds = ds || calSelDay || calFmt(new Date());
+  const cats = ['MEETING','REMINDER','DEADLINE','HOLIDAY','CALL','VISIT','PAYMENT','OTHER'];
+  $('cal-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:620px;"><h3 style="font-size:15px;">New event</h3>
+    <label>Title *</label><input type="text" id="ce-title" placeholder="e.g. Distributor meeting, GST payment">
+    <div class="row2c"><div><label>Date *</label><input type="date" id="ce-date" value="${ds}"></div>
+    <div><label>Category</label><select id="ce-cat">${cats.map(c=>`<option value="${c}">${c.charAt(0)+c.slice(1).toLowerCase()}</option>`).join('')}</select></div></div>
+    <div class="row2c"><div><label>End date (optional)</label><input type="date" id="ce-end"></div>
+    <div><label>Time (optional)</label><input type="time" id="ce-time"></div></div>
+    <label>Location (optional)</label><input type="text" id="ce-loc">
+    <label>Notes (optional)</label><input type="text" id="ce-notes">
+    <div class="switch" style="margin-top:8px;"><input type="checkbox" id="ce-private"><span>Private (only you and the Director see it)</span></div>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="calSave()">Save event</button>
+    <div id="ce-msg"></div></div>`;
+  $('cal-form').scrollIntoView({behavior:'smooth'});
+}
+async function calSave(){
+  const title = $('ce-title').value.trim(), date = $('ce-date').value;
+  if (!title){ say('ce-msg','A title is needed.',false); return; }
+  if (!date){ say('ce-msg','Pick a date.',false); return; }
+  const time = $('ce-time').value;
+  const row = { title, event_date: date, end_date: $('ce-end').value||null,
+    all_day: !time, start_time: time||null, category: $('ce-cat').value,
+    location: $('ce-loc').value.trim()||null, notes: $('ce-notes').value.trim()||null,
+    is_private: $('ce-private').checked, owner_id: me.id };
+  const { error } = await db.schema('tasks').from('cal_events').insert(row);
+  if (error){ say('ce-msg','Could not save: '+error.message,false); return; }
+  calSelDay = date;
+  const dObj = new Date(date+'T00:00:00'); calYear=dObj.getFullYear(); calMonth=dObj.getMonth();
+  await calLoad(); calRender(); calShowDay(date);
+}
+async function calDelete(id){
+  if (!confirm('Delete this event?')) return;
+  const { error } = await db.schema('tasks').from('cal_events').delete().eq('id', id);
+  if (error){ alert('Could not delete: '+error.message); return; }
+  await calLoad(); calRender(); calShowDay(calSelDay);
 }
 
 init();
