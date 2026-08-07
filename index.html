@@ -240,10 +240,13 @@
       <button class="btn gold sm" onclick="openBrandAdd()">+ Add brand</button>
       <button class="btn ghost sm" onclick="openSkuAdd()">+ Add SKU</button>
     </div>
+    <div id="brands-panel"></div>
+    <h4 class="sec" style="margin-top:16px;">SKUs &amp; prices</h4>
     <div class="table-scroll"><table>
-      <thead><tr><th>SKU Code</th><th>Brand</th><th>Size</th><th>Units/Case</th><th>Pack</th><th>Mfr</th><th>Active</th><th class="dir-only"></th></tr></thead>
+      <thead><tr><th>SKU Code</th><th>Brand</th><th>Size</th><th>Units/Case</th><th>Pack</th><th>Mfr</th><th class="amount">Rate/case ₹</th><th>Active</th><th class="dir-only"></th></tr></thead>
       <tbody id="sku-rows"></tbody>
     </table></div>
+    <div id="sku-price-panel"></div>
   </section>
 
   <!-- ============ MODULE 2: MANUFACTURING @ MMC ============ -->
@@ -898,22 +901,67 @@ $('btn-save-party').onclick = async () => {
 /* ================= BRANDS & SKUs ================= */
 async function openBrands(){
   await loadMasters();
+  // latest MH list price per SKU
+  const { data: rc } = await db.schema('sales').from('rate_cards').select('*').is('party_id',null).eq('state_id','MH').order('effective_from',{ascending:false});
+  const latestRate = {}; (rc||[]).forEach(r=>{ if(!latestRate[r.sku_id]) latestRate[r.sku_id]=r; }); window.__latestRate = latestRate;
+  // ---- Brands panel (editable by Director) ----
+  const skuCount = {}; M.skus.forEach(s=>{ skuCount[s.brand_id]=(skuCount[s.brand_id]||0)+1; });
+  let bp = `<h4 class="sec">Brands</h4><div class="table-scroll"><table><thead><tr><th>Brand</th><th>Category</th><th class="amount">SKUs</th><th>Active</th>${isDir()?'<th></th>':''}</tr></thead><tbody>`;
+  bp += M.brands.map(b=>`<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(b.name)}</b></td><td>${esc(b.category_id)}</td><td class="amount">${skuCount[b.id]||0}</td><td>${b.is_active?'✔':'✖'}</td>${isDir()?`<td><button class="mini" onclick="brandEdit('${b.id}')">Edit</button></td>`:''}</tr>`).join('') || '<tr><td colspan="5" style="color:#777">No brands yet.</td></tr>';
+  bp += '</tbody></table></div><div id="brand-edit-panel"></div>';
+  $('brands-panel').innerHTML = bp;
+  // ---- SKU + price table ----
   const tb = $('sku-rows'); tb.innerHTML = '';
   const mfrName = id => (M.mfrs.find(m=>m.id===id)||{}).code || '—';
   for (const s of M.skus){
+    const r = latestRate[s.id];
     const tr = document.createElement('tr');
     if (!s.is_active) tr.className='inactive';
     tr.innerHTML = `<td><b>${esc(s.sku_code)}</b></td><td>${esc(s.brand?.name)}</td>` +
       `<td>${s.size_ml} ml</td><td>${s.units_per_case}</td><td>${s.material}</td><td>${mfrName(s.manufacturer_id)}</td>` +
+      `<td class="amount">${r?inr(r.rate_per_case):'<span style="color:#b3382c">not set</span>'}</td>` +
       `<td>${s.is_active?'✔':'✖'}</td>` +
-      (isDir()?`<td><button class="mini">${s.is_active?'Deactivate':'Reactivate'}</button></td>`:'');
-    if (isDir()) tr.querySelector('button').onclick = async ()=>{
+      (isDir()?`<td style="white-space:nowrap"><button class="mini" onclick="skuPriceEdit('${s.id}')">Edit price</button> <button class="mini" data-act="toggle">${s.is_active?'Deactivate':'Reactivate'}</button></td>`:'');
+    if (isDir()) tr.querySelector('button[data-act="toggle"]').onclick = async ()=>{
       const { error } = await db.schema('sales').from('skus').update({is_active: !s.is_active}).eq('id', s.id);
       if (!error) openBrands();
     };
     tb.appendChild(tr);
   }
   applyDirOnly(); show('brands');
+}
+function brandEdit(id){
+  const b = M.brands.find(x=>x.id===id); if(!b) return;
+  const catOpts = M.cats.map(c=>`<option value="${c.id}" ${c.id===b.category_id?'selected':''}>${esc(c.id)} — ${esc(c.name)}</option>`).join('');
+  $('brand-edit-panel').innerHTML = `<div class="card" style="margin-top:12px;max-width:520px;"><h3 style="font-size:15px;">Edit brand — ${esc(b.name)}</h3>
+    <label>Brand name</label><input type="text" id="be-name" value="${esc(b.name)}">
+    <label>Category</label><select id="be-cat">${catOpts}</select>
+    <div class="switch" style="margin-top:8px;"><input type="checkbox" id="be-active" ${b.is_active?'checked':''}><span>Active</span></div>
+    <div class="row2c" style="margin-top:10px;"><button class="btn gold sm" onclick="brandSave('${id}')">Save changes</button>
+    <button class="btn ghost sm" onclick="$('brand-edit-panel').innerHTML=''">Cancel</button></div><div id="be-msg"></div></div>`;
+  $('brand-edit-panel').scrollIntoView({behavior:'smooth'});
+}
+async function brandSave(id){
+  const name = $('be-name').value.trim(); if(!name){ say('be-msg','Brand name is needed.',false); return; }
+  const { error } = await db.schema('sales').from('brands').update({ name, category_id:$('be-cat').value, is_active:$('be-active').checked }).eq('id', id);
+  if(error){ say('be-msg','Save failed: '+error.message,false); return; }
+  openBrands();
+}
+function skuPriceEdit(id){
+  const s = M.skus.find(x=>x.id===id); const r=(window.__latestRate||{})[id];
+  $('sku-price-panel').innerHTML = `<div class="card" style="margin-top:12px;max-width:560px;"><h3 style="font-size:15px;">Set price — ${esc(s.sku_code)}</h3>
+    <p style="font-size:12px;color:#777">Current: ${r?('₹'+inr(r.rate_per_case)+', effective '+r.effective_from):'not set'}. A new price adds a dated rate — the old one stays in history.</p>
+    <div class="row2c"><div><label>New rate ₹/case *</label><input type="number" id="sp-rate" min="0" value="${r?r.rate_per_case:''}"></div>
+    <div><label>Effective from</label><input type="date" id="sp-eff" value="${calFmt(new Date())}"></div></div>
+    <div class="row2c" style="margin-top:10px;"><button class="btn gold sm" onclick="skuPriceSave('${id}')">Save price</button>
+    <button class="btn ghost sm" onclick="$('sku-price-panel').innerHTML=''">Cancel</button></div><div id="sp-msg"></div></div>`;
+  $('sku-price-panel').scrollIntoView({behavior:'smooth'});
+}
+async function skuPriceSave(id){
+  const rate = Number($('sp-rate').value); if(!(rate>0)){ say('sp-msg','Enter a valid rate.',false); return; }
+  const { error } = await db.schema('sales').from('rate_cards').insert({ sku_id:id, state_id:'MH', party_id:null, rate_per_case:rate, effective_from:$('sp-eff').value||calFmt(new Date()), created_by:me.id });
+  if(error){ say('sp-msg','Save failed: '+error.message,false); return; }
+  openBrands();
 }
 function openBrandAdd(){
   $('ba-name').value=''; say('ba-msg','');
