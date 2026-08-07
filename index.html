@@ -316,6 +316,7 @@
     <div class="subtabs">
       <button class="chip on" id="mk-budget" onclick="mktTab('budget')">Budget &amp; utilisation</button>
       <button class="chip" id="mk-spend" onclick="mktTab('spend')">Spends (where used)</button>
+      <button class="chip" id="mk-requests" onclick="mktTab('requests')">Budget requests</button>
     </div>
     <div id="mkt-body"></div>
   </section>
@@ -584,7 +585,7 @@ function drawModules(){
     if (m.dirOnly && !isDir()) continue;
     if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view)) continue;
     if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit)) continue;
-    if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit)) continue;
+    if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS())) continue;
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
     el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
@@ -2794,10 +2795,13 @@ async function mtgDelete(id){ if(!confirm('Delete this meeting and its agenda & 
 /* ================= MODULE 16: MARKETING ================= */
 function canMkt(){ return isDir() || !!(me?.permissions_json?.mkt?.view) || !!(me?.permissions_json?.mkt?.edit); }
 function canMktEdit(){ return isDir() || !!(me?.permissions_json?.mkt?.edit); }
+function inAccountsJS(){ const f=me?.permissions_json?.finance||{}; return isDir() || !!f.view || !!f.edit || !!f.approve; }
+function canMktApprove(){ return isDir() || inAccountsJS(); }
+function canMktRequest(){ return isDir() || !!(me?.permissions_json?.mkt?.edit) || !!(me?.permissions_json?.mkt?.view); }
 function isoWeekJS(){ const d=new Date(); const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=t.getUTCDay()||7; t.setUTCDate(t.getUTCDate()+4-day); const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1)); const wk=Math.ceil((((t-ys)/86400000)+1)/7); return t.getUTCFullYear()+'-W'+String(wk).padStart(2,'0'); }
 async function openMkt(){ mktTab('budget'); show('mkt'); }
 async function mktTab(t){
-  ['budget','spend'].forEach(k=>$('mk-'+k).classList.toggle('on',k===t));
+  ['budget','spend','requests'].forEach(k=>$('mk-'+k).classList.toggle('on',k===t));
   const B=$('mkt-body'); B.innerHTML='<p style="color:#777">Loading…</p>'; const S=db.schema('sales');
   if(t==='budget'){
     const {data,error}=await S.from('v_mkt_budget').select('*').order('period',{ascending:false});
@@ -2834,6 +2838,62 @@ async function mktTab(t){
     html+=(data||[]).map(e=>`<tr><td>${e.expense_date}</td><td>${e.month}<br><span style="font-size:11px;color:#777">${e.week}</span></td><td>${e.category}</td><td class="amount">${inr(e.amount)}</td><td>${esc(e.description||'—')}</td><td>${esc(e.vendor||'—')}</td></tr>`).join('')||'<tr><td colspan="6" style="color:#777">No spends logged yet.</td></tr>';
     B.innerHTML=html+'</tbody></table></div>';
   }
+  if(t==='requests'){
+    const {data,error}=await S.from('v_mkt_requests').select('*').order('created_at',{ascending:false}).limit(200);
+    if(error){B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`;return;}
+    let html='';
+    if(canMktRequest()){
+      html+=`<div class="card" style="margin-bottom:14px;max-width:660px;"><h3 style="font-size:15px;">Request a marketing budget</h3>
+       <p style="font-size:12px;color:#777;margin:2px 0 10px;">Raise a request with the amount, purpose and how it will be utilised. The Director or Accounts will approve or reject it.</p>
+       <div class="row2c"><div><label>Amount ₹</label><input type="number" id="mr-amt" min="0"></div>
+       <div><label>Category</label><select id="mr-cat"><option>DIGITAL</option><option>PRINT</option><option>EVENTS</option><option>TRADE</option><option>BTL</option><option>SPONSORSHIP</option><option>SAMPLING</option><option value="ALL">All (overall)</option><option>OTHER</option></select></div></div>
+       <div class="row2c"><div><label>For month (optional)</label><input type="month" id="mr-period"></div>
+       <div><label>Needed by (optional)</label><input type="date" id="mr-needed"></div></div>
+       <label>Purpose / description</label><input type="text" id="mr-desc" placeholder="e.g. Q3 Instagram + influencer campaign">
+       <label>Utilisation (how it will be spent)</label><textarea id="mr-util" rows="2" placeholder="e.g. Ads ₹30k, influencer ₹20k"></textarea>
+       <button class="btn gold sm" style="margin-top:10px;" onclick="mktReqSave()">Submit request</button><div id="mr-msg"></div></div>`;
+    }
+    const stColor={PENDING_APPROVAL:'#7a5c10',APPROVED:'#1f7a4d',REJECTED:'#b3382c'};
+    const stLabel={PENDING_APPROVAL:'Pending',APPROVED:'Approved',REJECTED:'Rejected'};
+    html+='<div class="table-scroll"><table><thead><tr><th>Code</th><th>Category</th><th class="amount">Amount ₹</th><th>Purpose / utilisation</th><th>For</th><th>Requested by</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+    html+=(data||[]).map(r=>{
+      const st=`<span style="font-weight:700;color:${stColor[r.status]||'#555'}">${stLabel[r.status]||r.status}</span>`;
+      const decided = r.status!=='PENDING_APPROVAL' ? `<br><span style="font-size:11px;color:#777">by ${esc(r.decided_by_name||'—')}${r.decision_note?': '+esc(r.decision_note):''}</span>` : '';
+      let act='—';
+      if(r.status==='PENDING_APPROVAL'){
+        const parts=[];
+        if(canMktApprove()) parts.push(`<button class="btn gold sm" onclick="mktReqDecide('${r.id}',true)">Approve</button> <button class="btn sm" onclick="mktReqDecide('${r.id}',false)">Reject</button>`);
+        if(isDir() || r.requested_by===me.id) parts.push(`<button class="btn sm" onclick="mktReqWithdraw('${r.id}')">Withdraw</button>`);
+        act=parts.join(' ')||'—';
+      }
+      return `<tr><td><b>${esc(r.req_code)}</b></td><td>${esc(r.category)}</td><td class="amount">${inr(r.amount)}</td>
+        <td>${esc(r.description||'—')}${r.utilization?'<br><span style="font-size:11px;color:#777">'+esc(r.utilization)+'</span>':''}</td>
+        <td>${r.period||'—'}${r.needed_by?'<br><span style="font-size:11px;color:#777">by '+r.needed_by+'</span>':''}</td>
+        <td>${esc(r.requested_by_name||'—')}</td><td>${st}${decided}</td><td>${act}</td></tr>`;
+    }).join('')||'<tr><td colspan="8" style="color:#777">No budget requests yet.</td></tr>';
+    B.innerHTML=html+'</tbody></table></div>';
+  }
+}
+async function mktReqSave(){
+  const amt=Number($('mr-amt').value); const desc=$('mr-desc').value.trim();
+  if(!(amt>=0)){say('mr-msg','Enter an amount.',false);return;}
+  if(!desc){say('mr-msg','Add a description of what the budget is for.',false);return;}
+  const period=$('mr-period').value.trim();
+  const {error}=await db.schema('sales').rpc('mkt_request_create',{p_amount:amt,p_category:$('mr-cat').value,p_description:desc,p_utilization:$('mr-util').value.trim()||null,p_period:period||null,p_needed_by:$('mr-needed').value||null});
+  if(error){say('mr-msg','Submit failed: '+error.message,false);return;}
+  mktTab('requests');
+}
+async function mktReqDecide(id,approve){
+  const note=prompt(approve?'Approval note (optional):':'Reason for rejection (optional):','')||null;
+  const {error}=await db.schema('sales').rpc('mkt_request_decide',{p_id:id,p_approve:approve,p_note:note});
+  if(error){alert('Failed: '+error.message);return;}
+  mktTab('requests');
+}
+async function mktReqWithdraw(id){
+  if(!confirm('Withdraw this pending budget request?'))return;
+  const {error}=await db.schema('sales').rpc('mkt_request_withdraw',{p_id:id});
+  if(error){alert('Failed: '+error.message);return;}
+  mktTab('requests');
 }
 function mktPeriodField(){ const t=$('bg-ptype').value; const w=$('bg-period-wrap'); if(t==='MONTH'){w.innerHTML='<label>Month</label><input type="month" id="bg-period" value="'+monthLabelJS()+'">';} else {w.innerHTML='<label>Week (e.g. 2026-W32)</label><input type="text" id="bg-period" placeholder="2026-W32" value="'+isoWeekJS()+'">';} }
 async function mktSaveBudget(){ const amt=Number($('bg-amt').value); const period=$('bg-period').value.trim(); if(!period){say('bg-msg','Pick a period.',false);return;} if(!(amt>=0)){say('bg-msg','Enter a budget amount.',false);return;}
@@ -2867,7 +2927,7 @@ document.addEventListener('click',function(e){ const p=$('notif-pop'), b=$('noti
 async function notifMark(key){ await db.schema('tasks').rpc('notif_mark_read',{p_key:key}); await notifLoad(); notifAfter(); }
 async function notifMarkAll(){ await db.schema('tasks').rpc('notif_mark_all_read'); await notifLoad(); notifAfter(); }
 function notifAfter(){ const p=$('notif-pop'); if(p&&!p.classList.contains('hidden')){ p.classList.add('hidden'); notifToggle(); } if($('view-notif') && !$('view-notif').classList.contains('hidden')) openNotifCentre(); }
-function notifGo(route){ const p=$('notif-pop'); if(p) p.classList.add('hidden'); const map={tasks:openTasks,mail:(window.openMail||null),calendar:openCalendar,acct:openAcct,purchase:openPurchase}; const fn=map[route]; if(fn) try{fn();}catch(e){} }
+function notifGo(route){ const p=$('notif-pop'); if(p) p.classList.add('hidden'); const map={tasks:openTasks,mail:(window.openMail||null),calendar:openCalendar,acct:openAcct,purchase:openPurchase,mkt:()=>{show('mkt');mktTab('requests');}}; const fn=map[route]; if(fn) try{fn();}catch(e){} }
 async function openNotifCentre(){ await notifLoad(); $('notif-centre').innerHTML=`<div style="max-width:720px;">${notifItems.some(n=>!n.is_read)?'<button class="btn ghost sm" onclick="notifMarkAll()">Mark all read</button>':''}<div class="card" style="margin-top:10px;padding:0;overflow:hidden;">${notifRender(notifItems)}</div></div>`; show('notif'); }
 
 init();
