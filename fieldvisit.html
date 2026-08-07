@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1a1a2e">
+<title>Aurum FieldVisit — Aurum Spirit India Limited</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+  :root{ --brand:#1a1a2e; --brand2:#2d2d4e; --gold:#c9a227;
+         --bg:#f2f5f9; --card:#fff; --text:#1c2733; --muted:#6b7a8c;
+         --ok:#1e8e5a; --err:#c0392b; --radius:14px; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;min-height:100%;}
+  body{font-family:-apple-system,'Segoe UI',Roboto,'Noto Sans',sans-serif;background:var(--bg);color:var(--text);}
+  .screen{display:none;min-height:100dvh;flex-direction:column;}
+  .screen.active{display:flex;}
+  header{background:var(--brand);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:5;}
+  header .back{background:none;border:none;color:#fff;font-size:22px;padding:2px 8px 2px 0;cursor:pointer;}
+  header h1{font-size:17px;margin:0;font-weight:600;flex:1;}
+  header .who{font-size:12px;opacity:.85;}
+  .content{flex:1;padding:16px;display:flex;flex-direction:column;gap:14px;max-width:520px;width:100%;margin:0 auto;}
+  .card{background:var(--card);border-radius:var(--radius);padding:16px;box-shadow:0 1px 4px rgba(16,42,67,.08);}
+  .btn{display:block;width:100%;padding:15px;border:none;border-radius:var(--radius);font-size:16px;font-weight:600;cursor:pointer;}
+  .btn-primary{background:var(--brand);color:#fff;}
+  .btn-primary:disabled{background:#9da3c8;}
+  .btn-ghost{background:#e8eaf5;color:var(--brand);}
+  label{font-size:13px;font-weight:600;color:var(--muted);display:block;margin-bottom:6px;}
+  input,textarea,select{width:100%;padding:13px;border:1.5px solid #d7dfe8;border-radius:10px;font-size:16px;background:#fff;color:var(--text);}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--gold);}
+  textarea{resize:vertical;min-height:80px;}
+  .muted{color:var(--muted);font-size:13px;}
+  .msg{font-size:13.5px;padding:10px 12px;border-radius:10px;display:none;}
+  .msg.show{display:block;}
+  .msg.ok{background:#e3f6ec;color:var(--ok);}
+  .msg.bad{background:#fdecea;color:var(--err);}
+  .hero{background:linear-gradient(160deg,var(--brand),var(--brand2));color:#fff;padding:52px 24px 40px;text-align:center;border-radius:0 0 28px 28px;}
+  .hero .logo{font-size:44px;}
+  .hero h2{margin:10px 0 4px;font-size:24px;color:var(--gold);}
+  .hero p{margin:0;opacity:.85;font-size:14px;}
+  .vendor{display:flex;align-items:center;gap:12px;padding:14px;background:var(--card);border-radius:var(--radius);box-shadow:0 1px 3px rgba(16,42,67,.07);cursor:pointer;}
+  .vendor .avatar{width:44px;height:44px;border-radius:12px;background:#eee9d6;color:#8a6d1a;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;flex-shrink:0;}
+  .vendor .info{flex:1;min-width:0;}
+  .vendor .info b{display:block;font-size:15px;}
+  .vendor .info span{font-size:12px;color:var(--muted);}
+  .cam-wrap{position:relative;background:#000;border-radius:var(--radius);overflow:hidden;aspect-ratio:3/4;}
+  .cam-wrap video,.cam-wrap img{width:100%;height:100%;object-fit:cover;display:block;}
+  .cam-wrap video{transform:scaleX(-1);}
+  .stamp{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.75));color:#fff;padding:26px 12px 10px;font-size:12.5px;line-height:1.5;font-family:ui-monospace,Menlo,monospace;}
+  .shutter{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);width:64px;height:64px;border-radius:50%;border:4px solid #fff;background:rgba(255,255,255,.25);cursor:pointer;}
+  .gps-pill{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.55);color:#fff;font-size:11.5px;padding:5px 10px;border-radius:20px;display:flex;align-items:center;gap:6px;}
+  .dot{width:8px;height:8px;border-radius:50%;background:#e74c3c;}
+  .dot.on{background:#2ecc71;}
+  .order-row{display:grid;grid-template-columns:1fr 74px 34px;gap:8px;margin-bottom:8px;}
+  .order-row button{border:none;background:#fdecea;color:var(--err);border-radius:8px;font-size:16px;cursor:pointer;}
+  .add-line{background:none;border:1.5px dashed #cfc49a;color:#8a6d1a;border-radius:10px;padding:10px;width:100%;font-size:14px;font-weight:600;cursor:pointer;}
+  .visit-item{background:var(--card);border-radius:var(--radius);padding:12px;display:flex;gap:12px;box-shadow:0 1px 3px rgba(16,42,67,.07);}
+  .visit-item img{width:64px;height:84px;object-fit:cover;border-radius:8px;flex-shrink:0;background:#e8eaf5;}
+  .visit-item .vi{flex:1;font-size:13px;min-width:0;}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600;background:#e3f6ec;color:var(--ok);}
+  .stat-row{display:flex;gap:12px;}
+  .stat{flex:1;background:var(--card);border-radius:var(--radius);padding:14px;text-align:center;box-shadow:0 1px 4px rgba(16,42,67,.08);}
+  .stat b{font-size:26px;color:var(--brand);display:block;}
+  .stat span{font-size:12px;color:var(--muted);}
+  .home-tiles{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .tile{background:var(--card);border-radius:var(--radius);padding:18px 14px;text-align:center;cursor:pointer;box-shadow:0 1px 4px rgba(16,42,67,.08);}
+  .tile .ic{font-size:30px;}
+  .tile b{display:block;margin-top:8px;font-size:14px;}
+  .tile span{font-size:11.5px;color:var(--muted);}
+  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c2733;color:#fff;padding:12px 20px;border-radius:30px;font-size:14px;opacity:0;pointer-events:none;transition:.3s;z-index:99;max-width:88vw;}
+  #toast.show{opacity:1;}
+  .success{text-align:center;padding:40px 20px;}
+  .success .tick{width:84px;height:84px;border-radius:50%;background:#e3f6ec;color:var(--ok);font-size:44px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;}
+  .spin{display:inline-block;width:16px;height:16px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;animation:sp 0.8s linear infinite;vertical-align:-3px;margin-right:8px;}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- ============ AUTH ============ -->
+<div class="screen active" id="scr-auth">
+  <div class="hero">
+    <div class="logo">🥃</div>
+    <h2>Aurum FieldVisit</h2>
+    <p>Aurum Spirit India Limited<br>Salesman Visit &amp; Order Check-in</p>
+  </div>
+  <div class="content">
+    <div class="card">
+      <label>Login ID</label>
+      <input type="text" id="authLoginId" placeholder="e.g. SM-1024" autocomplete="username" autocapitalize="none">
+      <div style="height:12px"></div>
+      <label>Password</label>
+      <input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password">
+      <div style="height:12px"></div>
+      <button class="btn btn-primary" id="btnLogin" onclick="doLogin()">Login</button>
+      <div style="height:8px"></div>
+      <div class="msg" id="authMsg"></div>
+      <p class="muted" style="margin:10px 0 0;">Use the Login ID and password issued by the company.
+      Forgot it? Ask the Director for a reset.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ HOME ============ -->
+<div class="screen" id="scr-home">
+  <header><h1>Aurum FieldVisit</h1><span class="who" id="whoami"></span></header>
+  <div class="content">
+    <div class="stat-row">
+      <div class="stat"><b id="statVisits">–</b><span>Visits today</span></div>
+      <div class="stat"><b id="statOrders">–</b><span>Orders taken</span></div>
+    </div>
+    <div class="home-tiles">
+      <div class="tile" onclick="openParties()"><div class="ic">🤳</div><b>New Visit</b><span>Selfie check-in</span></div>
+      <div class="tile" onclick="openReport()"><div class="ic">📋</div><b>Today's Report</b><span>Submitted visits</span></div>
+    </div>
+    <button class="btn btn-ghost" onclick="logout()">Log out</button>
+  </div>
+</div>
+
+<!-- ============ PARTY SELECT ============ -->
+<div class="screen" id="scr-parties">
+  <header><button class="back" onclick="go('scr-home')">‹</button><h1>Select Party</h1></header>
+  <div class="content">
+    <input type="text" id="partySearch" placeholder="🔍  Search party…" oninput="renderParties(this.value)">
+    <div id="partyList" style="display:flex;flex-direction:column;gap:10px;"></div>
+    <div class="muted" style="text-align:center;" id="partyHint"></div>
+  </div>
+</div>
+
+<!-- ============ VISIT ============ -->
+<div class="screen" id="scr-visit">
+  <header><button class="back" onclick="cancelVisit()">‹</button><h1 id="visitPartyName">Visit</h1></header>
+  <div class="content">
+    <div class="cam-wrap">
+      <video id="cam" autoplay playsinline muted></video>
+      <img id="shot" style="display:none" alt="">
+      <div class="gps-pill"><span class="dot" id="gpsDot"></span><span id="gpsText">Locating…</span></div>
+      <div class="stamp" id="liveStamp"></div>
+      <div class="shutter" id="shutterBtn" onclick="capture()" title="Take selfie"></div>
+    </div>
+    <button class="btn btn-ghost" id="retakeBtn" style="display:none" onclick="retake()">↺ Retake selfie</button>
+
+    <div class="card">
+      <label>Order from party <span class="muted">(optional — creates a draft SO in Nexus)</span></label>
+      <div id="orderLines"></div>
+      <button class="add-line" onclick="addOrderLine()">＋ Add order item</button>
+    </div>
+
+    <div class="card">
+      <label>Notes / suggestions from party</label>
+      <textarea id="notes" placeholder="e.g. Wants festive scheme details, stock arriving late…"></textarea>
+    </div>
+
+    <div class="msg" id="visitMsg"></div>
+    <button class="btn btn-primary" id="submitBtn" disabled onclick="submitVisit()">Submit Visit ✓</button>
+    <div class="muted" style="text-align:center;">Selfie + time + GPS + notes go straight into Aurum Nexus under your login.</div>
+  </div>
+</div>
+
+<!-- ============ DONE ============ -->
+<div class="screen" id="scr-done">
+  <header><h1>Visit Submitted</h1></header>
+  <div class="content">
+    <div class="card success">
+      <div class="tick">✓</div>
+      <h3 style="margin:0 0 6px;">Visit recorded in Nexus!</h3>
+      <p class="muted" id="doneSummary" style="margin:0;"></p>
+      <p style="margin:14px 0 0;"><span class="badge">Daily report updated ✓</span></p>
+    </div>
+    <button class="btn btn-primary" onclick="openParties()">Next Visit →</button>
+    <button class="btn btn-ghost" onclick="openReport()">View Today's Report</button>
+  </div>
+</div>
+
+<!-- ============ REPORT ============ -->
+<div class="screen" id="scr-report">
+  <header><button class="back" onclick="go('scr-home')">‹</button><h1>Today's Report</h1></header>
+  <div class="content">
+    <div class="muted" id="reportDate"></div>
+    <div id="reportList" style="display:flex;flex-direction:column;gap:10px;"></div>
+  </div>
+</div>
+
+<canvas id="workCanvas" style="display:none;"></canvas>
+<div id="toast"></div>
+
+<script>
+/* ================= Aurum Nexus connection (same project as the portal) ================= */
+const SUPABASE_URL = "https://qkytrfvmamgtyxvivppu.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const BUCKET = 'visit-selfies';
+
+let me = null;                    // adm.users row
+let parties = [], skus = [];
+let cur = { party:null, stream:null, blob:null,
+            geo:{lat:null,lon:null,acc:null,ok:false} };
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function go(id){ document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active')); $(id).classList.add('active'); window.scrollTo(0,0); }
+function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),3200); }
+function say(id,msg,ok=true){ const el=$(id); el.textContent=msg; el.className='msg show '+(ok?'ok':'bad'); if(!msg) el.className='msg'; }
+function fmtNow(){ const d=new Date();
+  return { date:d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}),
+           time:d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) }; }
+const todayISO = () => new Date().toLocaleDateString('en-CA');   // YYYY-MM-DD local
+
+/* ================= auth (company-issued Login ID + password) ================= */
+async function doLogin(){
+  const loginId = $('authLoginId').value.trim();
+  const password = $('authPassword').value;
+  if (!loginId || !password){ say('authMsg','Enter your Login ID and password.',false); return; }
+  const btn = $('btnLogin'); btn.disabled = true; btn.textContent = 'Logging in…';
+  try{
+    // Login ID → account email (Module 11b lookup), then password sign-in.
+    const { data: email, error: e1 } = await db.schema('app').rpc('field_login_email', { p_login_id: loginId });
+    if (e1) throw new Error(e1.message);
+    if (!email) throw new Error('Invalid Login ID or password.');
+    const { error: e2 } = await db.auth.signInWithPassword({ email, password });
+    if (e2) throw new Error(/invalid/i.test(e2.message) ? 'Invalid Login ID or password.' : e2.message);
+    say('authMsg','');
+    await boot();
+  }catch(err){
+    say('authMsg', err.message, false);
+  }finally{
+    btn.disabled = false; btn.textContent = 'Login';
+  }
+}
+async function logout(){ await db.auth.signOut(); me = null; go('scr-auth'); }
+
+async function boot(){
+  const { data:{ session } } = await db.auth.getSession();
+  if (!session){ go('scr-auth'); return; }
+  const { data, error } = await db.schema('adm').from('users').select('*').eq('id', session.user.id).single();
+  if (error || !data){ say('authMsg','Your login is not registered in Aurum Nexus — ask the Director to add you.',false); go('scr-auth'); return; }
+  if (data.is_active === false){ say('authMsg','Account suspended.',false); go('scr-auth'); return; }
+  me = data;
+  $('whoami').textContent = '👤 ' + (me.full_name || 'Salesman');
+  await loadMasters();
+  await refreshStats();
+  go('scr-home');
+}
+db.auth.onAuthStateChange((_ev, session) => { if (session && !me) boot(); });
+
+async function loadMasters(){
+  const isDir = me.role === 'DIRECTOR';
+  let q = db.schema('sales').from('parties').select('id,name,code,city,owner_id').eq('is_active', true).order('name');
+  if (!isDir) q = q.eq('owner_id', me.id);
+  const [p, s] = await Promise.all([ q,
+    db.schema('sales').from('skus').select('id,sku_code').eq('is_active', true).order('sku_code') ]);
+  parties = p.data || []; skus = s.data || [];
+  $('partyHint').textContent = parties.length
+    ? `${parties.length} part${parties.length===1?'y':'ies'} assigned to you`
+    : 'No parties assigned to you yet — ask the Director to set you as owner in Nexus.';
+}
+
+async function refreshStats(){
+  const { data } = await db.schema('sales').from('v_field_visits')
+    .select('id, order_id').eq('user_id', me.id).eq('visit_date', todayISO());
+  $('statVisits').textContent = (data||[]).length;
+  $('statOrders').textContent = (data||[]).filter(v=>v.order_id).length;
+}
+
+/* ================= parties ================= */
+function openParties(){ renderParties(''); $('partySearch').value=''; go('scr-parties'); }
+function renderParties(q){
+  const list = $('partyList'); list.innerHTML = '';
+  parties.filter(p => (p.name+' '+(p.city||'')+' '+p.code).toLowerCase().includes(q.toLowerCase()))
+    .forEach(p => {
+      const el = document.createElement('div'); el.className = 'vendor';
+      el.innerHTML = `<div class="avatar">${esc(p.name[0])}</div>
+        <div class="info"><b>${esc(p.name)}</b><span>${esc(p.code)} · ${esc(p.city||'')}</span></div><span style="color:#b8c4d0;font-size:20px;">›</span>`;
+      el.onclick = () => startVisit(p);
+      list.appendChild(el);
+    });
+}
+
+/* ================= camera & gps ================= */
+let stampTimer = null;
+async function startVisit(p){
+  cur.party = p; cur.blob = null;
+  $('visitPartyName').textContent = p.name;
+  $('shot').style.display='none'; $('cam').style.display='block';
+  $('shutterBtn').style.display='block'; $('retakeBtn').style.display='none';
+  $('notes').value=''; $('orderLines').innerHTML=''; addOrderLine();
+  say('visitMsg',''); updateSubmit(); go('scr-visit');
+  startGeo(); startLiveStamp();
+  try{
+    cur.stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:960} }, audio:false });
+    $('cam').srcObject = cur.stream;
+  }catch(e){
+    $('liveStamp').innerHTML = 'Camera permission needed.<br>Tap the 🔒 icon in the address bar → allow Camera.';
+  }
+}
+function startLiveStamp(){
+  clearInterval(stampTimer);
+  const draw = () => { const n = fmtNow();
+    $('liveStamp').innerHTML =
+      `📅 ${n.date} &nbsp; 🕒 ${n.time}<br>` +
+      (cur.geo.ok ? `📍 ${cur.geo.lat.toFixed(5)}, ${cur.geo.lon.toFixed(5)} (±${Math.round(cur.geo.acc)}m)` : '📍 acquiring GPS…') +
+      `<br>👤 ${esc(me.full_name)} → ${esc(cur.party?cur.party.name:'')}`;
+  };
+  draw(); stampTimer = setInterval(draw, 1000);
+}
+function startGeo(){
+  if (!navigator.geolocation){ $('gpsText').textContent='No GPS'; return; }
+  navigator.geolocation.watchPosition(p => {
+    cur.geo = { lat:p.coords.latitude, lon:p.coords.longitude, acc:p.coords.accuracy, ok:true };
+    $('gpsDot').classList.add('on');
+    $('gpsText').textContent = 'GPS locked ±' + Math.round(p.coords.accuracy) + 'm';
+  }, () => { $('gpsText').textContent='GPS blocked'; }, { enableHighAccuracy:true, maximumAge:5000, timeout:15000 });
+}
+function capture(){
+  const video = $('cam');
+  if (!video.videoWidth){ toast('Camera not ready yet…'); return; }
+  const c = $('workCanvas'), ctx = c.getContext('2d');
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  ctx.translate(c.width,0); ctx.scale(-1,1);
+  ctx.drawImage(video,0,0); ctx.setTransform(1,0,0,1,0,0);
+  const n = fmtNow(); const pad = Math.round(c.width*0.03); const fs = Math.max(18, Math.round(c.width*0.032));
+  const lines = [
+    `${n.date}  ${n.time}`,
+    cur.geo.ok ? `GPS ${cur.geo.lat.toFixed(5)}, ${cur.geo.lon.toFixed(5)} (±${Math.round(cur.geo.acc)}m)` : 'GPS unavailable',
+    `${me.full_name}  →  ${cur.party.name} (${cur.party.code})`,
+  ];
+  const boxH = fs*1.5*lines.length + pad*1.5;
+  const g = ctx.createLinearGradient(0, c.height-boxH*1.6, 0, c.height);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(0,0,0,0.78)');
+  ctx.fillStyle = g; ctx.fillRect(0, c.height-boxH*1.6, c.width, boxH*1.6);
+  ctx.fillStyle = '#fff'; ctx.font = `${fs}px monospace`;
+  lines.forEach((ln,i) => ctx.fillText(ln, pad, c.height-boxH + fs*1.5*(i+0.8)));
+  c.toBlob(b => {
+    cur.blob = b;
+    $('shot').src = URL.createObjectURL(b);
+    $('shot').style.display='block'; $('cam').style.display='none';
+    $('shutterBtn').style.display='none'; $('retakeBtn').style.display='block';
+    stopCam(); clearInterval(stampTimer); $('liveStamp').innerHTML='';
+    updateSubmit(); toast('📸 Selfie captured & stamped');
+  }, 'image/jpeg', 0.85);
+}
+function retake(){ startVisit(cur.party); }
+function stopCam(){ if (cur.stream){ cur.stream.getTracks().forEach(t=>t.stop()); cur.stream=null; } }
+function cancelVisit(){ stopCam(); clearInterval(stampTimer); go('scr-parties'); }
+function updateSubmit(){ $('submitBtn').disabled = !cur.blob; }
+
+/* ================= order lines ================= */
+function addOrderLine(){
+  const row = document.createElement('div'); row.className = 'order-row';
+  const opts = '<option value="">— SKU —</option>' + skus.map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
+  row.innerHTML = `<select class="osku">${opts}</select>
+                   <input type="number" placeholder="Cases" min="1" class="oq" inputmode="numeric">
+                   <button onclick="this.parentElement.remove()">✕</button>`;
+  $('orderLines').appendChild(row);
+}
+function collectLines(){
+  return [...document.querySelectorAll('.order-row')].map(r => ({
+    sku_id: r.querySelector('.osku').value, cases: Number(r.querySelector('.oq').value)||0
+  })).filter(l => l.sku_id && l.cases > 0);
+}
+
+/* ================= submit ================= */
+async function submitVisit(){
+  const btn = $('submitBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Uploading selfie…';
+  say('visitMsg','');
+  try{
+    // 1. selfie → private storage bucket, inside my own folder (policy-enforced)
+    const path = `${me.id}/${todayISO()}/${Date.now()}.jpg`;
+    const up = await db.storage.from(BUCKET).upload(path, cur.blob, { contentType:'image/jpeg', upsert:false });
+    if (up.error) throw new Error('Selfie upload failed: ' + up.error.message);
+
+    // 2. visit → security-definer RPC (Module 11)
+    btn.innerHTML = '<span class="spin"></span>Recording visit…';
+    const lines = collectLines();
+    const { data:visitId, error } = await db.schema('sales').rpc('submit_field_visit', {
+      p_party: cur.party.id,
+      p_selfie_path: path,
+      p_lat: cur.geo.ok ? cur.geo.lat : null,
+      p_lon: cur.geo.ok ? cur.geo.lon : null,
+      p_accuracy_m: cur.geo.ok ? Math.round(cur.geo.acc) : null,
+      p_notes: $('notes').value.trim() || null,
+      p_lines: lines,
+    });
+    if (error){
+      await db.storage.from(BUCKET).remove([path]).catch(()=>{});
+      throw new Error(error.message);
+    }
+    const n = fmtNow();
+    $('doneSummary').textContent = `${cur.party.name} · ${n.time}` +
+      (lines.length ? ` · ${lines.length} order line(s) → draft SO created` : '') +
+      ($('notes').value.trim() ? ' · note saved' : '');
+    await refreshStats();
+    go('scr-done');
+  }catch(e){
+    say('visitMsg', e.message, false);
+  }finally{
+    btn.disabled = !cur.blob; btn.textContent = 'Submit Visit ✓';
+  }
+}
+
+/* ================= report ================= */
+async function openReport(){
+  go('scr-report');
+  $('reportDate').textContent = '📅 ' + fmtNow().date;
+  const list = $('reportList'); list.innerHTML = '<div class="card muted" style="text-align:center;">Loading…</div>';
+  const { data, error } = await db.schema('sales').from('v_field_visits')
+    .select('*').eq('user_id', me.id).eq('visit_date', todayISO()).order('visited_at', { ascending:false });
+  if (error){ list.innerHTML = `<div class="card muted">${esc(error.message)}</div>`; return; }
+  if (!data.length){ list.innerHTML = '<div class="card muted" style="text-align:center;">No visits submitted yet today.</div>'; return; }
+  list.innerHTML = '';
+  for (const v of data){
+    const el = document.createElement('div'); el.className = 'visit-item';
+    const t = new Date(v.visited_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+    el.innerHTML = `<img alt="selfie" data-path="${esc(v.selfie_path)}">
+      <div class="vi"><b>${esc(v.party)}</b><br>
+      🕒 ${t} &nbsp; ${v.lat!=null?('📍 '+Number(v.lat).toFixed(4)+', '+Number(v.lon).toFixed(4)):'📍 —'}<br>
+      ${v.so_no?('🛒 Order '+esc(v.so_no)+'<br>'):''}
+      ${v.notes?('📝 '+esc(v.notes)):'<span class="muted">No notes</span>'}<br>
+      <span class="badge">In Nexus ✓</span></div>`;
+    list.appendChild(el);
+  }
+  // signed thumbnails (bucket is private)
+  for (const img of list.querySelectorAll('img[data-path]')){
+    const { data:s } = await db.storage.from(BUCKET).createSignedUrl(img.dataset.path, 3600);
+    if (s?.signedUrl) img.src = s.signedUrl;
+  }
+  $('reportDate').textContent = `📅 ${fmtNow().date} — ${data.length} visit(s)`;
+}
+
+boot();
+</script>
+</body>
+</html>

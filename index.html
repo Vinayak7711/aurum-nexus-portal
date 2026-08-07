@@ -329,6 +329,18 @@
     <div id="notif-centre"></div>
   </section>
 
+  <!-- ============ MODULE 19: SALESMAN REPORTS (FIELD VISITS) ============ -->
+  <section id="view-field" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Salesman Reports</h2>
+      <p>Field check-ins from the Aurum FieldVisit app — a GPS- and time-stamped selfie at each distributor, the order taken, and notes from the party. You see your own team's visits; the Director sees everyone.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="fld-visits" onclick="fieldTab('visits')">Field visits</button>
+      <button class="chip dir-only" id="fld-creds" onclick="fieldTab('creds')">App credentials</button>
+    </div>
+    <div id="field-body"></div>
+  </section>
+
   <!-- ============ MODULE 7: SALES REPORTS & TARGETS ============ -->
   <section id="view-reports" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
@@ -519,6 +531,7 @@ const MODULES = [
   {key:'prod',    ico:'🎯', name:'Production',       desc:'Monthly targets & completion status',   live:true, mfgOnly:true, open:()=>openProd()},
   {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
   {key:'reports', ico:'📈', name:'Sales Reports',    desc:'Daily activity, monthly reports, targets', live:true, open:()=>openReports()},
+  {key:'field',   ico:'🤳', name:'Salesman Reports', desc:'Field visits: selfies, GPS & orders',      live:true, fieldOnly:true, open:()=>openField()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
   {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
@@ -542,7 +555,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','purchase','mail','acct'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','field','purchase','mail','acct'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -564,6 +577,9 @@ async function init(){
   $('who-name').textContent = me.full_name;
   $('who-role').textContent = me.role + (me.designation ? ' · ' + me.designation : '');
   $('home-hello').textContent = 'Welcome, ' + me.full_name.split(' ')[0];
+  // Am I a team leader? (does anyone report to me) — gates the Salesman Reports tile.
+  window.__hasReports = false;
+  try { const { count } = await db.schema('adm').from('users').select('id',{count:'exact',head:true}).eq('reports_to', me.id); window.__hasReports = (count||0) > 0; } catch(e){}
   drawModules(); applyDirOnly(); show('home');
   notifLoad(); if(!window.__notifTimer) window.__notifTimer=setInterval(()=>{try{notifLoad();}catch(e){}},60000);
 }
@@ -586,6 +602,7 @@ function drawModules(){
     if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view)) continue;
     if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit)) continue;
     if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS())) continue;
+    if (m.fieldOnly && !(isDir() || window.__hasReports)) continue;
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
     el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
@@ -2900,6 +2917,105 @@ async function mktSaveBudget(){ const amt=Number($('bg-amt').value); const perio
   const row={period_type:$('bg-ptype').value,period,category:$('bg-cat').value,amount:amt,note:$('bg-note').value.trim()||null,set_by:me.id};
   const {error}=await db.schema('sales').from('mkt_budgets').upsert(row,{onConflict:'period_type,period,category'}); if(error){say('bg-msg','Save failed: '+error.message,false);return;} mktTab('budget'); }
 async function mktSaveExpense(){ const amt=Number($('ex-amt').value); if(!(amt>=0)){say('ex-msg','Enter an amount.',false);return;} const {error}=await db.schema('sales').from('mkt_expenses').insert({expense_date:$('ex-date').value||null,category:$('ex-cat').value,amount:amt,description:$('ex-desc').value.trim()||null,vendor:$('ex-vendor').value.trim()||null,created_by:me.id}); if(error){say('ex-msg','Save failed: '+error.message,false);return;} mktTab('spend'); }
+
+/* ================= MODULE 19: SALESMAN REPORTS (FIELD VISITS) ================= */
+const FBUCKET='visit-selfies';
+async function openField(){ window.__fldDate=window.__fldDate||''; window.__fldUser=window.__fldUser||''; fieldTab('visits'); show('field'); applyDirOnly(); }
+async function fieldTab(t){
+  ['visits','creds'].forEach(k=>$('fld-'+k).classList.toggle('on',k===t));
+  const B=$('field-body');
+  if(t==='visits') return fieldLoadVisits();
+  if(t==='creds'){ if(!isDir()){ B.innerHTML='<div class="card" style="color:#777">App credentials are issued by the Director only.</div>'; return; } return fieldLoadCreds(); }
+}
+
+async function fieldLoadVisits(){
+  const B=$('field-body'); B.innerHTML='<p style="color:#777">Loading…</p>';
+  const S=db.schema('sales');
+  const day=window.__fldDate||'';
+  let q=S.from('v_field_visits').select('*').order('visited_at',{ascending:false}).limit(500);
+  if(day) q=q.eq('visit_date', day);
+  const {data,error}=await q;
+  if(error){ B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`; return; }
+  const rows=data||[];
+  const smMap={}; rows.forEach(r=>{ smMap[r.user_id]=r.salesman; });
+  const smOpts=Object.entries(smMap).sort((a,b)=>String(a[1]).localeCompare(String(b[1])))
+     .map(([id,name])=>`<option value="${id}" ${window.__fldUser===id?'selected':''}>${esc(name)}</option>`).join('');
+  const shown=window.__fldUser?rows.filter(r=>r.user_id===window.__fldUser):rows;
+  const withOrders=shown.filter(r=>r.order_id).length;
+  let html=`<div class="card" style="margin-bottom:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">
+     <div><label>Date</label><input type="date" id="fld-date" value="${day}" onchange="window.__fldDate=this.value||''; fieldLoadVisits();"></div>
+     <div><label>Salesman</label><select id="fld-user" onchange="window.__fldUser=this.value||''; fieldLoadVisits();"><option value="">All salesmen</option>${smOpts}</select></div>
+     <div style="flex:1"></div>
+     <div style="text-align:right;font-size:13px;color:#555;line-height:1.5;">Showing <b>${shown.length}</b> visit(s)<br><b>${withOrders}</b> with an order${day?'':' · latest 500'}</div>
+  </div>`;
+  if(!shown.length){ B.innerHTML=html+'<div class="card" style="color:#777;text-align:center;">No field visits'+(day?' on this date':' recorded yet')+'.</div>'; return; }
+  html+='<div style="display:flex;flex-direction:column;gap:10px;">';
+  html+=shown.map(v=>{
+    const t=new Date(v.visited_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+    const gps=v.lat!=null?`<a href="https://maps.google.com/?q=${v.lat},${v.lon}" target="_blank" rel="noopener">📍 ${Number(v.lat).toFixed(4)}, ${Number(v.lon).toFixed(4)}</a>${v.accuracy_m?` (±${Math.round(v.accuracy_m)}m)`:''}`:'📍 no GPS';
+    return `<div class="card" style="display:flex;gap:12px;">
+      <img data-path="${esc(v.selfie_path)}" alt="selfie" style="width:74px;height:98px;object-fit:cover;border-radius:8px;background:#e8eaf5;flex-shrink:0;cursor:pointer;" title="Tap to enlarge">
+      <div style="flex:1;min-width:0;font-size:13.5px;line-height:1.6;">
+        <b>${esc(v.party)}</b> <span style="color:#888">${esc(v.party_code||'')}${v.city?' · '+esc(v.city):''}</span><br>
+        <span style="color:#555">👤 ${esc(v.salesman)} &nbsp;·&nbsp; 🕒 ${t}</span><br>
+        ${gps}<br>
+        ${v.so_no?`🛒 <b>Order ${esc(v.so_no)}</b><br>`:''}
+        ${v.notes?`📝 ${esc(v.notes)}`:'<span style="color:#aaa">No notes</span>'}
+      </div></div>`;
+  }).join('');
+  html+='</div>';
+  B.innerHTML=html;
+  for(const img of B.querySelectorAll('img[data-path]')){
+    try{ const {data:s}=await db.storage.from(FBUCKET).createSignedUrl(img.dataset.path,3600);
+      if(s&&s.signedUrl){ img.src=s.signedUrl; img.onclick=()=>window.open(s.signedUrl,'_blank','noopener'); } }catch(e){}
+  }
+}
+
+async function fieldLoadCreds(){
+  const B=$('field-body'); B.innerHTML='<p style="color:#777">Loading…</p>';
+  const {data,error}=await db.schema('adm').from('users').select('id, full_name, role, is_active, app_login_id').order('full_name');
+  if(error){ B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`; return; }
+  const users=(data||[]).filter(u=>u.is_active);
+  let html=`<div class="card" style="margin-bottom:12px;"><b>Issue app Login IDs &amp; passwords</b>
+    <p style="font-size:12.5px;color:#777;margin:4px 0 0;">Set a Login ID once, and set a password any time to issue or reset it. Give both to the salesman — that is all they need to sign in to the Aurum FieldVisit app. A suspended account can no longer log in.</p></div>`;
+  html+='<div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Login ID</th><th>New password</th><th></th></tr></thead><tbody>';
+  html+=users.map(u=>`<tr>
+    <td><b>${esc(u.full_name)}</b></td>
+    <td><span class="pill ${esc(u.role)}">${esc(u.role)}</span></td>
+    <td><input style="width:130px" id="fc-lid-${u.id}" value="${esc(u.app_login_id||'')}" placeholder="e.g. SM-1024"></td>
+    <td><input style="width:140px" type="text" id="fc-pwd-${u.id}" placeholder="min 8 chars"></td>
+    <td><button class="btn gold sm" onclick="fieldSaveCred('${u.id}','${esc(u.full_name).replace(/'/g,"\\'")}')">Save</button></td>
+  </tr>`).join('');
+  html+='</tbody></table></div><div id="fc-msg" style="margin-top:8px;"></div>';
+  B.innerHTML=html;
+}
+
+async function fieldSaveCred(uid, name){
+  const lid=$('fc-lid-'+uid).value.trim();
+  const pwd=$('fc-pwd-'+uid).value;
+  if(!lid && !pwd){ say('fc-msg','Enter a Login ID, a password, or both.',false); return; }
+  // 1. Login ID via the Director-only RPC (no service role needed).
+  if(lid){
+    const {error}=await db.schema('adm').rpc('set_app_login_id',{p_user:uid,p_login_id:lid});
+    if(error){ say('fc-msg','Login ID — '+error.message,false); return; }
+  }
+  // 2. Password via the field-credentials edge function (service role).
+  if(pwd){
+    try{
+      const {data:{session}}=await db.auth.getSession();
+      const resp=await fetch(`${SUPABASE_URL}/functions/v1/field-credentials`,{
+        method:'POST',
+        headers:{'content-type':'application/json',apikey:SUPABASE_ANON_KEY,authorization:'Bearer '+session.access_token},
+        body:JSON.stringify({user_id:uid,password:pwd})
+      });
+      const j=await resp.json().catch(()=>({error:'Unexpected response'}));
+      if(!resp.ok||j.error){ say('fc-msg','Password — '+(j.error||'failed'),false); return; }
+    }catch(e){ say('fc-msg','Password — '+e.message,false); return; }
+    $('fc-pwd-'+uid).value='';
+  }
+  say('fc-msg',`Saved for ${name}${pwd?' — share the new password with them.':'.'}`,true);
+  fieldLoadCreds();
+}
 
 /* ================= MODULE 17: NOTIFICATIONS ================= */
 let notifItems=[];
