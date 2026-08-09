@@ -2500,6 +2500,9 @@ function mailCompose(replyTo){
       <label>To *</label><input type="text" id="mc-to" value="${esc(toAddr)}" placeholder="someone@example.com (comma for more)">
       <label>Subject *</label><input type="text" id="mc-sub" value="${esc(sub)}">
       <label>Message *</label><textarea id="mc-body" rows="8" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;">${esc(quoted)}</textarea>
+      <label>Attachments <span style="color:#999;font-weight:normal;">(any file type, up to 10 files / 10 MB total)</span></label>
+      <input type="file" id="mc-files" multiple onchange="mailAttPreview()" style="font-size:13px;">
+      <div id="mc-files-list" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
       <div style="display:flex;gap:8px;margin-top:10px;">
         <button class="btn gold sm" id="btn-mail-send" onclick="mailSendNow()">Send</button>
         <button class="btn ghost sm" onclick="$('mail-read').innerHTML=''">Discard</button>
@@ -2508,15 +2511,41 @@ function mailCompose(replyTo){
     </div>`;
   $('mail-read').scrollIntoView({behavior:'smooth'});
 }
+function mailAttPreview(){
+  const inp = $('mc-files'); const out = $('mc-files-list'); if (!inp || !out) return;
+  const files = Array.from(inp.files || []);
+  const total = files.reduce((s,f)=>s+f.size, 0);
+  const fmt = (n)=> n>1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+  out.innerHTML = files.length
+    ? files.map(f=>`📎 ${esc(f.name)} <span style="color:#999">(${fmt(f.size)})</span>`).join('<br>') +
+      `<div style="margin-top:4px;${total>10*1048576?'color:#c0392b;font-weight:bold;':'color:#999;'}">Total: ${fmt(total)}${total>10*1048576?' — too big, keep under 10 MB':''}</div>`
+    : '';
+}
+function mailFileB64(f){
+  return new Promise((res, rej)=>{
+    const r = new FileReader();
+    r.onload = ()=> res(String(r.result).split(',')[1] || '');
+    r.onerror = ()=> rej(new Error('Could not read ' + f.name));
+    r.readAsDataURL(f);
+  });
+}
 async function mailSendNow(){
   const to = $('mc-to').value.trim(), sub = $('mc-sub').value.trim(), body = $('mc-body').value.trim();
   if (!to || !sub || !body){ say('mail-send-msg','To, subject and message are all needed.',false); return; }
-  const btn = $('btn-mail-send'); btn.disabled = true; btn.textContent = 'Sending…';
+  const files = Array.from(($('mc-files')||{}).files || []);
+  if (files.length > 10){ say('mail-send-msg','Maximum 10 attachments per email.',false); return; }
+  if (files.reduce((s,f)=>s+f.size,0) > 10*1048576){ say('mail-send-msg','Attachments are too large — keep the total under 10 MB.',false); return; }
+  const btn = $('btn-mail-send'); btn.disabled = true; btn.textContent = files.length ? 'Attaching…' : 'Sending…';
   try {
+    const attachments = [];
+    for (const f of files){
+      attachments.push({ name: f.name, type: f.type || 'application/octet-stream', b64: await mailFileB64(f) });
+    }
+    btn.textContent = 'Sending…';
     const t = await mailToken();
     const r = await fetch(FN_BASE + '/mail-send', { method:'POST',
       headers: { 'content-type':'application/json', authorization: 'Bearer ' + t },
-      body: JSON.stringify({ mailbox: mailBox, to, subject: sub, body }) });
+      body: JSON.stringify({ mailbox: mailBox, to, subject: sub, body, attachments }) });
     const j = await r.json();
     if (!r.ok){ say('mail-send-msg', j.error || 'Send failed.', false); btn.disabled = false; btn.textContent = 'Send'; return; }
     mailFolder = 'SENT'; mailOpen = null; mailList();
