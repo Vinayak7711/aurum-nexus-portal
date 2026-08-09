@@ -2415,22 +2415,16 @@ async function mailList(){
       <b style="font-size:14px;">${esc(box.address)}</b>
       <button class="chip ${mailFolder==='IN'?'on':''}" onclick="mailFolder='IN';mailOpen=null;mailList()">Inbox</button>
       <button class="chip ${mailFolder==='SENT'?'on':''}" onclick="mailFolder='SENT';mailOpen=null;mailList()">Sent</button>
-      <button class="chip ${mailFolder==='TRASH'?'on':''}" onclick="mailFolder='TRASH';mailOpen=null;mailList()">🗑 Trash</button>
-      ${mailFolder==='TRASH'
-        ? `<button class="btn ghost sm" onclick="mailEmptyTrash()" style="color:#c0392b;border-color:#c0392b;">Empty trash</button>`
-        : `<button class="btn ghost sm" id="btn-mail-sync" onclick="mailSync()">⟳ Check for new mail</button>`}
+      <button class="btn ghost sm" id="btn-mail-sync" onclick="mailSync()">⟳ Check for new mail</button>
     </div>
     <div id="mail-sync-msg"></div>
-    <div class="table-scroll"><table><thead><tr><th style="width:150px;">${mailFolder==='SENT'?'To':'From'}</th><th>Subject</th><th style="width:120px;">When</th><th style="width:80px;">${mailFolder==='IN'?'Handled':''}</th><th style="width:90px;"></th></tr></thead><tbody>
+    <div class="table-scroll"><table><thead><tr><th style="width:150px;">${mailFolder==='IN'?'From':'To'}</th><th>Subject</th><th style="width:120px;">When</th><th style="width:80px;">${mailFolder==='IN'?'Handled':''}</th></tr></thead><tbody>
     ${mailMsgs.map(m=>`<tr style="cursor:pointer;${m.is_handled&&mailFolder==='IN'?'opacity:.55;':''}" onclick="mailRead('${m.id}')">` +
-      `<td>${esc(((mailFolder==='SENT'?m.to_addr:m.from_addr)||'—').replace(/<.*>/,'').trim().slice(0,30))}</td>` +
-      `<td>${m.is_handled||mailFolder!=='IN'?'':'<b>'}${esc((m.subject||'(no subject)').slice(0,80))}${m.is_handled||mailFolder!=='IN'?'':'</b>'}</td>` +
+      `<td>${esc(((mailFolder==='IN'?m.from_addr:m.to_addr)||'—').replace(/<.*>/,'').trim().slice(0,30))}</td>` +
+      `<td>${m.is_handled||mailFolder==='SENT'?'':'<b>'}${esc((m.subject||'(no subject)').slice(0,80))}${m.is_handled||mailFolder==='SENT'?'':'</b>'}</td>` +
       `<td style="font-size:12px;">${m.sent_at? new Date(m.sent_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—'}</td>` +
-      `<td>${mailFolder==='IN'?(m.is_handled?'✔':'—'):''}</td>` +
-      `<td>${mailFolder==='TRASH'
-        ? `<button class="btn ghost sm" onclick="event.stopPropagation();mailRestore('${m.id}')" title="Put back">↩ Restore</button>`
-        : `<button class="btn ghost sm" onclick="event.stopPropagation();mailTrash('${m.id}')" title="Move to Trash" style="color:#c0392b;">🗑</button>`}</td></tr>`).join('')
-      || `<tr><td colspan="5" style="color:#777">${mailFolder==='TRASH'?'Trash is empty.':'Nothing here yet — press “Check for new mail”.'}</td></tr>`}
+      `<td>${mailFolder==='IN'?(m.is_handled?'✔':'—'):''}</td></tr>`).join('')
+      || `<tr><td colspan="4" style="color:#777">Nothing here yet — press “Check for new mail”.</td></tr>`}
     </tbody></table></div>
     <div id="mail-read"></div>`;
 }
@@ -2458,9 +2452,6 @@ function mailRead(id){
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
         ${mailFolder==='IN' ? `<button class="btn gold sm" onclick="mailCompose('${m.id}')">Reply</button>
         <button class="btn ghost sm" onclick="mailHandled('${m.id}', ${m.is_handled})">${m.is_handled?'Mark unhandled':'Mark handled'}</button>` : ''}
-        ${mailFolder==='TRASH'
-          ? `<button class="btn ghost sm" onclick="mailRestore('${m.id}')">↩ Restore</button>`
-          : `<button class="btn ghost sm" onclick="mailTrash('${m.id}')" style="color:#c0392b;">🗑 Delete</button>`}
       </div>
       <div id="mail-read-msg"></div>
     </div>`;
@@ -2470,23 +2461,6 @@ async function mailHandled(id, undo){
   const { error } = await db.schema('mail').rpc('mark_handled', { p_msg: id, p_undo: undo });
   if (error){ say('mail-read-msg','Could not update: '+error.message,false); return; }
   mailList();
-}
-async function mailTrash(id){
-  const { error } = await db.schema('mail').rpc('trash_message', { p_msg: id });
-  if (error){ say('mail-sync-msg','Could not delete: '+error.message,false); return; }
-  mailOpen = null; say('mail-sync-msg','Moved to Trash.',true); mailList();
-}
-async function mailRestore(id){
-  const { error } = await db.schema('mail').rpc('restore_message', { p_msg: id });
-  if (error){ say('mail-sync-msg','Could not restore: '+error.message,false); return; }
-  mailOpen = null; say('mail-sync-msg','Restored.',true); mailList();
-}
-async function mailEmptyTrash(){
-  const box = mailBoxes.find(b=>b.key===mailBox); if (!box) return;
-  if (!confirm('Permanently delete ALL emails in Trash for ' + box.address + '? This cannot be undone.')) return;
-  const { data, error } = await db.schema('mail').rpc('empty_trash', { p_box: box.id });
-  if (error){ say('mail-sync-msg','Could not empty trash: '+error.message,false); return; }
-  mailOpen = null; say('mail-sync-msg',(data||0)+' email(s) permanently deleted.',true); mailList();
 }
 function mailCompose(replyTo){
   const m = replyTo ? mailMsgs.find(x=>x.id===replyTo) : null;
