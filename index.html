@@ -1407,14 +1407,17 @@ async function tasksTab(which){
         acts.push(`<button class="mini" onclick="taskSet('${t.id}','DONE')">Done</button>`);
       if (isDir() && (t.status==='OPEN'||t.status==='IN_PROGRESS'))
         acts.push(`<button class="mini" onclick="taskSet('${t.id}','CANCELLED')">Cancel</button>`);
+      acts.push(`<button class="mini" onclick="taskComments('${t.id}')" title="Comments & progress">💬</button>`);
+      const prog = t.status==='DONE' ? 100 : (t.progress||0);
       html += `<tr${overdue?' style="background:#fdf3f2;"':''}><td><b>${esc(t.task_no)}</b></td>
         <td>${esc(t.title)}${t.details?'<br><span style="font-size:11px;color:#777">'+esc(t.details)+'</span>':''}</td>` +
         (which==='all'?`<td>${esc(uname(t.assignee_id))}</td>`:'') +
         `<td>${t.due_date||'—'}${overdue?' <b style="color:#b3382c">OVERDUE</b>':''}</td>
-        <td>${t.priority}</td><td><span class="pill ${tpill(t.status)}">${t.status}</span></td>
-        <td>${acts.join(' ')}</td></tr>`;
+        <td>${t.priority}</td><td><span class="pill ${tpill(t.status)}">${t.status}</span><br>
+          <span style="font-size:10.5px;color:#777">${prog}% done</span></td>
+        <td style="white-space:nowrap">${acts.join(' ')}</td></tr>`;
     }
-    B.innerHTML = html + '</tbody></table></div><div id="tk-msg"></div>';
+    B.innerHTML = html + '</tbody></table></div><div id="tk-comments"></div><div id="tk-msg"></div>';
   }
   if (which === 'duties'){
     const [{ data: duties, error: e1 }, { data: log }] = await Promise.all([
@@ -1444,6 +1447,62 @@ async function tasksTab(which){
     }
     B.innerHTML = html + '</tbody></table></div><div id="tk-msg"></div>';
   }
+}
+async function taskComments(id){
+  const T = db.schema('tasks');
+  const [{ data: t }, { data: ups }] = await Promise.all([
+    T.from('tasks').select('*').eq('id', id).single(),
+    T.from('task_updates').select('*').eq('task_id', id).order('created_at')
+  ]);
+  if (!t){ say('tk-msg','Could not open that task.',false); return; }
+  const uname = uid => (M.users.find(u=>u.id===uid)||{}).full_name || 'Someone';
+  const canProg = (t.assignee_id === me.id || isDir()) && t.status!=='DONE' && t.status!=='CANCELLED';
+  const cur = t.status==='DONE' ? 100 : (t.progress||0);
+  $('tk-comments').innerHTML = `
+    <div class="card" style="margin-top:14px;max-width:720px;">
+      <h3 style="font-size:15px;">💬 ${esc(t.task_no)} — ${esc(t.title)}</h3>
+      <div style="max-height:260px;overflow:auto;margin-top:10px;">
+        ${(ups||[]).map(u=>`<div style="border-left:3px solid #e5ddc9;padding:6px 10px;margin-bottom:8px;">
+          <div style="font-size:11px;color:#777">${esc(uname(u.created_by))} · ${new Date(u.created_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+          <div style="font-size:13px;white-space:pre-wrap;">${esc(u.note)}</div></div>`).join('')
+          || '<p style="color:#777;font-size:13px;">No comments yet.</p>'}
+      </div>
+      <label>Add a comment</label>
+      <textarea id="tc-note" rows="3" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;" placeholder="Progress notes, blockers, questions…"></textarea>
+      ${canProg ? `<label>How much of this task is completed?</label>
+      <select id="tc-prog">${[0,10,20,25,30,40,50,60,70,75,80,90,100].map(p=>`<option value="${p}" ${p===cur?'selected':''}>${p}%${p===100?' — complete':''}</option>`).join('')}</select>`
+      : `<p style="font-size:12px;color:#777;margin-top:8px;">Progress: ${cur}% (only the assignee or Director can change it)</p>`}
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn gold sm" onclick="taskCommentSave('${t.id}', ${canProg?'true':'false'})">Save</button>
+        <button class="btn ghost sm" onclick="$('tk-comments').innerHTML=''">Close</button>
+      </div>
+      <div id="tc-msg"></div>
+    </div>`;
+  $('tk-comments').scrollIntoView({behavior:'smooth'});
+}
+async function taskCommentSave(id, withProg){
+  const T = db.schema('tasks');
+  const note = ($('tc-note')?$('tc-note').value:'').trim();
+  const prog = withProg && $('tc-prog') ? Number($('tc-prog').value) : null;
+  if (!note && prog===null){ say('tc-msg','Write a comment or change the progress.',false); return; }
+  if (prog !== null){
+    const { data: t0 } = await T.from('tasks').select('progress,status').eq('id', id).single();
+    if (t0 && Number(t0.progress||0) !== prog){
+      const patch = { progress: prog };
+      if (prog === 100){ patch.status = 'DONE'; patch.completed_at = new Date().toISOString(); }
+      else if (prog > 0 && t0.status === 'OPEN') patch.status = 'IN_PROGRESS';
+      const { error: e1 } = await T.from('tasks').update(patch).eq('id', id);
+      if (e1){ say('tc-msg','Could not update progress: '+e1.message,false); return; }
+      await T.from('task_updates').insert({ task_id: id, note: '📊 Progress updated to '+prog+'%'+(note?' — '+note:''), created_by: me.id });
+    } else if (note){
+      const { error: e2 } = await T.from('task_updates').insert({ task_id: id, note: note, created_by: me.id });
+      if (e2){ say('tc-msg','Could not save: '+e2.message,false); return; }
+    }
+  } else if (note){
+    const { error: e3 } = await T.from('task_updates').insert({ task_id: id, note: note, created_by: me.id });
+    if (e3){ say('tc-msg','Could not save: '+e3.message,false); return; }
+  }
+  await taskComments(id);
 }
 async function taskAdd(){
   const title = $('nt-title').value.trim();
@@ -1666,6 +1725,23 @@ async function openPurchase(){
   rmItems = data || [];
   purchaseTab('pos'); applyDirOnly(); show('purchase');
 }
+// Add a raw material on the spot — anything you need to order that isn't in the list.
+async function rmQuickAdd(backTab){
+  const name = (prompt('Name of the new raw material / item to order:')||'').trim();
+  if (!name) return;
+  let unit = (prompt('Unit — type L (litres), KG (kilograms) or NOS (numbers/pieces):','NOS')||'').trim().toUpperCase();
+  if (!['L','KG','NOS'].includes(unit)){ alert('Unit must be L, KG or NOS.'); return; }
+  const suggested = name.replace(/[^A-Za-z0-9]/g,'').slice(0,6).toUpperCase() || 'ITEM';
+  const code = (prompt('Short unique code for it:', suggested)||'').trim().toUpperCase();
+  if (!code) return;
+  const { data: newId, error } = await db.schema('mfg').rpc('add_rm_item', { p_code: code, p_name: name, p_unit: unit });
+  if (error){ alert('Could not add material: ' + error.message); return; }
+  const { data } = await db.schema('mfg').from('rm_items').select('*').eq('is_active', true).order('code');
+  rmItems = data || [];
+  await purchaseTab(backTab);
+  const sel = $(backTab==='new' ? 'pol-item' : 'rql-item');
+  if (sel && newId) sel.value = newId;
+}
 const PO_COL = { PENDING_APPROVAL:'#b3261e', PLACED:'#b8860b', DISPATCHED:'#0b57d0', PARTIAL:'#b8860b', RECEIVED:'#1a7f37', CANCELLED:'#777' };
 const PO_LABEL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 async function purchaseTab(t){
@@ -1721,7 +1797,7 @@ async function purchaseTab(t){
       <select id="po-req" onchange="poLinkReq=this.value||null; poLines=[]; purchaseTab('new')"><option value="">— none —</option>${(reqs||[]).map(r=>`<option value="${r.id}" ${poLinkReq===r.id?'selected':''}>${esc(r.req_no)}${r.needed_by?' · needed by '+r.needed_by:''}</option>`).join('')}</select>
       <h4 class="sec" style="margin-top:14px;">Lines</h4>
       <div class="row2c">
-        <div><label>Material</label><select id="pol-item">${rmItems.map(i=>`<option value="${i.id}">${esc(i.code)} — ${esc(i.name)} (${i.unit})</option>`).join('')}</select></div>
+        <div><label>Material <a href="#" onclick="rmQuickAdd('new');return false;" style="font-size:11px;">＋ add new material</a></label><select id="pol-item">${rmItems.map(i=>`<option value="${i.id}">${esc(i.code)} — ${esc(i.name)} (${i.unit})</option>`).join('')}</select></div>
         <div class="row2c"><div><label>Qty *</label><input type="number" id="pol-qty" min="0.01" step="any"></div>
         <div><label>Rate ₹/unit *</label><input type="number" id="pol-rate" min="0" step="any"></div></div>
       </div>
@@ -1752,7 +1828,7 @@ async function purchaseTab(t){
       ${canMfgAdd() ? `
       <h4 class="sec">Raise a material request (production)</h4>
       <div class="row2c">
-        <div><label>Material</label><select id="rql-item">${rmItems.map(i=>`<option value="${i.id}">${esc(i.code)} — ${esc(i.name)} (${i.unit})</option>`).join('')}</select></div>
+        <div><label>Material <a href="#" onclick="rmQuickAdd('req');return false;" style="font-size:11px;">＋ add new material</a></label><select id="rql-item">${rmItems.map(i=>`<option value="${i.id}">${esc(i.code)} — ${esc(i.name)} (${i.unit})</option>`).join('')}</select></div>
         <div class="row2c"><div><label>Qty *</label><input type="number" id="rql-qty" min="0.01" step="any"></div>
         <div><label>Needed by</label><input type="date" id="rq-needed"></div></div>
       </div>
