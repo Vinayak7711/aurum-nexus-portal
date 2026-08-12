@@ -566,6 +566,30 @@ function isDir(){ return me && me.role === 'DIRECTOR'; }
 function applyDirOnly(){
   document.querySelectorAll('.dir-only').forEach(el => el.classList.toggle('hidden', !isDir()));
 }
+/* ---- Director universal edit/delete ----
+   Any Director may delete any entry in any section. Deletes warn about attached
+   records first, then cascade on confirm (server-side, Director-only). */
+function dirDelBtn(sch, tbl, id, label, afterJs){
+  if (!isDir()) return '';
+  const lab = String(label==null?'this entry':label).replace(/[<>'"\\]/g,' ').slice(0,60);
+  let aj=''; try { aj = btoa(unescape(encodeURIComponent(afterJs||''))); } catch(e){ aj=''; }
+  return `<button class="mini" title="Delete (Director)" style="color:#b3261e;border-color:#b3261e;" onclick="event.stopPropagation();dirDel('${sch}','${tbl}','${id}','${lab}','${aj}')">🗑</button>`;
+}
+async function dirDel(sch, tbl, id, label, afterB64){
+  if (!isDir()){ alert('Only a Director can delete entries.'); return; }
+  let note = '';
+  try {
+    const { data: prev } = await db.schema('app').rpc('dir_delete_preview', { p_schema: sch, p_table: tbl, p_id: id });
+    if (Array.isArray(prev) && prev.length){
+      note = '\n\nThis will also remove attached records:\n' + prev.map(x=>'  • ' + x.count + ' in ' + x.table).join('\n');
+    }
+  } catch(e){ /* preview is best-effort */ }
+  if (!confirm('Delete ' + (label||'this entry') + '?' + note + '\n\nThis is permanent and cannot be undone.')) return;
+  const { error } = await db.schema('app').rpc('dir_delete', { p_schema: sch, p_table: tbl, p_id: id });
+  if (error){ alert('Could not delete: ' + error.message); return; }
+  let aj=''; try { aj = decodeURIComponent(escape(atob(afterB64||''))); } catch(e){ aj=''; }
+  if (aj){ try { (0,eval)(aj); } catch(e){ location.reload(); } } else location.reload();
+}
 
 /* ---------------- auth ---------------- */
 async function init(){
@@ -751,7 +775,7 @@ async function openOrders(){
       `<td>${esc(o.party?.name||'')}<br><span style="font-size:11px;color:#777">${esc(o.party?.code||'')}</span></td>` +
       `<td><span class="pill ${o.status}">${o.status}</span></td>` +
       `<td class="amount">${caseTotals[o.id]||0}</td>` +
-      (isDir()?`<td class="amount">${amtTotals[o.id]!=null?inr(amtTotals[o.id]):'—'}</td>`:'');
+      (isDir()?`<td class="amount">${amtTotals[o.id]!=null?inr(amtTotals[o.id]):'—'} ${dirDelBtn('sales','orders', o.id, 'SO '+(o.so_no||''), "openOrders()")}</td>`:'');
     tr.onclick = () => openOrderDetail(o.id);
     tb.appendChild(tr);
   }
@@ -891,8 +915,8 @@ async function openParties(){
     const tname = ((M.terr||[]).find(t=>t.id===p.territory_id)||{}).name;
     tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td><td>${esc(tname||'—')}</td>` +
       `<td>${esc(ownerName(p.owner_id))}</td><td>${p.is_active?'✔':'✖'}</td>` +
-      `<td><button class="mini">Edit</button></td>`;
-    tr.querySelector('button').onclick = ()=>openPartyEdit(p);
+      `<td style="white-space:nowrap"><button class="mini btn-edit">Edit</button> ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
+    tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
     tb.appendChild(tr);
   }
   show('parties');
@@ -1328,7 +1352,7 @@ async function onbTab(which){
       const pill = v.status==='ACTIVE'?'DELIVERED':(v.status==='INACTIVE'?'CANCELLED':'RECEIVED');
       html += `<tr><td><b>${esc(v.code)}</b></td><td>${esc(v.name)}</td><td>${esc(v.category||'—')}</td>
         <td><span class="pill ${pill}">${v.status}</span></td>
-        <td><button class="mini" onclick="vnStatus('${v.id}','${v.status==='ACTIVE'?'INACTIVE':'ACTIVE'}')">${v.status==='ACTIVE'?'Deactivate':'Activate'}</button></td></tr>`;
+        <td style="white-space:nowrap"><button class="mini" onclick="vnStatus('${v.id}','${v.status==='ACTIVE'?'INACTIVE':'ACTIVE'}')">${v.status==='ACTIVE'?'Deactivate':'Activate'}</button> ${dirDelBtn('sales','vendors', v.id, v.name, "onbTab('vendors')")}</td></tr>`;
     }
     B.innerHTML = html + '</tbody></table></div>';
   }
@@ -1412,6 +1436,7 @@ async function tasksTab(which){
       if (isDir() && (t.status==='DONE'||t.status==='CANCELLED'))
         acts.push(`<button class="mini" onclick="taskReopen('${t.id}')" title="Reopen and reassign">↻ Reopen</button>`);
       acts.push(`<button class="mini" onclick="taskComments('${t.id}')" title="Comments & progress">💬</button>`);
+      if (isDir()) acts.push(dirDelBtn('tasks','tasks', t.id, 'task '+(t.task_no||''), "tasksTab('"+which+"')"));
       const prog = t.status==='DONE' ? 100 : (t.progress||0);
       html += `<tr${overdue?' style="background:#fdf3f2;"':''}><td><b>${esc(t.task_no)}</b></td>
         <td>${esc(t.title)}${t.details?'<br><span style="font-size:11px;color:#777">'+esc(t.details)+'</span>':''}</td>` +
@@ -1790,7 +1815,7 @@ async function purchaseTab(t){
         `<td>${(p.status==='PENDING_APPROVAL' && canFinApprove() ? `<button class="mini" onclick="poApprove('${p.id}')">Approve</button> ` : '') +
               (canFinEdit() ? (p.status==='PENDING_APPROVAL' ? `<button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
               (p.status==='PLACED' ? `<button class="mini" onclick="poDispatch('${p.id}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
-              (['PLACED','DISPATCHED','PARTIAL'].includes(p.status) ? `<button class="mini" onclick="poReceiveForm('${p.id}','${esc(p.po_no)}')">Receive…</button>` : '') : '')}</td></tr>`).join('')
+              (['PLACED','DISPATCHED','PARTIAL'].includes(p.status) ? `<button class="mini" onclick="poReceiveForm('${p.id}','${esc(p.po_no)}')">Receive…</button>` : '') : '')} ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "purchaseTab('pos')")}</td></tr>`).join('')
         || '<tr><td colspan="8" style="color:#777">No purchase orders yet — place one from the New PO tab.</td></tr>'}
       </tbody></table></div>
       <div id="po-recv"></div><div id="po-msg"></div>`;
@@ -1877,7 +1902,7 @@ async function purchaseTab(t){
         `<td style="white-space:nowrap">${
           r.status==='REQUESTED' && canFinEdit() ? `<button class="mini" onclick="rmApprove('${r.id}')">✔ Approve</button> <button class="mini" onclick="reqReject('${r.id}')" style="color:#c0392b;">Reject</button>` :
           r.status==='APPROVED' && canFinEdit() ? `<button class="mini" onclick="poLinkReq='${r.id}';poLines=[];purchaseTab('new')">Create PO</button>` : ''
-        }${r.approval_note?`<br><span style="font-size:10px;color:#777">note: ${esc(r.approval_note)}</span>`:''}</td></tr>`).join('')
+        } ${dirDelBtn('mfg','rm_requests', r.id, r.req_no, "purchaseTab('req')")}${r.approval_note?`<br><span style="font-size:10px;color:#777">note: ${esc(r.approval_note)}</span>`:''}</td></tr>`).join('')
         || '<tr><td colspan="7" style="color:#777">No material requests yet.</td></tr>'}
       </tbody></table></div>`;
     return;
@@ -1893,7 +1918,7 @@ async function purchaseTab(t){
     B.innerHTML = `
       <h4 class="sec">Incoming raw-material receipts &amp; quality inspection</h4>
       <p style="font-size:12px;color:#555;">Every receipt recorded against a PO, with the receiver's inspection: whether the material and quantity match the PO, the inspection report, and quality remarks. Recorded from a PO's “Receive…” action.</p>
-      <div class="table-scroll"><table><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>As per PO</th><th>Qty OK</th><th>Inspection report</th><th>Quality remarks</th><th>Received by</th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>As per PO</th><th>Qty OK</th><th>Inspection report</th><th>Quality remarks</th><th>Received by</th><th></th></tr></thead><tbody>
       ${(insp||[]).map(r=>{const po=poBy[r.po_id]||{};const ap=AP[r.as_per_po]||[r.as_per_po,'#333'];
         return `<tr><td style="white-space:nowrap">${r.inspected_on||(r.created_at||'').slice(0,10)}</td>`+
           `<td><b>${esc(po.po_no||'—')}</b></td><td>${esc(po.vendor_name||'—')}</td>`+
@@ -1902,8 +1927,9 @@ async function purchaseTab(t){
           `<td>${r.qty_as_per_po===true?'<span style="color:#1a7f37">Yes</span>':(r.qty_as_per_po===false?'<span style="color:#b3261e">No</span>':'—')}</td>`+
           `<td style="max-width:260px;white-space:pre-wrap">${esc(r.inspection_report||'—')}</td>`+
           `<td style="max-width:200px;white-space:pre-wrap">${esc(r.quality_remarks||'—')}</td>`+
-          `<td style="white-space:nowrap">${esc(uName(r.received_by))}</td></tr>`;}).join('')
-        || '<tr><td colspan="9" style="color:#777">No receipts inspected yet — record one from a PO’s “Receive…” button.</td></tr>'}
+          `<td style="white-space:nowrap">${esc(uName(r.received_by))}</td>`+
+          `<td>${dirDelBtn('mfg','rm_inspections', r.id, 'inspection', "purchaseTab('grn')")}</td></tr>`;}).join('')
+        || '<tr><td colspan="10" style="color:#777">No receipts inspected yet — record one from a PO’s “Receive…” button.</td></tr>'}
       </tbody></table></div>`;
     return;
   }
@@ -2084,7 +2110,7 @@ async function acctTab(t){
       <div class="table-scroll"><table><thead><tr><th>Account</th><th>Bank</th><th>A/C</th><th class="amount">Opening ₹</th><th class="amount">Balance ₹</th><th></th></tr></thead><tbody>
       ${(bals||[]).map(b=>`<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(b.name)}</b></td><td>${esc(b.bank_name||'—')}</td><td>${b.account_tail?'····'+esc(b.account_tail):'—'}</td>` +
         `<td class="amount">${inr(b.opening_balance)}</td><td class="amount" style="font-weight:700;color:${Number(b.balance)>=0?'#1a7f37':'#b3261e'}">${inr(b.balance)}</td>` +
-        `<td>${canFinEdit()?`<button class="mini" onclick="acBankEdit('${b.id}')">Edit</button>`:''}</td></tr>`).join('')
+        `<td style="white-space:nowrap">${canFinEdit()?`<button class="mini" onclick="acBankEdit('${b.id}')">Edit</button> `:''}${dirDelBtn('acct','bank_accounts', b.id, b.name, "acctTab('banks')")}</td></tr>`).join('')
         || '<tr><td colspan="6" style="color:#777">No bank accounts yet.</td></tr>'}
       </tbody></table></div>
       ${canFinEdit()?`<button class="btn gold sm" style="margin-top:10px;" onclick="acBankEdit()">+ Add bank account</button>`:''}
@@ -2150,7 +2176,7 @@ async function acctTab(t){
       ${(advs||[]).map(a=>`<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td>` +
         `<td class="amount">${inr(a.amount)}</td><td class="amount">${inr(a.recovered)}</td><td class="amount" style="font-weight:700">${inr(a.outstanding)}</td>` +
         `<td><span style="color:${AC_ST[a.status]};font-weight:600;font-size:12px">${acLbl(a.status)}</span></td>` +
-        `<td>${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button>`:''}</td></tr>`).join('')
+        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`).join('')
         || '<tr><td colspan="8" style="color:#777">No advances yet.</td></tr>'}
       </tbody></table></div>`;
     return;
@@ -3026,7 +3052,7 @@ function renderMtgList(rows){
   html += rows.map(m=>`<tr><td><b>${esc(m.meeting_code)}</b></td><td>${esc(m.title)}</td><td>${m.meeting_date}${m.start_time?'<br><span style="font-size:11px;color:#777">'+esc(m.start_time.slice(0,5))+'</span>':''}</td>
     <td>${esc(m.organizer_name||'—')}</td><td><span class="pill ${m.status==='HELD'?'DELIVERED':(m.status==='CANCELLED'?'CANCELLED':'RECEIVED')}">${m.status}</span></td>
     <td class="amount">${m.agenda_count}</td><td class="amount">${m.participant_count}</td>
-    <td><button class="mini" onclick="mtgOpen('${m.id}')">Open</button></td></tr>`).join('') || '<tr><td colspan="8" style="color:#777">No meetings yet.</td></tr>';
+    <td style="white-space:nowrap"><button class="mini" onclick="mtgOpen('${m.id}')">Open</button> ${dirDelBtn('tasks','meetings', m.id, m.meeting_code, "openMeetings()")}</td></tr>`).join('') || '<tr><td colspan="8" style="color:#777">No meetings yet.</td></tr>';
   $('mtg-list').innerHTML = html + '</tbody></table></div>';
 }
 function mtgForm(){
