@@ -1856,7 +1856,7 @@ async function purchaseTab(t){
       ${canMfgAdd() ? `
       <h4 class="sec">Raise a material request (production)</h4>
       <div class="row2c">
-        <div><label>Vendor * <span style="color:#999;font-weight:normal;font-size:11px;">— who to order from (one vendor per request)</span></label><select id="rql-vendor"><option value="">— select vendor —</option>${venOpts}</select></div>
+        <div><label>Vendor <span style="color:#999;font-weight:normal;font-size:11px;">— who to order from (optional; one vendor per request)</span></label><select id="rql-vendor"><option value="">— not decided yet —</option>${venOpts}</select></div>
         <div><label>Needed by</label><input type="date" id="rq-needed"></div>
       </div>
       <div class="row2c">
@@ -2029,15 +2029,16 @@ function reqAddLine(){
 }
 async function reqRaise(){
   const vendor = $('rql-vendor') ? $('rql-vendor').value : '';
-  if (!vendor){ say('rq-msg','Select the vendor this request is for.',false); return; }
   if (!reqLines.length){ say('rq-msg','Add at least one material item to this request.',false); return; }
   const { data: reqId, error } = await db.schema('mfg').rpc('create_rm_request', {
     p_lines: reqLines, p_needed: $('rq-needed').value || null,
     p_remarks: $('rq-remarks').value.trim() || null });
   if (error){ say('rq-msg','Could not submit: '+error.message,false); return; }
-  // Attach the chosen vendor to this request (so its PO is placed on that one vendor).
-  const { error: vErr } = await db.schema('mfg').rpc('rm_request_set_vendor', { p_req: reqId, p_vendor: vendor });
-  if (vErr){ say('rq-msg','Request saved, but the vendor could not be attached: '+vErr.message,false); return; }
+  // Attach the chosen vendor if one was picked (optional — can be decided later at PO time).
+  if (vendor){
+    const { error: vErr } = await db.schema('mfg').rpc('rm_request_set_vendor', { p_req: reqId, p_vendor: vendor });
+    if (vErr){ say('rq-msg','Request saved, but the vendor could not be attached: '+vErr.message,false); return; }
+  }
   reqLines = []; purchaseTab('req');
 }
 async function rmApprove(id){
