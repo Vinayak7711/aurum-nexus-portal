@@ -365,6 +365,7 @@
       <button class="chip on" id="pu-pos" onclick="purchaseTab('pos')">Purchase orders</button>
       <button class="chip" id="pu-new" onclick="purchaseTab('new')">New PO</button>
       <button class="chip" id="pu-req" onclick="purchaseTab('req')">Material requests</button>
+      <button class="chip" id="pu-grn" onclick="purchaseTab('grn')">Receipts &amp; QC</button>
       <button class="chip" id="pu-store" onclick="purchaseTab('store')">RM store</button>
     </div>
     <div id="purchase-body"></div>
@@ -1763,7 +1764,7 @@ async function rmQuickAdd(backTab){
 const PO_COL = { PENDING_APPROVAL:'#b3261e', PLACED:'#b8860b', DISPATCHED:'#0b57d0', PARTIAL:'#b8860b', RECEIVED:'#1a7f37', CANCELLED:'#777' };
 const PO_LABEL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 async function purchaseTab(t){
-  for (const k of ['pos','new','req','store']) $('pu-'+k).classList.toggle('on', k === t);
+  for (const k of ['pos','new','req','grn','store']) $('pu-'+k).classList.toggle('on', k === t);
   const B = $('purchase-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const G = db.schema('mfg');
 
@@ -1869,6 +1870,31 @@ async function purchaseTab(t){
     return;
   }
 
+  if (t === 'grn'){
+    const { data: insp, error } = await G.from('rm_inspections').select('*').order('created_at',{ascending:false}).limit(200);
+    if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    const { data: pos } = await G.from('v_po_tracking').select('id, po_no, vendor_name');
+    const poBy = {}; (pos||[]).forEach(p => poBy[p.id] = p);
+    const uName = uid => { const u = (allUsers||[]).find(x=>x.id===uid); return u ? (u.full_name||u.email||'—') : '—'; };
+    const AP = { YES:['Yes — as per PO','#1a7f37'], PARTIAL:['Partly','#b8860b'], NO:['No — deviation','#b3261e'] };
+    B.innerHTML = `
+      <h4 class="sec">Incoming raw-material receipts &amp; quality inspection</h4>
+      <p style="font-size:12px;color:#555;">Every receipt recorded against a PO, with the receiver's inspection: whether the material and quantity match the PO, the inspection report, and quality remarks. Recorded from a PO's “Receive…” action.</p>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>As per PO</th><th>Qty OK</th><th>Inspection report</th><th>Quality remarks</th><th>Received by</th></tr></thead><tbody>
+      ${(insp||[]).map(r=>{const po=poBy[r.po_id]||{};const ap=AP[r.as_per_po]||[r.as_per_po,'#333'];
+        return `<tr><td style="white-space:nowrap">${r.inspected_on||(r.created_at||'').slice(0,10)}</td>`+
+          `<td><b>${esc(po.po_no||'—')}</b></td><td>${esc(po.vendor_name||'—')}</td>`+
+          `<td>${esc(r.challan_no||'—')}${r.invoice_no?'<br><span style="font-size:11px;color:#777">Inv: '+esc(r.invoice_no)+'</span>':''}</td>`+
+          `<td><span style="color:${ap[1]};font-weight:600">${esc(ap[0])}</span></td>`+
+          `<td>${r.qty_as_per_po===true?'<span style="color:#1a7f37">Yes</span>':(r.qty_as_per_po===false?'<span style="color:#b3261e">No</span>':'—')}</td>`+
+          `<td style="max-width:260px;white-space:pre-wrap">${esc(r.inspection_report||'—')}</td>`+
+          `<td style="max-width:200px;white-space:pre-wrap">${esc(r.quality_remarks||'—')}</td>`+
+          `<td style="white-space:nowrap">${esc(uName(r.received_by))}</td></tr>`;}).join('')
+        || '<tr><td colspan="9" style="color:#777">No receipts inspected yet — record one from a PO’s “Receive…” button.</td></tr>'}
+      </tbody></table></div>`;
+    return;
+  }
+
   if (t === 'store'){
     const [st, mmc] = await Promise.all([
       G.from('v_rm_store').select('*').order('code'),
@@ -1937,7 +1963,20 @@ async function poReceiveForm(id, poNo){
       <div><label>Challan no.</label><input type="text" id="rcv-challan"></div>
       <div><label>Invoice no.</label><input type="text" id="rcv-invoice"></div>
     </div>
-    <button class="btn gold" style="margin-top:8px;" onclick="poReceiveSave('${id}')">Record receipt</button>
+    <h4 class="sec" style="margin-top:14px;">Incoming inspection (QC)</h4>
+    <div class="row2c">
+      <div><label>Received by</label><input type="text" value="${esc(me.full_name||me.email||'')}" disabled></div>
+      <div><label>Material as per PO?</label><select id="rcv-asper"><option value="YES">Yes — as per PO</option><option value="PARTIAL">Partly as per PO</option><option value="NO">No — deviation from PO</option></select></div>
+    </div>
+    <div class="row2c">
+      <div><label>Quantity as per PO?</label><select id="rcv-qtyok"><option value="">—</option><option value="yes">Yes — quantity matches</option><option value="no">No — short / excess</option></select></div>
+      <div><label>Inspected on</label><input type="date" id="rcv-inspdate" value="${calFmt(new Date())}"></div>
+    </div>
+    <label>Inspection report</label>
+    <textarea id="rcv-inspect" rows="3" placeholder="What was checked and the findings (e.g. seal intact, batch/lot no., moisture, appearance, test results)…" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;"></textarea>
+    <label>Quality remarks</label>
+    <textarea id="rcv-qremarks" rows="2" placeholder="Overall quality note / accept-reject reason…" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;"></textarea>
+    <button class="btn gold" style="margin-top:10px;" onclick="poReceiveSave('${id}')">Record receipt &amp; inspection</button>
     <div id="rcv-msg"></div>`;
   $('po-recv').scrollIntoView({behavior:'smooth'});
 }
@@ -1948,12 +1987,24 @@ async function poReceiveSave(id){
     if (q > 0) lines.push({ rm_item_id: inp.dataset.item, qty: q });
   });
   if (!lines.length){ say('rcv-msg','Enter a received quantity on at least one line.',false); return; }
+  const challan = $('rcv-challan').value.trim() || null;
+  const invoice = $('rcv-invoice').value.trim() || null;
+  const inspDate = $('rcv-inspdate') ? ($('rcv-inspdate').value || null) : null;
   const { error } = await db.schema('mfg').rpc('po_receive', {
-    p_po: id, p_lines: lines,
-    p_challan: $('rcv-challan').value.trim() || null,
-    p_invoice: $('rcv-invoice').value.trim() || null, p_date: null });
+    p_po: id, p_lines: lines, p_challan: challan, p_invoice: invoice, p_date: inspDate });
   if (error){ say('rcv-msg','Could not record: '+error.message,false); return; }
-  purchaseTab('pos');
+  // Incoming-inspection (QC) record — attached to this receipt.
+  const qtyokVal = $('rcv-qtyok') ? $('rcv-qtyok').value : '';
+  const qtyok = qtyokVal === '' ? null : (qtyokVal === 'yes');
+  const { error: iErr } = await db.schema('mfg').rpc('record_rm_inspection', {
+    p_po: id, p_challan: challan, p_invoice: invoice,
+    p_as_per_po: $('rcv-asper') ? $('rcv-asper').value : 'YES',
+    p_qty_ok: qtyok,
+    p_report: ($('rcv-inspect') && $('rcv-inspect').value.trim()) || null,
+    p_remarks: ($('rcv-qremarks') && $('rcv-qremarks').value.trim()) || null,
+    p_inspected: inspDate });
+  if (iErr){ say('rcv-msg','Receipt saved, but the inspection note could not be saved: '+iErr.message, false); return; }
+  purchaseTab('grn');
 }
 function reqAddLine(){
   const qty = Number($('rql-qty').value);
