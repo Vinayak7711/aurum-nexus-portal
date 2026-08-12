@@ -57,9 +57,9 @@ jobs:
               signingConfigs {
                   release {
                       storeFile file('../aurum.jks')
-                      storePassword 'aurum12345'
+                      storePassword System.getenv('AURUM_STORE_PASS') ?: 'aurum12345'
                       keyAlias 'aurum'
-                      keyPassword 'aurum12345'
+                      keyPassword System.getenv('AURUM_STORE_PASS') ?: 'aurum12345'
                   }
               }
               buildTypes {
@@ -213,15 +213,25 @@ jobs:
           ICO
 
           echo "Project tree:"; find $ROOT -type f | sort
-      - name: Generate signing keystore
+      - name: Prepare signing keystore
         working-directory: android-app
+        env:
+          KS_B64: ${{ secrets.AURUM_KEYSTORE_B64 }}
         run: |
-          keytool -genkeypair \
-            -dname "CN=Aurum Spirit India Limited, O=Aurum Spirit India Limited, C=IN" \
-            -alias aurum -keyalg RSA -keysize 2048 -validity 10000 \
-            -keystore aurum.jks -storepass aurum12345 -keypass aurum12345
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > aurum.jks
+            echo "Signing with the company key from repo secret."
+          else
+            keytool -genkeypair \
+              -dname "CN=Aurum Spirit India Limited, O=Aurum Spirit India Limited, C=IN" \
+              -alias aurum -keyalg RSA -keysize 2048 -validity 10000 \
+              -keystore aurum.jks -storepass aurum12345 -keypass aurum12345
+            echo "No company key secret found - one-time key used."
+          fi
       - name: Build signed release APK
         working-directory: android-app
+        env:
+          AURUM_STORE_PASS: ${{ secrets.AURUM_KEY_PASS }}
         run: gradle assembleRelease --no-daemon --stacktrace
       - name: Collect APK
         run: |
