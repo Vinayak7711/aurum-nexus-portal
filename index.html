@@ -336,6 +336,7 @@
       <p>Field check-ins from the Aurum FieldVisit app — a GPS- and time-stamped selfie at each distributor, the order taken, and notes from the party. You see your own team's visits; the Director sees everyone.</p></div>
     <div class="subtabs">
       <button class="chip on" id="fld-visits" onclick="fieldTab('visits')">Field visits</button>
+      <button class="chip dir-only" id="fld-salesmen" onclick="fieldTab('salesmen')">Salesmen</button>
       <button class="chip dir-only" id="fld-creds" onclick="fieldTab('creds')">App credentials</button>
     </div>
     <div id="field-body"></div>
@@ -1407,6 +1408,8 @@ async function tasksTab(which){
         acts.push(`<button class="mini" onclick="taskSet('${t.id}','DONE')">Done</button>`);
       if (isDir() && (t.status==='OPEN'||t.status==='IN_PROGRESS'))
         acts.push(`<button class="mini" onclick="taskSet('${t.id}','CANCELLED')">Cancel</button>`);
+      if (isDir() && (t.status==='DONE'||t.status==='CANCELLED'))
+        acts.push(`<button class="mini" onclick="taskReopen('${t.id}')" title="Reopen and reassign">↻ Reopen</button>`);
       acts.push(`<button class="mini" onclick="taskComments('${t.id}')" title="Comments & progress">💬</button>`);
       const prog = t.status==='DONE' ? 100 : (t.progress||0);
       html += `<tr${overdue?' style="background:#fdf3f2;"':''}><td><b>${esc(t.task_no)}</b></td>
@@ -1503,6 +1506,21 @@ async function taskCommentSave(id, withProg){
     if (e3){ say('tc-msg','Could not save: '+e3.message,false); return; }
   }
   await taskComments(id);
+}
+async function taskReopen(id){
+  const people = M.users.filter(u=>u.is_active);
+  const list = people.map((u,i)=>`${i+1}. ${u.full_name}`).join('\n');
+  const who = prompt('Reopen this task.\n\nReassign to which person? Type the number, or leave blank to keep the same assignee.\n\n'+list, '');
+  if (who === null) return;
+  let assignee = null;
+  if (who.trim()){ const n = parseInt(who.trim(),10); if (n>=1 && n<=people.length) assignee = people[n-1].id; else { alert('Not a valid number — nothing changed.'); return; } }
+  const due = prompt('New due date (YYYY-MM-DD), or leave blank to keep the current one:', '');
+  if (due === null) return;
+  const reason = prompt('Reason for reopening (optional):', '');
+  if (reason === null) return;
+  const { error } = await db.schema('tasks').rpc('reopen_task', { p_task: id, p_assignee: assignee, p_due: (due.trim()||null), p_reason: (reason||null) });
+  if (error){ alert('Could not reopen: '+error.message); return; }
+  tasksTab($('kt-all')&&$('kt-all').classList.contains('on')?'all':'my');
 }
 async function taskAdd(){
   const title = $('nt-title').value.trim();
@@ -1823,7 +1841,7 @@ async function purchaseTab(t){
       (rl||[]).forEach(l => { (linesBy[l.request_id] ??= []).push(l); });
     }
     const itemLabel = id => { const i = rmItems.find(x=>x.id===id)||{}; return (i.code||'?') + ' ' + (i.qtyu||''); };
-    const RQ_COL = { REQUESTED:'#b8860b', ORDERED:'#0b57d0', FULFILLED:'#1a7f37', REJECTED:'#b3261e' };
+    const RQ_COL = { REQUESTED:'#b8860b', APPROVED:'#1a7f37', ORDERED:'#0b57d0', FULFILLED:'#1a7f37', REJECTED:'#b3261e' };
     B.innerHTML = `
       ${canMfgAdd() ? `
       <h4 class="sec">Raise a material request (production)</h4>
@@ -1842,7 +1860,10 @@ async function purchaseTab(t){
       ${(reqs||[]).map(r=>`<tr><td><b>${esc(r.req_no)}</b></td>` +
         `<td>${(linesBy[r.id]||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};return esc(i.code||'?')+' × '+Number(l.qty)+' '+(i.unit||'');}).join(', ')}</td>` +
         `<td>${r.needed_by||'—'}</td><td><span style="color:${RQ_COL[r.status]||'#333'};font-weight:600">${r.status}</span></td><td style="max-width:220px">${esc(r.remarks||'')}</td>` +
-        `<td>${canFinEdit() && r.status==='REQUESTED' ? `<button class="mini" onclick="poLinkReq='${r.id}';poLines=[];purchaseTab('new')">Create PO</button> <button class="mini" onclick="reqReject('${r.id}')">Reject</button>` : ''}</td></tr>`).join('')
+        `<td style="white-space:nowrap">${
+          r.status==='REQUESTED' && canFinEdit() ? `<button class="mini" onclick="rmApprove('${r.id}')">✔ Approve</button> <button class="mini" onclick="reqReject('${r.id}')" style="color:#c0392b;">Reject</button>` :
+          r.status==='APPROVED' && canFinEdit() ? `<button class="mini" onclick="poLinkReq='${r.id}';poLines=[];purchaseTab('new')">Create PO</button>` : ''
+        }${r.approval_note?`<br><span style="font-size:10px;color:#777">note: ${esc(r.approval_note)}</span>`:''}</td></tr>`).join('')
         || '<tr><td colspan="6" style="color:#777">No material requests yet.</td></tr>'}
       </tbody></table></div>`;
     return;
@@ -1950,9 +1971,18 @@ async function reqRaise(){
   if (error){ say('rq-msg','Could not submit: '+error.message,false); return; }
   reqLines = []; purchaseTab('req');
 }
+async function rmApprove(id){
+  const note = prompt('Approve this material request?\nOptional note (e.g. "ok to order"):', '');
+  if (note === null) return;
+  const { error } = await db.schema('mfg').rpc('approve_rm_request', { p_req: id, p_note: note || null });
+  if (error){ alert('Could not approve: '+error.message); return; }
+  purchaseTab('req');
+}
 async function reqReject(id){
-  const { error } = await db.schema('mfg').rpc('rm_request_reject', { p_req: id, p_note: null });
-  if (error){ say('rq-msg','Could not reject: '+error.message,false); return; }
+  const note = prompt('Reject this material request?\nOptional reason:', '');
+  if (note === null) return;
+  const { error } = await db.schema('mfg').rpc('reject_rm_request', { p_req: id, p_note: note || null });
+  if (error){ alert('Could not reject: '+error.message); return; }
   purchaseTab('req');
 }
 
@@ -2584,6 +2614,8 @@ function mailCompose(replyTo){
     <div class="card" style="margin-top:14px;">
       <h3 style="font-size:15px;">${m?'Reply':'New mail'} from ${esc(box.address)}</h3>
       <label>To *</label><input type="text" id="mc-to" value="${esc(toAddr)}" placeholder="someone@example.com (comma for more)">
+      <label>Cc <span style="color:#999;font-weight:normal;">(optional, comma for more)</span></label><input type="text" id="mc-cc" placeholder="cc@example.com">
+      <label>Bcc <span style="color:#999;font-weight:normal;">(optional, hidden from other recipients)</span></label><input type="text" id="mc-bcc" placeholder="bcc@example.com">
       <label>Subject *</label><input type="text" id="mc-sub" value="${esc(sub)}">
       <label>Message *</label><textarea id="mc-body" rows="8" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;">${esc(quoted)}</textarea>
       <label>Attachments <span style="color:#999;font-weight:normal;">(any file type, up to 10 files / 10 MB total)</span></label>
@@ -2617,6 +2649,7 @@ function mailFileB64(f){
 }
 async function mailSendNow(){
   const to = $('mc-to').value.trim(), sub = $('mc-sub').value.trim(), body = $('mc-body').value.trim();
+  const cc = ($('mc-cc')?$('mc-cc').value:'').trim(), bcc = ($('mc-bcc')?$('mc-bcc').value:'').trim();
   if (!to || !sub || !body){ say('mail-send-msg','To, subject and message are all needed.',false); return; }
   const files = Array.from(($('mc-files')||{}).files || []);
   if (files.length > 10){ say('mail-send-msg','Maximum 10 attachments per email.',false); return; }
@@ -2631,7 +2664,7 @@ async function mailSendNow(){
     const t = await mailToken();
     const r = await fetch(FN_BASE + '/mail-send', { method:'POST',
       headers: { 'content-type':'application/json', authorization: 'Bearer ' + t },
-      body: JSON.stringify({ mailbox: mailBox, to, subject: sub, body, attachments }) });
+      body: JSON.stringify({ mailbox: mailBox, to, cc, bcc, subject: sub, body, attachments }) });
     const j = await r.json();
     if (!r.ok){ say('mail-send-msg', j.error || 'Send failed.', false); btn.disabled = false; btn.textContent = 'Send'; return; }
     mailFolder = 'SENT'; mailOpen = null; mailList();
@@ -2911,10 +2944,11 @@ async function mtgSave(){
 }
 async function mtgOpen(id){
   const T=db.schema('tasks');
-  const [mres,ares,pres]=await Promise.all([
+  const [mres,ares,pres,dres]=await Promise.all([
     T.from('v_meetings').select('*').eq('id',id).single(),
     T.from('meeting_agenda').select('*').eq('meeting_id',id).order('seq'),
-    T.from('meeting_participants').select('*').eq('meeting_id',id).order('created_at')
+    T.from('meeting_participants').select('*').eq('meeting_id',id).order('created_at'),
+    T.from('meeting_documents').select('*').eq('meeting_id',id).order('uploaded_at')
   ]);
   const m=mres.data; if(!m){ $('mtg-detail').innerHTML='<div class="msg err">Meeting not found.</div>'; return; }
   window.__mtgId=id; window.__mtgParts=pres.data||[];
@@ -2938,6 +2972,15 @@ async function mtgOpen(id){
     <h4 class="sec" style="margin-top:10px;">Conclusion</h4><textarea id="mt-concl" rows="2" style="width:100%;box-sizing:border-box;">${esc(m.conclusion||'')}</textarea>
     <button class="btn gold sm" style="margin-top:8px;" onclick="mtgSaveMinutes()">Save minutes &amp; conclusion</button><div id="mt-mmsg"></div>`; }
   else { h+=`<div style="white-space:pre-wrap;font-size:13px;">${esc(m.minutes||'—')}</div><h4 class="sec" style="margin-top:10px;">Conclusion</h4><div style="font-size:13px;">${esc(m.conclusion||'—')}</div>`; }
+  // Documents attached to these minutes (any file presented in the meeting)
+  h+=`<h4 class="sec" style="margin-top:14px;">📎 Documents</h4>`;
+  h+=`<div id="mtg-docs">${(dres.data||[]).map(d=>`<div style="display:flex;align-items:center;gap:8px;font-size:13px;padding:5px 0;border-bottom:1px solid #f0ece0;">
+      <a href="#" onclick="mtgDownloadDoc('${d.storage_path.replace(/'/g,'')}','${(d.file_name||'file').replace(/'/g,'')}');return false;">📄 ${esc(d.file_name)}</a>
+      <span style="color:#999;font-size:11px;">${d.size_bytes?Math.max(1,Math.round(d.size_bytes/1024))+' KB':''}${d.note?' · '+esc(d.note):''} · ${esc(mtgUserName(d.uploaded_by)||'—')}</span>
+      ${(d.uploaded_by===me.id||isDir())?`<a href="#" onclick="mtgDelDoc('${d.id}','${d.storage_path.replace(/'/g,'')}');return false;" style="color:#c0392b;font-size:11px;">remove</a>`:''}
+    </div>`).join('')||'<span style="color:#777;font-size:13px;">No documents attached.</span>'}</div>
+    <div class="row2c" style="margin-top:8px;"><input type="file" id="mtg-doc-file" style="font-size:13px;"><input type="text" id="mtg-doc-note" placeholder="Note (e.g. presented by Pradeep)"></div>
+    <button class="btn ghost sm" style="margin-top:6px;" onclick="mtgAddDoc()">+ Attach document</button><div id="mtg-doc-msg"></div>`;
   h+='</div>';
   $('mtg-detail').innerHTML=h; $('mtg-detail').scrollIntoView({behavior:'smooth'});
 }
@@ -2947,6 +2990,28 @@ async function mtgAddAgenda(){ const item=$('ag-item').value.trim(); if(!item)re
   const {error}=await db.schema('tasks').from('meeting_agenda').insert({meeting_id:window.__mtgId,seq,item,presenter_id:$('ag-pres').value||null,notes:$('ag-notes').value.trim()||null});
   if(error){alert(error.message);return;} mtgOpen(window.__mtgId); }
 async function mtgDelAgenda(id){ await db.schema('tasks').from('meeting_agenda').delete().eq('id',id); mtgOpen(window.__mtgId); }
+async function mtgAddDoc(){
+  const inp=$('mtg-doc-file'); const f=inp&&inp.files&&inp.files[0]; if(!f){ say('mtg-doc-msg','Choose a file first.',false); return; }
+  if(f.size>15*1048576){ say('mtg-doc-msg','File too large — keep it under 15 MB.',false); return; }
+  say('mtg-doc-msg','Uploading…',true);
+  const path=window.__mtgId+'/'+Date.now()+'_'+f.name.replace(/[^A-Za-z0-9._-]/g,'_');
+  const up=await db.storage.from('meeting-docs').upload(path, f, {upsert:false});
+  if(up.error){ say('mtg-doc-msg','Upload failed: '+up.error.message,false); return; }
+  const ins=await db.schema('tasks').from('meeting_documents').insert({meeting_id:window.__mtgId, file_name:f.name, storage_path:path, size_bytes:f.size, note:($('mtg-doc-note').value.trim()||null), uploaded_by:me.id});
+  if(ins.error){ say('mtg-doc-msg','Saved file but could not record it: '+ins.error.message,false); return; }
+  mtgOpen(window.__mtgId);
+}
+async function mtgDownloadDoc(path, name){
+  const { data, error } = await db.storage.from('meeting-docs').createSignedUrl(path, 120);
+  if(error){ alert('Could not open: '+error.message); return; }
+  const a=document.createElement('a'); a.href=data.signedUrl; a.download=name||''; a.target='_blank'; document.body.appendChild(a); a.click(); a.remove();
+}
+async function mtgDelDoc(id, path){
+  if(!confirm('Remove this document?')) return;
+  await db.storage.from('meeting-docs').remove([path]);
+  await db.schema('tasks').from('meeting_documents').delete().eq('id',id);
+  mtgOpen(window.__mtgId);
+}
 async function mtgAddPart(){ const uid=$('pt-user').value||null; const guest=$('pt-guest').value.trim()||null; if(!uid&&!guest){alert('Pick a user or type a guest name.');return;}
   const {error}=await db.schema('tasks').from('meeting_participants').insert({meeting_id:window.__mtgId,user_id:uid,guest_name:uid?null:guest,role:$('pt-role').value});
   if(error){alert(error.message);return;} mtgOpen(window.__mtgId); }
@@ -3069,10 +3134,62 @@ async function mktSaveExpense(){ const amt=Number($('ex-amt').value); if(!(amt>=
 const FBUCKET='visit-selfies';
 async function openField(){ window.__fldDate=window.__fldDate||''; window.__fldUser=window.__fldUser||''; fieldTab('visits'); show('field'); applyDirOnly(); }
 async function fieldTab(t){
-  ['visits','creds'].forEach(k=>$('fld-'+k).classList.toggle('on',k===t));
+  ['visits','salesmen','creds'].forEach(k=>{ const el=$('fld-'+k); if(el) el.classList.toggle('on',k===t); });
   const B=$('field-body');
   if(t==='visits') return fieldLoadVisits();
+  if(t==='salesmen'){ if(!isDir()){ B.innerHTML='<div class="card" style="color:#777">Salesmen are managed by the Director only.</div>'; return; } return fieldLoadSalesmen(); }
   if(t==='creds'){ if(!isDir()){ B.innerHTML='<div class="card" style="color:#777">App credentials are issued by the Director only.</div>'; return; } return fieldLoadCreds(); }
+}
+async function salesmanApi(payload){
+  const t = await mailToken();
+  const r = await fetch(FN_BASE + '/salesman-admin', { method:'POST', headers:{'content-type':'application/json', authorization:'Bearer '+t}, body: JSON.stringify(payload) });
+  const j = await r.json().catch(()=>({error:'Bad response'}));
+  if(!r.ok) throw new Error(j.error||'Failed');
+  return j;
+}
+async function fieldLoadSalesmen(){
+  const B=$('field-body'); B.innerHTML='<p style="color:#777">Loading…</p>';
+  let list;
+  try{ list=(await salesmanApi({action:'list'})).salesmen||[]; }
+  catch(e){ B.innerHTML=`<div class="msg err">${esc(e.message)}</div>`; return; }
+  let h=`<div class="card" style="max-width:640px;"><h3 style="font-size:15px;">Add a salesman</h3>
+    <p style="font-size:12px;color:#777;margin:4px 0 8px;">Creates their field-app login. The password you set here goes straight to the secure login store — it is never saved in the ERP database.</p>
+    <div class="row2c"><div><label>Full name *</label><input type="text" id="sm-name"></div><div><label>Login ID *</label><input type="text" id="sm-login" placeholder="e.g. ramesh"></div></div>
+    <div class="row2c"><div><label>Phone</label><input type="text" id="sm-phone"></div><div><label>Password *</label><input type="text" id="sm-pass" placeholder="min 6 characters"></div></div>
+    <button class="btn gold sm" style="margin-top:8px;" onclick="salesmanCreate()">+ Create salesman</button><div id="sm-msg"></div></div>`;
+  h+=`<div class="table-scroll" style="margin-top:14px;"><table><thead><tr><th>Name</th><th>Login ID</th><th>Phone</th><th>Status</th><th></th></tr></thead><tbody>`;
+  h+=list.map(s=>`<tr${s.is_active?'':' style="opacity:.5"'}><td><b>${esc(s.full_name)}</b></td><td>${esc(s.app_login_id||'—')}</td><td>${esc(s.phone||'—')}</td><td>${s.is_active?'Active':'Disabled'}</td>
+    <td style="white-space:nowrap">
+      <button class="mini" onclick="salesmanEdit('${s.id}','${esc(s.full_name).replace(/'/g,'')}','${(s.app_login_id||'').replace(/'/g,'')}','${(s.phone||'').replace(/'/g,'')}')">Edit</button>
+      <button class="mini" onclick="salesmanPass('${s.id}')">Set password</button>
+      ${s.is_active?`<button class="mini" style="color:#c0392b;" onclick="salesmanToggle('${s.id}',false)">Disable</button>`:`<button class="mini" onclick="salesmanToggle('${s.id}',true)">Enable</button>`}
+    </td></tr>`).join('')||'<tr><td colspan="5" style="color:#777">No salesmen yet.</td></tr>';
+  h+='</tbody></table></div>';
+  B.innerHTML=h;
+}
+async function salesmanCreate(){
+  const name=$('sm-name').value.trim(), login=$('sm-login').value.trim(), phone=$('sm-phone').value.trim(), pass=$('sm-pass').value;
+  if(!name||!login||pass.length<6){ say('sm-msg','Name, login ID and a password of at least 6 characters are required.',false); return; }
+  try{ await salesmanApi({action:'create', name, login_id:login, phone, password:pass}); fieldLoadSalesmen(); }
+  catch(e){ say('sm-msg',e.message,false); }
+}
+async function salesmanEdit(id, name, login, phone){
+  const n=prompt('Full name:', name); if(n===null) return;
+  const l=prompt('Login ID:', login); if(l===null) return;
+  const p=prompt('Phone:', phone); if(p===null) return;
+  try{ await salesmanApi({action:'update', id, name:n, login_id:l, phone:p}); fieldLoadSalesmen(); }
+  catch(e){ alert(e.message); }
+}
+async function salesmanPass(id){
+  const p=prompt('New password for this salesman (min 6 characters):',''); if(!p) return;
+  if(p.length<6){ alert('Too short.'); return; }
+  try{ await salesmanApi({action:'setpass', id, password:p}); alert('Password updated.'); }
+  catch(e){ alert(e.message); }
+}
+async function salesmanToggle(id, on){
+  if(!confirm(on?'Enable this salesman?':'Disable this salesman? Their field-app login stops working immediately, but their visit history is kept.')) return;
+  try{ await salesmanApi({action: on?'reactivate':'deactivate', id}); fieldLoadSalesmen(); }
+  catch(e){ alert(e.message); }
 }
 
 async function fieldLoadVisits(){
