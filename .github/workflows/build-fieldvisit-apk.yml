@@ -1,0 +1,184 @@
+name: Build FieldVisit APK
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-fieldvisit-apk.yml'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Ensure Android SDK packages
+        run: |
+          SM="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SM" ] || SM=sdkmanager
+          yes | "$SM" --licenses >/dev/null 2>&1 || true
+          "$SM" "platforms;android-34" "build-tools;34.0.0" "platform-tools" >/dev/null 2>&1 || true
+      - name: Generate the Android project
+        run: |
+          set -e
+          ROOT=android-app
+          mkdir -p $ROOT/app/src/main/java/com/aurum/fieldvisit
+          mkdir -p $ROOT/app/src/main/res/values
+          mkdir -p $ROOT/app/src/main/res/mipmap-xxxhdpi
+
+          cat > $ROOT/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = 'AurumFieldVisit'
+          include ':app'
+          EOF
+
+          echo "// root" > $ROOT/build.gradle
+          printf 'android.useAndroidX=true\norg.gradle.jvmargs=-Xmx3072m\n' > $ROOT/gradle.properties
+
+          cat > $ROOT/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' }
+          android {
+              namespace 'com.aurum.fieldvisit'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.aurum.fieldvisit'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              signingConfigs {
+                  release {
+                      storeFile file('../aurum.jks')
+                      storePassword 'aurum12345'
+                      keyAlias 'aurum'
+                      keyPassword 'aurum12345'
+                  }
+              }
+              buildTypes {
+                  release { minifyEnabled false; signingConfig signingConfigs.release }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > $ROOT/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.CAMERA"/>
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+              <uses-feature android:name="android.hardware.camera" android:required="false"/>
+              <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
+              <application android:allowBackup="true" android:icon="@mipmap/ic_launcher"
+                  android:label="@string/app_name" android:theme="@style/AppTheme">
+                  <activity android:name=".MainActivity" android:exported="true"
+                      android:screenOrientation="portrait"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          printf '<resources><string name="app_name">Aurum FieldVisit</string></resources>\n' > $ROOT/app/src/main/res/values/strings.xml
+          printf '<resources><style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar"/></resources>\n' > $ROOT/app/src/main/res/values/styles.xml
+
+          cat > $ROOT/app/src/main/java/com/aurum/fieldvisit/MainActivity.java <<'EOF'
+          package com.aurum.fieldvisit;
+          import android.Manifest;
+          import android.app.Activity;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.webkit.GeolocationPermissions;
+          import android.webkit.PermissionRequest;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          public class MainActivity extends Activity {
+              private static final String APP_URL = "https://vinayak7711.github.io/aurum-nexus-portal/fieldvisit.html";
+              private WebView web;
+              @Override protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  if (Build.VERSION.SDK_INT >= 23) {
+                      requestPermissions(new String[]{
+                          Manifest.permission.CAMERA,
+                          Manifest.permission.ACCESS_FINE_LOCATION,
+                          Manifest.permission.ACCESS_COARSE_LOCATION }, 1);
+                  }
+                  web = new WebView(this);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setGeolocationEnabled(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  s.setAllowFileAccess(true);
+                  s.setJavaScriptCanOpenWindowsAutomatically(true);
+                  web.setWebViewClient(new WebViewClient());
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override public void onPermissionRequest(final PermissionRequest r) {
+                          runOnUiThread(new Runnable(){ public void run(){ r.grant(r.getResources()); }});
+                      }
+                      @Override public void onGeolocationPermissionsShowPrompt(String o, GeolocationPermissions.Callback cb) {
+                          cb.invoke(o, true, false);
+                      }
+                  });
+                  setContentView(web);
+                  if (b != null) web.restoreState(b); else web.loadUrl(APP_URL);
+              }
+              @Override public void onBackPressed() {
+                  if (web != null && web.canGoBack()) web.goBack(); else super.onBackPressed();
+              }
+              @Override protected void onSaveInstanceState(Bundle out) { super.onSaveInstanceState(out); web.saveState(out); }
+          }
+          EOF
+
+          # app icon (navy tile + gold glass) via ImageMagick, preinstalled on the runner
+          convert -size 512x512 xc:'#1a1a2e' \
+            -fill '#c9a227' -draw "polygon 154,133 358,133 328,378 184,378" \
+            -fill '#c9a227' -draw "roundrectangle 196,372 316,398 6,6" \
+            $ROOT/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+          echo "Project tree:"; find $ROOT -type f | sort
+      - name: Generate signing keystore
+        working-directory: android-app
+        run: |
+          keytool -genkeypair \
+            -dname "CN=Aurum Spirit India Limited, O=Aurum Spirit India Limited, C=IN" \
+            -alias aurum -keyalg RSA -keysize 2048 -validity 10000 \
+            -keystore aurum.jks -storepass aurum12345 -keypass aurum12345
+      - name: Build signed release APK
+        working-directory: android-app
+        run: gradle assembleRelease --no-daemon --stacktrace
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp android-app/app/build/outputs/apk/release/*.apk out/AurumFieldVisit.apk
+          ls -la out
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AurumFieldVisit-apk
+          path: out/AurumFieldVisit.apk
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: fieldvisit-apk
+          name: Aurum FieldVisit - Android app
+          body: Signed APK for the salesman FieldVisit reporting app. Download onto an Android phone and install (allow "install unknown apps" when prompted).
+          files: out/AurumFieldVisit.apk
