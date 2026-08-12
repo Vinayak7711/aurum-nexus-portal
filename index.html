@@ -2540,7 +2540,7 @@ async function mailList(){
     <div class="table-scroll"><table><thead><tr><th style="width:150px;">${mailFolder==='SENT'?'To':'From'}</th><th>Subject</th><th style="width:120px;">When</th><th style="width:80px;">${mailFolder==='IN'?'Handled':''}</th><th style="width:90px;"></th></tr></thead><tbody>
     ${mailMsgs.map(m=>`<tr style="cursor:pointer;${m.is_handled&&mailFolder==='IN'?'opacity:.55;':''}" onclick="mailRead('${m.id}')">` +
       `<td>${esc(((mailFolder==='SENT'?m.to_addr:m.from_addr)||'—').replace(/<.*>/,'').trim().slice(0,30))}</td>` +
-      `<td>${m.is_handled||mailFolder!=='IN'?'':'<b>'}${esc((m.subject||'(no subject)').slice(0,80))}${m.is_handled||mailFolder!=='IN'?'':'</b>'}</td>` +
+      `<td>${m.is_handled||mailFolder!=='IN'?'':'<b>'}${esc((m.subject||'(no subject)').slice(0,80))}${m.is_handled||mailFolder!=='IN'?'':'</b>'}${m.has_attachments?' <span title="Has attachments">📎</span>':''}</td>` +
       `<td style="font-size:12px;">${m.sent_at? new Date(m.sent_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—'}</td>` +
       `<td>${mailFolder==='IN'?(m.is_handled?'✔':'—'):''}</td>` +
       `<td>${mailFolder==='TRASH'
@@ -2571,6 +2571,7 @@ function mailRead(id){
       <h3 style="font-size:15px;">${esc(m.subject||'(no subject)')}</h3>
       <p style="font-size:12px;color:#555;margin:6px 0;">${esc(m.from_addr||'')} → ${esc(m.to_addr||'')} · ${m.sent_at? new Date(m.sent_at).toLocaleString('en-IN') : ''}</p>
       <pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;background:#faf8f4;padding:12px;border-radius:8px;max-height:420px;overflow:auto;">${esc(m.body_text||'(empty)')}</pre>
+      <div id="mail-atts" style="margin-top:10px;"></div>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
         ${mailFolder==='IN' ? `<button class="btn gold sm" onclick="mailCompose('${m.id}')">Reply</button>
         <button class="btn ghost sm" onclick="mailHandled('${m.id}', ${m.is_handled})">${m.is_handled?'Mark unhandled':'Mark handled'}</button>` : ''}
@@ -2580,7 +2581,40 @@ function mailRead(id){
       </div>
       <div id="mail-read-msg"></div>
     </div>`;
+  mailLoadAtts(m.id);
   $('mail-read').scrollIntoView({behavior:'smooth'});
+}
+function fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
+async function mailLoadAtts(msgId){
+  const host = $('mail-atts'); if (!host) return;
+  // metadata only — the base64 payload is fetched lazily on download
+  const { data, error } = await db.schema('mail').from('attachments')
+    .select('id, filename, content_type, size_bytes').eq('message_id', msgId).order('filename');
+  if (error || !data || !data.length){ host.innerHTML=''; return; }
+  host.innerHTML = `<div style="border:1px solid #eadfce;border-radius:8px;padding:10px;background:#fffdf8;">
+    <div style="font-size:12.5px;color:#7a6a4a;font-weight:600;margin-bottom:6px;">📎 ${data.length} attachment${data.length>1?'s':''}</div>
+    ${data.map(a=>`<div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+      <button class="btn ghost sm" onclick="mailDownloadAtt('${a.id}', this)" title="Download">⬇ ${esc((a.filename||'file').slice(0,60))}</button>
+      <span style="font-size:11.5px;color:#999;">${esc((a.content_type||'').split(';')[0])} · ${fmtBytes(a.size_bytes)}</span>
+    </div>`).join('')}
+  </div>`;
+}
+async function mailDownloadAtt(id, btn){
+  const orig = btn ? btn.textContent : ''; if (btn){ btn.disabled=true; btn.textContent='⬇ …'; }
+  try {
+    const { data, error } = await db.schema('mail').from('attachments')
+      .select('filename, content_type, data_b64').eq('id', id).single();
+    if (error || !data){ say('mail-read-msg','Could not fetch the attachment: '+(error?error.message:'not found'), false); return; }
+    const bin = atob(String(data.data_b64||'').replace(/\s/g,''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: data.content_type || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=data.filename||'attachment';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  } catch(e){ say('mail-read-msg','Download failed: '+e.message, false); }
+  finally { if (btn){ btn.disabled=false; btn.textContent=orig; } }
 }
 async function mailHandled(id, undo){
   const { error } = await db.schema('mail').rpc('mark_handled', { p_msg: id, p_undo: undo });
