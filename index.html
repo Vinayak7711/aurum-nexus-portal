@@ -379,6 +379,7 @@
     <div class="subtabs">
       <button class="chip on" id="ac-banks" onclick="acctTab('banks')">Banks</button>
       <button class="chip" id="ac-ledger" onclick="acctTab('ledger')">Ledger</button>
+      <button class="chip" id="ac-petty" onclick="acctTab('petty')">Petty Cash</button>
       <button class="chip" id="ac-salary" onclick="acctTab('salary')">Salary</button>
       <button class="chip" id="ac-adv" onclick="acctTab('adv')">Advances</button>
       <button class="chip" id="ac-assets" onclick="acctTab('assets')">Assets</button>
@@ -1796,6 +1797,11 @@ async function purchaseTab(t){
   if (t === 'pos'){
     const { data: pos, error } = await G.from('v_po_tracking').select('*').order('order_date', {ascending:false}).limit(200);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    let mmcBy = {};
+    if ((pos||[]).length){
+      try { const { data: fl } = await G.from('purchase_orders').select('id, bill_to_mmc').in('id', pos.map(p=>p.id));
+            (fl||[]).forEach(f => mmcBy[f.id] = f.bill_to_mmc); } catch(e){ /* badge optional */ }
+    }
     let amounts = {};
     if (canFin() && (pos||[]).length){
       const { data: lines } = await G.from('po_lines').select('id, po_id').in('po_id', pos.map(p=>p.id));
@@ -1808,7 +1814,7 @@ async function purchaseTab(t){
     B.innerHTML = `
       <h4 class="sec">Purchase orders — placed → dispatched → received</h4>
       <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹</th>':''}<th>Status</th><th></th></tr></thead><tbody>
-      ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b></td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
+      ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
         `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${PO_LABEL[p.status]||p.status}</span></td>` +
@@ -1842,6 +1848,7 @@ async function purchaseTab(t){
         <div><label>Vendor (registered) *</label><select id="po-vendor">${(vendors||[]).map(v=>`<option value="${v.id}" ${preVendor===v.id?'selected':''}>${esc(v.name)} (${esc(v.code)})${v.status==='PENDING'?' — pending':''}</option>`).join('')}</select>${preVendor?'<span style="font-size:11px;color:#1a7f37;">✔ vendor taken from the material request</span>':''}</div>
         <div><label>Expected delivery</label><input type="date" id="po-expected"></div>
       </div>
+      <div class="switch" style="margin:10px 0;"><input type="checkbox" id="po-billmmc"><span>Vendor bills &amp; delivers <b>directly to MMC</b> — material still belongs to Aurum; on receipt the stock goes straight to MMC custody (no company store)</span></div>
       <label>Fulfils material request</label>
       <select id="po-req" onchange="poLinkReq=this.value||null; poLines=[]; purchaseTab('new')"><option value="">— none —</option>${(reqs||[]).map(r=>`<option value="${r.id}" ${poLinkReq===r.id?'selected':''}>${esc(r.req_no)}${r.needed_by?' · needed by '+r.needed_by:''}</option>`).join('')}</select>
       <h4 class="sec" style="margin-top:14px;">Lines</h4>
@@ -1969,6 +1976,10 @@ async function poPlace(){
     p_expected: $('po-expected').value || null,
     p_request: poLinkReq, p_remarks: $('po-remarks').value.trim() || null });
   if (error){ say('pon-msg','Could not place the order: '+error.message,false); return; }
+  if ($('po-billmmc') && $('po-billmmc').checked && data){
+    const { error: mErr } = await db.schema('mfg').rpc('po_set_bill_mmc', { p_po: data, p_flag: true });
+    if (mErr){ say('pon-msg','PO created, but the direct-to-MMC flag could not be set: '+mErr.message,false); return; }
+  }
   poLines = []; poLinkReq = null; purchaseTab('pos');
 }
 async function poApprove(id){
@@ -1990,9 +2001,12 @@ async function poReceiveForm(id, poNo){
   const G = db.schema('mfg');
   const { data: lines } = await G.from('po_lines').select('*').eq('po_id', id);
   const { data: recd } = await G.from('rm_receipts').select('rm_item_id, qty').eq('po_id', id);
+  let mmcPO = false;
+  try { const { data: pr } = await G.from('purchase_orders').select('bill_to_mmc').eq('id', id).maybeSingle(); mmcPO = !!(pr && pr.bill_to_mmc); } catch(e){}
   const recdBy = {}; (recd||[]).forEach(r => recdBy[r.rm_item_id] = (recdBy[r.rm_item_id]||0) + Number(r.qty));
   $('po-recv').innerHTML = `
     <h4 class="sec" style="margin-top:16px;">Receive against ${esc(poNo)}</h4>
+    ${mmcPO ? '<div class="msg ok" style="margin:6px 0;">This PO is billed &amp; delivered <b>directly to MMC</b> — on recording, the stock goes straight to MMC custody (company store stays untouched). The material remains Aurum property.</div>' : ''}
     <div class="table-scroll"><table><thead><tr><th>Material</th><th class="amount">Ordered</th><th class="amount">Received</th><th class="amount">Pending</th><th style="width:130px;">Receive now</th></tr></thead><tbody>
     ${(lines||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};const got=recdBy[l.rm_item_id]||0;const pend=Number(l.qty)-got;
       return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${Number(l.qty)}</td><td class="amount">${got}</td><td class="amount">${pend}</td>` +
@@ -2098,7 +2112,7 @@ async function openAcct(){
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
 function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
 async function acctTab(t){
-  for (const k of ['banks','ledger','salary','adv','assets']) $('ac-'+k).classList.toggle('on', k===t);
+  for (const k of ['banks','ledger','petty','salary','adv','assets']) $('ac-'+k).classList.toggle('on', k===t);
   const B = $('acct-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const A = db.schema('acct');
 
@@ -2136,6 +2150,47 @@ async function acctTab(t){
                 (isDir()?`<button class="mini" onclick="acEdit('${e.id}',${e.amount})">Edit</button> <button class="mini" onclick="acDelEntry('${e.id}')">Delete</button>`:'')}</td></tr>`;}).join('')
         || '<tr><td colspan="9" style="color:#777">No entries yet.</td></tr>'}
       </tbody></table></div>`;
+    return;
+  }
+
+  if (t === 'petty'){
+    const { data: pcs, error } = await A.from('petty_cash').select('*')
+      .order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(200);
+    if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    const rows = pcs || [];
+    const ym = new Date().toISOString().slice(0,7);
+    const monthTotal = rows.filter(r=>r.status==='APPROVED' && String(r.expense_date).slice(0,7)===ym)
+                          .reduce((s,r)=>s+Number(r.amount),0);
+    const pendN = rows.filter(r=>r.status==='PENDING_APPROVAL').length;
+    const CATS = ['Office supplies','Tea, coffee & snacks','Postage & courier','Emergency repairs','Local travel (taxi / auto)','Other'];
+    B.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Approved this month</div><div style="font-size:20px;font-weight:700;color:#1a7f37">₹ ${inr(monthTotal)}</div></div>
+        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Awaiting approval</div><div style="font-size:20px;font-weight:700;color:${pendN?'#b8860b':'#777'}">${pendN}</div></div>
+      </div>
+      ${canFinEdit() ? `
+      <div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Post a cash expense</h2>
+        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Day-to-day office spends paid in cash. Posted by Accounts; needs approval by the Accounts head or a Director.</p>
+        <div class="row2c"><div><label>Date</label><input type="date" id="pc-date" value="${calFmt(new Date())}"></div>
+          <div><label>Category *</label><select id="pc-cat">${CATS.map(c=>`<option>${c}</option>`).join('')}</select></div></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Amount ₹ *</label><input type="number" id="pc-amt" min="1" step="any"></div>
+          <div><label>Paid to</label><input type="text" id="pc-paidto" placeholder="Shopkeeper / driver / courier…"></div></div>
+        <label>Note</label><input type="text" id="pc-desc" placeholder="What it was for (e.g. A4 paper, snacks for meeting, urgent tap repair)">
+        <button class="btn gold sm" style="margin-top:10px;" onclick="acPettyAdd()">Post expense</button>
+        <div id="pc-msg"></div></div>` : ''}
+      <h4 class="sec">Petty cash book</h4>
+      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / note</th><th class="amount">Amount ₹</th><th>Posted by</th><th>Status</th><th></th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td><td>${esc(r.category)}</td>` +
+        `<td>${esc(r.paid_to||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}${r.approval_note?'<br><span style="font-size:10.5px;color:#b8860b">note: '+esc(r.approval_note)+'</span>':''}</td>` +
+        `<td class="amount" style="font-weight:600">${inr(r.amount)}</td>` +
+        `<td style="font-size:12px;">${esc(acStaffName(r.created_by))}</td>` +
+        `<td><span style="color:${AC_ST[r.status]||'#333'};font-weight:600;font-size:12px">${acLbl(r.status)}</span>${r.approved_by?'<br><span style="font-size:10.5px;color:#777">by '+esc(acStaffName(r.approved_by))+'</span>':''}</td>` +
+        `<td style="white-space:nowrap">${r.status==='PENDING_APPROVAL'&&canFinApprove()
+            ? `<button class="mini" onclick="acPettyDecide('${r.id}',true)">Approve</button> <button class="mini" onclick="acPettyDecide('${r.id}',false)" style="color:#c0392b;">Reject</button> `
+            : ''}${dirDelBtn('acct','petty_cash', r.id, r.pc_no, "acctTab('petty')")}</td></tr>`).join('')
+        || '<tr><td colspan="8" style="color:#777">No petty cash entries yet.</td></tr>'}
+      </tbody></table></div>
+      <div id="pc-list-msg"></div>`;
     return;
   }
 
@@ -2228,6 +2283,25 @@ async function acctTab(t){
       <div id="ac-asset-panel"></div>`;
     return;
   }
+}
+async function acPettyAdd(){
+  const amt = Number($('pc-amt').value);
+  if (!(amt > 0)){ say('pc-msg','Enter the amount paid.',false); return; }
+  const { error } = await db.schema('acct').rpc('petty_add', {
+    p_date: $('pc-date').value || null,
+    p_category: $('pc-cat').value,
+    p_amount: amt,
+    p_paid_to: $('pc-paidto').value.trim() || null,
+    p_desc: $('pc-desc').value.trim() || null });
+  if (error){ say('pc-msg','Could not post: '+error.message,false); return; }
+  acctTab('petty');
+}
+async function acPettyDecide(id, approve){
+  const note = prompt(approve ? 'Approve this cash expense?\nOptional note:' : 'Reject this cash expense?\nOptional reason:', '');
+  if (note === null) return;
+  const { error } = await db.schema('acct').rpc('petty_decide', { p_id: id, p_approve: approve, p_note: note || null });
+  if (error){ say('pc-list-msg','Could not update: '+error.message,false); return; }
+  acctTab('petty');
 }
 function acDocBadge(level, nextExpiry){
   const map={EXPIRED:['#b3261e','EXPIRED'],RED:['#b3261e','DUE'],AMBER:['#b8860b','SOON'],OK:['#1a7f37','OK']};
