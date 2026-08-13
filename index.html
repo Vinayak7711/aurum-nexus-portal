@@ -380,6 +380,7 @@
       <button class="chip on" id="ac-banks" onclick="acctTab('banks')">Banks</button>
       <button class="chip" id="ac-ledger" onclick="acctTab('ledger')">Ledger</button>
       <button class="chip" id="ac-petty" onclick="acctTab('petty')">Petty Cash</button>
+      <button class="chip" id="ac-tax" onclick="acctTab('tax')">Purchase Tax</button>
       <button class="chip" id="ac-salary" onclick="acctTab('salary')">Salary</button>
       <button class="chip" id="ac-adv" onclick="acctTab('adv')">Advances</button>
       <button class="chip" id="ac-assets" onclick="acctTab('assets')">Assets</button>
@@ -1806,14 +1807,14 @@ async function purchaseTab(t){
     if (canFin() && (pos||[]).length){
       const { data: lines } = await G.from('po_lines').select('id, po_id').in('po_id', pos.map(p=>p.id));
       if (lines && lines.length){
-        const { data: vals } = await G.from('po_values').select('line_id, amount').in('line_id', lines.map(l=>l.id));
-        const byLine = {}; (vals||[]).forEach(v => byLine[v.line_id] = Number(v.amount));
+        const { data: vals } = await G.from('po_values').select('line_id, amount, tax_amount').in('line_id', lines.map(l=>l.id));
+        const byLine = {}; (vals||[]).forEach(v => byLine[v.line_id] = Number(v.amount) + Number(v.tax_amount||0));
         lines.forEach(l => { if (byLine[l.id]!=null) amounts[l.po_id] = (amounts[l.po_id]||0) + byLine[l.id]; });
       }
     }
     B.innerHTML = `
       <h4 class="sec">Purchase orders — placed → dispatched → received</h4>
-      <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹</th>':''}<th>Status</th><th></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
       ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
@@ -1838,7 +1839,7 @@ async function purchaseTab(t){
       preVendor = lr && lr.vendor_id;
       if (!poLines.length){
         const { data: rl } = await G.from('rm_request_lines').select('*').eq('request_id', poLinkReq);
-        (rl||[]).forEach(l => poLines.push({ rm_item_id: l.rm_item_id, qty: Number(l.qty), rate: 0 }));
+        (rl||[]).forEach(l => poLines.push({ rm_item_id: l.rm_item_id, qty: Number(l.qty), rate: 0, tax_type: 'NONE', tax_rate: 0 }));
       }
     }
     const itemName = id => (rmItems.find(i=>i.id===id)||{}).name || '?';
@@ -1857,11 +1858,19 @@ async function purchaseTab(t){
         <div class="row2c"><div><label>Qty *</label><input type="number" id="pol-qty" min="0.01" step="any"></div>
         <div><label>Rate ₹/unit *</label><input type="number" id="pol-rate" min="0" step="any"></div></div>
       </div>
+      <div class="row2c" style="margin-top:8px;">
+        <div><label>Tax charged by vendor</label><select id="pol-taxtype"><option value="NONE">No tax</option><option value="GST">GST</option><option value="VAT">VAT</option><option value="SALES_TAX">Sales tax</option></select></div>
+        <div><label>Tax rate % <span style="color:#999;font-weight:normal;font-size:11px;">— as on the vendor's bill; you get this back as input credit</span></label><input type="number" id="pol-taxrate" min="0" max="100" step="any" placeholder="e.g. 18"></div>
+      </div>
       <button class="btn ghost sm" style="margin-top:8px;" onclick="poAddLine()">+ Add line</button>
-      <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Amount ₹</th><th></th></tr></thead><tbody id="pol-rows">
-      ${poLines.map((l,i)=>`<tr><td>${esc(itemName(l.rm_item_id))}</td><td class="amount">${l.qty}</td><td class="amount">${inr(l.rate)}</td><td class="amount">${inr(l.qty*l.rate)}</td><td><button class="mini" onclick="poLines.splice(${i},1);purchaseTab('new')">✖</button></td></tr>`).join('')}
+      <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Amount ₹</th><th>Tax</th><th class="amount">Tax ₹</th><th></th></tr></thead><tbody id="pol-rows">
+      ${poLines.map((l,i)=>{const tr=Number(l.tax_rate||0);const tx=(l.tax_type&&l.tax_type!=='NONE'&&tr>0)?l.qty*l.rate*tr/100:0;
+        return `<tr><td>${esc(itemName(l.rm_item_id))}</td><td class="amount">${l.qty}</td><td class="amount">${inr(l.rate)}</td><td class="amount">${inr(l.qty*l.rate)}</td>` +
+        `<td>${tx>0?esc((TAX_LBL[l.tax_type]||l.tax_type)+' '+tr+'%'):'—'}</td><td class="amount">${tx>0?inr(tx):''}</td>` +
+        `<td><button class="mini" onclick="poLines.splice(${i},1);purchaseTab('new')">✖</button></td></tr>`;}).join('')}
       </tbody></table></div>
-      <p style="font-size:13px;"><b>Total: ₹ ${inr(poLines.reduce((s,l)=>s+l.qty*l.rate,0))}</b></p>
+      ${(()=>{const sub=poLines.reduce((s,l)=>s+l.qty*l.rate,0);const tax=poLines.reduce((s,l)=>s+((l.tax_type&&l.tax_type!=='NONE'&&Number(l.tax_rate||0)>0)?l.qty*l.rate*Number(l.tax_rate)/100:0),0);
+        return `<p style="font-size:13px;">Sub-total: ₹ ${inr(sub)}${tax>0?' &nbsp;·&nbsp; Tax: <span style="color:#1a7f37;font-weight:600">₹ '+inr(tax)+'</span> &nbsp;·&nbsp; <b>Grand total: ₹ '+inr(sub+tax)+'</b>':' &nbsp;·&nbsp; <b>Total: ₹ '+inr(sub)+'</b>'}</p>`;})()}
       <label>Remarks</label><input type="text" id="po-remarks">
       ${canFinApprove() ? '' : '<p style="font-size:12px;color:#b8860b;margin-top:6px;">This order will wait for approval by the Accounts head or the Director before it can be dispatched or received.</p>'}
       <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">${canFinApprove() ? 'Place purchase order' : 'Submit for approval'}</button>
@@ -1964,8 +1973,12 @@ function poAddLine(){
   if (!(qty > 0)){ say('pon-msg','Quantity must be above zero.',false); return; }
   if (!(rate >= 0) || $('pol-rate').value === ''){ say('pon-msg','Enter the rate (0 or more).',false); return; }
   const id = $('pol-item').value;
+  const taxType = $('pol-taxtype') ? $('pol-taxtype').value : 'NONE';
+  const taxRate = taxType === 'NONE' ? 0 : Number($('pol-taxrate').value || 0);
+  if (taxType !== 'NONE' && !(taxRate > 0)){ say('pon-msg','Enter the tax rate % for '+(TAX_LBL[taxType]||taxType)+' (above zero), or pick "No tax".',false); return; }
   const ex = poLines.find(l=>l.rm_item_id===id);
-  if (ex){ ex.qty += qty; ex.rate = rate; } else poLines.push({ rm_item_id: id, qty, rate });
+  if (ex){ ex.qty += qty; ex.rate = rate; ex.tax_type = taxType; ex.tax_rate = taxRate; }
+  else poLines.push({ rm_item_id: id, qty, rate, tax_type: taxType, tax_rate: taxRate });
   purchaseTab('new');
 }
 async function poPlace(){
@@ -1979,6 +1992,12 @@ async function poPlace(){
   if ($('po-billmmc') && $('po-billmmc').checked && data){
     const { error: mErr } = await db.schema('mfg').rpc('po_set_bill_mmc', { p_po: data, p_flag: true });
     if (mErr){ say('pon-msg','PO created, but the direct-to-MMC flag could not be set: '+mErr.message,false); return; }
+  }
+  const taxes = poLines.filter(l=>l.tax_type && l.tax_type!=='NONE' && Number(l.tax_rate)>0)
+                       .map(l=>({ rm_item_id: l.rm_item_id, tax_type: l.tax_type, tax_rate: Number(l.tax_rate) }));
+  if (taxes.length && data){
+    const { error: tErr } = await db.schema('mfg').rpc('po_set_line_tax', { p_po: data, p_taxes: taxes });
+    if (tErr){ say('pon-msg','PO created, but the tax details could not be saved: '+tErr.message,false); return; }
   }
   poLines = []; poLinkReq = null; purchaseTab('pos');
 }
@@ -2112,7 +2131,7 @@ async function openAcct(){
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
 function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
 async function acctTab(t){
-  for (const k of ['banks','ledger','petty','salary','adv','assets']) $('ac-'+k).classList.toggle('on', k===t);
+  for (const k of ['banks','ledger','petty','tax','salary','adv','assets']) $('ac-'+k).classList.toggle('on', k===t);
   const B = $('acct-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const A = db.schema('acct');
 
@@ -2208,6 +2227,24 @@ async function acctTab(t){
         || '<tr><td colspan="9" style="color:#777">No petty cash entries yet — top up the box from a bank withdrawal first.</td></tr>'}
       </tbody></table></div>
       <div id="pc-list-msg"></div>`;
+    return;
+  }
+
+  if (t === 'tax'){
+    if (!canFin()){ B.innerHTML = '<p style="color:#777">Purchase tax records are visible to Accounts (finance) and the Director.</p>'; return; }
+    const now = new Date();
+    const fyStart = (now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear()-1) + '-04-01';
+    B.innerHTML = `
+      <h4 class="sec">Tax paid on purchases — input credit ledger</h4>
+      <p style="font-size:12px;color:#777;margin:4px 0 10px;">GST / VAT / sales tax collected by vendors on your purchase orders. The tax you paid is your input credit. Pick a date range (PO date) and, if you want, a single tax type.</p>
+      <div class="row2c">
+        <div class="row2c"><div><label>From date</label><input type="date" id="tx-from" value="${fyStart}"></div>
+        <div><label>To date</label><input type="date" id="tx-to" value="${calFmt(now)}"></div></div>
+        <div class="row2c"><div><label>Tax type</label><select id="tx-type"><option value="">All taxes</option><option value="GST">GST</option><option value="VAT">VAT</option><option value="SALES_TAX">Sales tax</option></select></div>
+        <div><label>&nbsp;</label><button class="btn gold sm" style="display:block;" onclick="acTaxRun()">Show summary</button></div></div>
+      </div>
+      <div id="tx-out" style="margin-top:12px;"></div>`;
+    acTaxRun();
     return;
   }
 
@@ -2321,6 +2358,44 @@ async function acPettyAdd(){
     p_desc: $('pc-desc').value.trim() || null });
   if (error){ say('pc-msg','Could not post: '+error.message,false); return; }
   acctTab('petty');
+}
+const TAX_LBL = { GST:'GST', VAT:'VAT', SALES_TAX:'Sales tax' };
+async function acTaxRun(){
+  const out = $('tx-out'); if (!out) return;
+  const from = $('tx-from').value, to = $('tx-to').value;
+  if (!from || !to){ out.innerHTML = '<div class="msg err">Pick both a From date and a To date.</div>'; return; }
+  out.innerHTML = '<p style="color:#777">Loading…</p>';
+  const ty = $('tx-type').value || null;
+  const { data, error } = await db.schema('acct').rpc('purchase_tax_report', { p_from: from, p_to: to, p_type: ty });
+  if (error){ out.innerHTML = `<div class="msg err">Could not load: ${esc(error.message)}</div>`; return; }
+  const rows = data || [];
+  const totTaxable = rows.reduce((s,r)=>s+Number(r.taxable),0);
+  const totTax = rows.reduce((s,r)=>s+Number(r.tax),0);
+  const byType = {};
+  rows.forEach(r => {
+    const k = r.tax_type + '|' + Number(r.tax_rate);
+    (byType[k] ??= { tax_type:r.tax_type, tax_rate:Number(r.tax_rate), taxable:0, tax:0, n:0 });
+    byType[k].taxable += Number(r.taxable); byType[k].tax += Number(r.tax); byType[k].n++;
+  });
+  const groups = Object.values(byType).sort((a,b)=>a.tax_type.localeCompare(b.tax_type)||a.tax_rate-b.tax_rate);
+  out.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Purchases (taxable value)</div><div style="font-size:20px;font-weight:700;">₹ ${inr(totTaxable)}</div></div>
+      <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Tax paid — your input credit</div><div style="font-size:20px;font-weight:700;color:#1a7f37">₹ ${inr(totTax)}</div></div>
+      <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Taxed PO lines</div><div style="font-size:20px;font-weight:700;">${rows.length}</div></div>
+    </div>
+    <h4 class="sec">Summary by tax &amp; rate</h4>
+    <div class="table-scroll"><table><thead><tr><th>Tax</th><th class="amount">Rate %</th><th class="amount">Lines</th><th class="amount">Taxable ₹</th><th class="amount">Tax (input credit) ₹</th></tr></thead><tbody>
+    ${groups.map(g=>`<tr><td><b>${esc(TAX_LBL[g.tax_type]||g.tax_type)}</b></td><td class="amount">${g.tax_rate}%</td><td class="amount">${g.n}</td><td class="amount">${inr(g.taxable)}</td><td class="amount" style="font-weight:700;color:#1a7f37">${inr(g.tax)}</td></tr>`).join('')
+      || '<tr><td colspan="5" style="color:#777">No taxed purchases in this period.</td></tr>'}
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:14px;">Detail — every taxed purchase line</h4>
+    <div class="table-scroll"><table><thead><tr><th>PO date</th><th>PO</th><th>Vendor</th><th>Material</th><th class="amount">Taxable ₹</th><th>Tax</th><th class="amount">Rate %</th><th class="amount">Tax ₹</th><th>PO status</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${r.order_date}</td><td><b>${esc(r.po_no)}</b></td><td>${esc(r.vendor)}</td><td>${esc(r.item)}</td>` +
+      `<td class="amount">${inr(r.taxable)}</td><td>${esc(TAX_LBL[r.tax_type]||r.tax_type)}</td><td class="amount">${Number(r.tax_rate)}</td>` +
+      `<td class="amount" style="font-weight:600;color:#1a7f37">${inr(r.tax)}</td><td style="font-size:12px;">${esc(r.po_status)}</td></tr>`).join('')
+      || '<tr><td colspan="9" style="color:#777">Nothing to show — place POs with a tax type &amp; rate and they will appear here.</td></tr>'}
+    </tbody></table></div>`;
 }
 async function acPettyDecide(id, approve){
   const note = prompt(approve ? 'Approve this cash expense?\nOptional note:' : 'Reject this cash expense?\nOptional reason:', '');
