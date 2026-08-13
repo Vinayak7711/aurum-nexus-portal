@@ -1848,7 +1848,7 @@ async function purchaseTab(t){
         <div><label>Vendor (registered) *</label><select id="po-vendor">${(vendors||[]).map(v=>`<option value="${v.id}" ${preVendor===v.id?'selected':''}>${esc(v.name)} (${esc(v.code)})${v.status==='PENDING'?' — pending':''}</option>`).join('')}</select>${preVendor?'<span style="font-size:11px;color:#1a7f37;">✔ vendor taken from the material request</span>':''}</div>
         <div><label>Expected delivery</label><input type="date" id="po-expected"></div>
       </div>
-      <div class="switch" style="margin:10px 0;"><input type="checkbox" id="po-billmmc"><span>Vendor bills &amp; delivers <b>directly to MMC</b> — material still belongs to Aurum; on receipt the stock goes straight to MMC custody (no company store)</span></div>
+      <div class="switch" style="margin:10px 0;"><input type="checkbox" id="po-billmmc"><span>Vendor bills &amp; delivers <b>directly to MMC</b> — material still belongs to Aurum; on receipt the stock is taken into the <b>company store</b> as usual</span></div>
       <label>Fulfils material request</label>
       <select id="po-req" onchange="poLinkReq=this.value||null; poLines=[]; purchaseTab('new')"><option value="">— none —</option>${(reqs||[]).map(r=>`<option value="${r.id}" ${poLinkReq===r.id?'selected':''}>${esc(r.req_no)}${r.needed_by?' · needed by '+r.needed_by:''}</option>`).join('')}</select>
       <h4 class="sec" style="margin-top:14px;">Lines</h4>
@@ -2006,7 +2006,7 @@ async function poReceiveForm(id, poNo){
   const recdBy = {}; (recd||[]).forEach(r => recdBy[r.rm_item_id] = (recdBy[r.rm_item_id]||0) + Number(r.qty));
   $('po-recv').innerHTML = `
     <h4 class="sec" style="margin-top:16px;">Receive against ${esc(poNo)}</h4>
-    ${mmcPO ? '<div class="msg ok" style="margin:6px 0;">This PO is billed &amp; delivered <b>directly to MMC</b> — on recording, the stock goes straight to MMC custody (company store stays untouched). The material remains Aurum property.</div>' : ''}
+    ${mmcPO ? '<div class="msg ok" style="margin:6px 0;">This PO is billed &amp; delivered <b>directly to MMC</b> — on recording, the stock is received into the <b>company store</b>. The material remains Aurum property; issue it to MMC later through the normal RM issue flow when needed.</div>' : ''}
     <div class="table-scroll"><table><thead><tr><th>Material</th><th class="amount">Ordered</th><th class="amount">Received</th><th class="amount">Pending</th><th style="width:130px;">Receive now</th></tr></thead><tbody>
     ${(lines||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};const got=recdBy[l.rm_item_id]||0;const pend=Number(l.qty)-got;
       return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${Number(l.qty)}</td><td class="amount">${got}</td><td class="amount">${pend}</td>` +
