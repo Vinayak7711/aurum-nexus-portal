@@ -2159,15 +2159,30 @@ async function acctTab(t){
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const rows = pcs || [];
     const ym = new Date().toISOString().slice(0,7);
-    const monthTotal = rows.filter(r=>r.status==='APPROVED' && String(r.expense_date).slice(0,7)===ym)
+    const isTop = r => r.entry_kind === 'TOPUP';
+    const cashInHand = rows.filter(r=>r.status==='APPROVED')
+                          .reduce((s,r)=>s + (isTop(r) ? Number(r.amount) : -Number(r.amount)), 0);
+    const monthTotal = rows.filter(r=>r.status==='APPROVED' && !isTop(r) && String(r.expense_date).slice(0,7)===ym)
                           .reduce((s,r)=>s+Number(r.amount),0);
     const pendN = rows.filter(r=>r.status==='PENDING_APPROVAL').length;
     const CATS = ['Office supplies','Tea, coffee & snacks','Postage & courier','Emergency repairs','Local travel (taxi / auto)','Other'];
+    const bankName = id => { const b = acBanks.find(x=>x.id===id); return b ? b.name : 'bank'; };
+    const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
     B.innerHTML = `
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Approved this month</div><div style="font-size:20px;font-weight:700;color:#1a7f37">₹ ${inr(monthTotal)}</div></div>
+        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Cash in hand</div><div style="font-size:20px;font-weight:700;color:${cashInHand>=0?'#1a7f37':'#b3261e'}">₹ ${inr(cashInHand)}</div></div>
+        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Spent this month</div><div style="font-size:20px;font-weight:700;">₹ ${inr(monthTotal)}</div></div>
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Awaiting approval</div><div style="font-size:20px;font-weight:700;color:${pendN?'#b8860b':'#777'}">${pendN}</div></div>
       </div>
+      ${canFinEdit() ? `
+      <div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Top up the cash box (withdrawn from bank)</h2>
+        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Cash taken out of a bank account for petty use. On approval, the withdrawal is posted in the finance ledger (money OUT of that bank) and the amount is credited to the cash box.</p>
+        <div class="row2c"><div><label>From bank *</label><select id="pt-bank">${bankOpts}</select></div>
+          <div><label>Amount ₹ *</label><input type="number" id="pt-amt" min="1" step="any"></div></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Date</label><input type="date" id="pt-date" value="${calFmt(new Date())}"></div>
+          <div><label>Note</label><input type="text" id="pt-note" placeholder="e.g. weekly cash float"></div></div>
+        <button class="btn ghost sm" style="margin-top:10px;" onclick="acPettyTopup()">＋ Credit petty cash</button>
+        <div id="pt-msg"></div></div>` : ''}
       ${canFinEdit() ? `
       <div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Post a cash expense</h2>
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">Day-to-day office spends paid in cash. Posted by Accounts; needs approval by the Accounts head or a Director.</p>
@@ -2179,16 +2194,18 @@ async function acctTab(t){
         <button class="btn gold sm" style="margin-top:10px;" onclick="acPettyAdd()">Post expense</button>
         <div id="pc-msg"></div></div>` : ''}
       <h4 class="sec">Petty cash book</h4>
-      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / note</th><th class="amount">Amount ₹</th><th>Posted by</th><th>Status</th><th></th></tr></thead><tbody>
-      ${rows.map(r=>`<tr><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td><td>${esc(r.category)}</td>` +
+      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / note</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Posted by</th><th>Status</th><th></th></tr></thead><tbody>
+      ${rows.map(r=>`<tr${isTop(r)?' style="background:#f4faf5;"':''}><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td>` +
+        `<td>${isTop(r)?'💵 Top-up from <b>'+esc(bankName(r.bank_id))+'</b>':esc(r.category)}</td>` +
         `<td>${esc(r.paid_to||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}${r.approval_note?'<br><span style="font-size:10.5px;color:#b8860b">note: '+esc(r.approval_note)+'</span>':''}</td>` +
-        `<td class="amount" style="font-weight:600">${inr(r.amount)}</td>` +
+        `<td class="amount" style="font-weight:600;color:#1a7f37">${isTop(r)?inr(r.amount):''}</td>` +
+        `<td class="amount" style="font-weight:600;color:#b3261e">${isTop(r)?'':inr(r.amount)}</td>` +
         `<td style="font-size:12px;">${esc(acStaffName(r.created_by))}</td>` +
         `<td><span style="color:${AC_ST[r.status]||'#333'};font-weight:600;font-size:12px">${acLbl(r.status)}</span>${r.approved_by?'<br><span style="font-size:10.5px;color:#777">by '+esc(acStaffName(r.approved_by))+'</span>':''}</td>` +
         `<td style="white-space:nowrap">${r.status==='PENDING_APPROVAL'&&canFinApprove()
             ? `<button class="mini" onclick="acPettyDecide('${r.id}',true)">Approve</button> <button class="mini" onclick="acPettyDecide('${r.id}',false)" style="color:#c0392b;">Reject</button> `
             : ''}${dirDelBtn('acct','petty_cash', r.id, r.pc_no, "acctTab('petty')")}</td></tr>`).join('')
-        || '<tr><td colspan="8" style="color:#777">No petty cash entries yet.</td></tr>'}
+        || '<tr><td colspan="9" style="color:#777">No petty cash entries yet — top up the box from a bank withdrawal first.</td></tr>'}
       </tbody></table></div>
       <div id="pc-list-msg"></div>`;
     return;
@@ -2283,6 +2300,15 @@ async function acctTab(t){
       <div id="ac-asset-panel"></div>`;
     return;
   }
+}
+async function acPettyTopup(){
+  const amt = Number($('pt-amt').value);
+  if (!(amt > 0)){ say('pt-msg','Enter the amount withdrawn from the bank.',false); return; }
+  const { error } = await db.schema('acct').rpc('petty_topup', {
+    p_bank: $('pt-bank').value, p_amount: amt,
+    p_date: $('pt-date').value || null, p_note: $('pt-note').value.trim() || null });
+  if (error){ say('pt-msg','Could not post the top-up: '+error.message,false); return; }
+  acctTab('petty');
 }
 async function acPettyAdd(){
   const amt = Number($('pc-amt').value);
