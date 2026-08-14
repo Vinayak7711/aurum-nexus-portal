@@ -1863,14 +1863,24 @@ async function purchaseTab(t){
         <div><label>Tax rate % <span style="color:#999;font-weight:normal;font-size:11px;">— as on the vendor's bill; you get this back as input credit</span></label><input type="number" id="pol-taxrate" min="0" max="100" step="any" placeholder="e.g. 18"></div>
       </div>
       <button class="btn ghost sm" style="margin-top:8px;" onclick="poAddLine()">+ Add line</button>
-      <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Amount ₹</th><th>Tax</th><th class="amount">Tax ₹</th><th></th></tr></thead><tbody id="pol-rows">
-      ${poLines.map((l,i)=>{const tr=Number(l.tax_rate||0);const tx=(l.tax_type&&l.tax_type!=='NONE'&&tr>0)?l.qty*l.rate*tr/100:0;
-        return `<tr><td>${esc(itemName(l.rm_item_id))}</td><td class="amount">${l.qty}</td><td class="amount">${inr(l.rate)}</td><td class="amount">${inr(l.qty*l.rate)}</td>` +
-        `<td>${tx>0?esc((TAX_LBL[l.tax_type]||l.tax_type)+' '+tr+'%'):'—'}</td><td class="amount">${tx>0?inr(tx):''}</td>` +
-        `<td><button class="mini" onclick="poLines.splice(${i},1);purchaseTab('new')">✖</button></td></tr>`;}).join('')}
+      ${poLines.length?'<p style="font-size:12px;color:#777;margin:6px 0 0;">Every line below can be edited in place — set the quantity, rate and tax for each material (including the ones brought in from a request), then place the order.</p>':''}
+      <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹/unit</th><th class="amount">Amount ₹</th><th>Tax</th><th>Tax %</th><th class="amount">Tax ₹</th><th></th></tr></thead><tbody id="pol-rows">
+      ${poLines.map((l,i)=>`<tr>` +
+        `<td>${esc(itemName(l.rm_item_id))}</td>` +
+        `<td class="amount"><input type="number" value="${Number(l.qty)||''}" min="0.01" step="any" style="width:80px;" oninput="poLineUpd(${i},'qty',this.value)"></td>` +
+        `<td class="amount"><input type="number" value="${Number(l.rate)||''}" min="0" step="any" placeholder="rate" style="width:95px;" oninput="poLineUpd(${i},'rate',this.value)"></td>` +
+        `<td class="amount" id="pol-amt-${i}">${inr(l.qty*l.rate)}</td>` +
+        `<td><select style="width:100px;" onchange="poLineUpd(${i},'tax_type',this.value)">` +
+          `<option value="NONE" ${(!l.tax_type||l.tax_type==='NONE')?'selected':''}>No tax</option>` +
+          `<option value="GST" ${l.tax_type==='GST'?'selected':''}>GST</option>` +
+          `<option value="VAT" ${l.tax_type==='VAT'?'selected':''}>VAT</option>` +
+          `<option value="SALES_TAX" ${l.tax_type==='SALES_TAX'?'selected':''}>Sales tax</option></select></td>` +
+        `<td><input type="number" id="pol-taxr-${i}" value="${Number(l.tax_rate)||''}" min="0" max="100" step="any" placeholder="%" style="width:65px;" oninput="poLineUpd(${i},'tax_rate',this.value)"></td>` +
+        `<td class="amount" id="pol-tax-${i}">${poLineTax(l)>0?inr(poLineTax(l)):'—'}</td>` +
+        `<td><button class="mini" onclick="poLines.splice(${i},1);purchaseTab('new')">✖</button></td></tr>`).join('')}
       </tbody></table></div>
-      ${(()=>{const sub=poLines.reduce((s,l)=>s+l.qty*l.rate,0);const tax=poLines.reduce((s,l)=>s+((l.tax_type&&l.tax_type!=='NONE'&&Number(l.tax_rate||0)>0)?l.qty*l.rate*Number(l.tax_rate)/100:0),0);
-        return `<p style="font-size:13px;">Sub-total: ₹ ${inr(sub)}${tax>0?' &nbsp;·&nbsp; Tax: <span style="color:#1a7f37;font-weight:600">₹ '+inr(tax)+'</span> &nbsp;·&nbsp; <b>Grand total: ₹ '+inr(sub+tax)+'</b>':' &nbsp;·&nbsp; <b>Total: ₹ '+inr(sub)+'</b>'}</p>`;})()}
+      <p style="font-size:13px;" id="pol-totals"></p>
+      ${(()=>{setTimeout(poNewTotals,0);return '';})()}
       <label>Remarks</label><input type="text" id="po-remarks">
       ${canFinApprove() ? '' : '<p style="font-size:12px;color:#b8860b;margin-top:6px;">This order will wait for approval by the Accounts head or the Director before it can be dispatched or received.</p>'}
       <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">${canFinApprove() ? 'Place purchase order' : 'Submit for approval'}</button>
@@ -1968,6 +1978,32 @@ async function purchaseTab(t){
     return;
   }
 }
+function poLineTax(l){
+  const tr = Number(l.tax_rate||0);
+  return (l.tax_type && l.tax_type!=='NONE' && tr>0) ? (Number(l.qty)||0)*(Number(l.rate)||0)*tr/100 : 0;
+}
+function poLineUpd(i, k, v){
+  const l = poLines[i]; if (!l) return;
+  if (k === 'tax_type'){
+    l.tax_type = v;
+    if (v === 'NONE'){ l.tax_rate = 0; const ri = $('pol-taxr-'+i); if (ri) ri.value = ''; }
+  } else {
+    l[k] = Number(v) || 0;
+  }
+  const amt = $('pol-amt-'+i); if (amt) amt.textContent = inr((Number(l.qty)||0)*(Number(l.rate)||0));
+  const tx = $('pol-tax-'+i); if (tx) tx.textContent = poLineTax(l)>0 ? inr(poLineTax(l)) : '—';
+  poNewTotals();
+}
+function poNewTotals(){
+  const p = $('pol-totals'); if (!p) return;
+  const sub = poLines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.rate)||0),0);
+  const tax = poLines.reduce((s,l)=>s+poLineTax(l),0);
+  p.innerHTML = poLines.length
+    ? 'Sub-total: ₹ ' + inr(sub) + (tax>0
+        ? ' &nbsp;·&nbsp; Tax: <span style="color:#1a7f37;font-weight:600">₹ ' + inr(tax) + '</span> &nbsp;·&nbsp; <b>Grand total: ₹ ' + inr(sub+tax) + '</b>'
+        : ' &nbsp;·&nbsp; <b>Total: ₹ ' + inr(sub) + '</b>')
+    : '';
+}
 function poAddLine(){
   const qty = Number($('pol-qty').value), rate = Number($('pol-rate').value);
   if (!(qty > 0)){ say('pon-msg','Quantity must be above zero.',false); return; }
@@ -1983,6 +2019,9 @@ function poAddLine(){
 }
 async function poPlace(){
   if (!poLines.length){ say('pon-msg','Add at least one line.',false); return; }
+  if (poLines.some(l => !(Number(l.qty) > 0))){ say('pon-msg','Every line needs a quantity above zero.',false); return; }
+  if (poLines.some(l => l.tax_type && l.tax_type !== 'NONE' && !(Number(l.tax_rate) > 0))){ say('pon-msg','A line has a tax type selected but no tax rate % — enter the rate or set it to "No tax".',false); return; }
+  if (poLines.some(l => !(Number(l.rate) > 0)) && !confirm('Some lines still have rate ₹0. Place the order anyway?')) return;
   const { data, error } = await db.schema('mfg').rpc('create_po', {
     p_vendor: $('po-vendor').value,
     p_lines: poLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty, rate: l.rate })),
