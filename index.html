@@ -2909,7 +2909,9 @@ async function mailEmptyTrash(){
   if (error){ say('mail-sync-msg','Could not empty trash: '+error.message,false); return; }
   mailOpen = null; say('mail-sync-msg',(data||0)+' email(s) permanently deleted.',true); mailList();
 }
+let mailAttFiles = [];   // attachments accumulate here — adding more never removes the earlier ones
 function mailCompose(replyTo){
+  mailAttFiles = [];
   const m = replyTo ? mailMsgs.find(x=>x.id===replyTo) : null;
   const box = mailBoxes.find(b=>b.key===mailBox);
   const toAddr = m ? ((m.from_addr||'').match(/<([^>]+)>/)?.[1] || m.from_addr || '') : '';
@@ -2923,8 +2925,8 @@ function mailCompose(replyTo){
       <label>Bcc <span style="color:#999;font-weight:normal;">(optional, hidden from other recipients)</span></label><input type="text" id="mc-bcc" placeholder="bcc@example.com">
       <label>Subject *</label><input type="text" id="mc-sub" value="${esc(sub)}">
       <label>Message *</label><textarea id="mc-body" rows="8" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;">${esc(quoted)}</textarea>
-      <label>Attachments <span style="color:#999;font-weight:normal;">(any file type, up to 10 files / 10 MB total)</span></label>
-      <input type="file" id="mc-files" multiple onchange="mailAttPreview()" style="font-size:13px;">
+      <label>Attachments <span style="color:#999;font-weight:normal;">(any file type, up to 10 files / 10 MB total — pick several at once, or keep adding one by one; they all stay attached)</span></label>
+      <input type="file" id="mc-files" multiple onchange="mailAttAdd()" style="font-size:13px;">
       <div id="mc-files-list" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
       <div style="display:flex;gap:8px;margin-top:10px;">
         <button class="btn gold sm" id="btn-mail-send" onclick="mailSendNow()">Send</button>
@@ -2934,14 +2936,24 @@ function mailCompose(replyTo){
     </div>`;
   $('mail-read').scrollIntoView({behavior:'smooth'});
 }
+function mailAttAdd(){
+  const inp = $('mc-files'); if (!inp) return;
+  for (const f of Array.from(inp.files || [])){
+    if (mailAttFiles.length >= 10){ say('mail-send-msg','Maximum 10 attachments per email — remove one first.', false); break; }
+    if (!mailAttFiles.some(x => x.name === f.name && x.size === f.size)) mailAttFiles.push(f);
+  }
+  inp.value = '';   // so the same file can be picked again after removing it
+  mailAttPreview();
+}
+function mailAttRemove(i){ mailAttFiles.splice(i, 1); mailAttPreview(); }
 function mailAttPreview(){
-  const inp = $('mc-files'); const out = $('mc-files-list'); if (!inp || !out) return;
-  const files = Array.from(inp.files || []);
+  const out = $('mc-files-list'); if (!out) return;
+  const files = mailAttFiles;
   const total = files.reduce((s,f)=>s+f.size, 0);
   const fmt = (n)=> n>1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
   out.innerHTML = files.length
-    ? files.map(f=>`📎 ${esc(f.name)} <span style="color:#999">(${fmt(f.size)})</span>`).join('<br>') +
-      `<div style="margin-top:4px;${total>10*1048576?'color:#c0392b;font-weight:bold;':'color:#999;'}">Total: ${fmt(total)}${total>10*1048576?' — too big, keep under 10 MB':''}</div>`
+    ? files.map((f,i)=>`📎 ${esc(f.name)} <span style="color:#999">(${fmt(f.size)})</span> <a href="#" onclick="mailAttRemove(${i});return false;" title="Remove this attachment" style="color:#b3261e;text-decoration:none;font-weight:600;">✖</a>`).join('<br>') +
+      `<div style="margin-top:4px;${total>10*1048576?'color:#c0392b;font-weight:bold;':'color:#999;'}">${files.length} file${files.length>1?'s':''} · Total: ${fmt(total)}${total>10*1048576?' — too big, keep under 10 MB':''}</div>`
     : '';
 }
 function mailFileB64(f){
@@ -2956,8 +2968,8 @@ async function mailSendNow(){
   const to = $('mc-to').value.trim(), sub = $('mc-sub').value.trim(), body = $('mc-body').value.trim();
   const cc = ($('mc-cc')?$('mc-cc').value:'').trim(), bcc = ($('mc-bcc')?$('mc-bcc').value:'').trim();
   if (!to || !sub || !body){ say('mail-send-msg','To, subject and message are all needed.',false); return; }
-  const files = Array.from(($('mc-files')||{}).files || []);
-  if (files.length > 10){ say('mail-send-msg','Maximum 10 attachments per email.',false); return; }
+  const files = mailAttFiles.slice(0, 10);
+  if (mailAttFiles.length > 10){ say('mail-send-msg','Maximum 10 attachments per email.',false); return; }
   if (files.reduce((s,f)=>s+f.size,0) > 10*1048576){ say('mail-send-msg','Attachments are too large — keep the total under 10 MB.',false); return; }
   const btn = $('btn-mail-send'); btn.disabled = true; btn.textContent = files.length ? 'Attaching…' : 'Sending…';
   try {
