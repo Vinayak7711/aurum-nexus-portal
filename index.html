@@ -1909,7 +1909,7 @@ async function purchaseTab(t){
   }
 
   if (t === 'req'){
-    const { data: reqs, error } = await G.from('rm_requests').select('*').order('created_at', {ascending:false}).limit(100);
+    const { data: reqs, error } = await G.from('rm_requests').select('*').in('status',['REQUESTED','APPROVED','ORDERED']).order('created_at', {ascending:false}).limit(100);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const ids = (reqs||[]).map(r=>r.id);
     let linesBy = {};
@@ -1939,7 +1939,8 @@ async function purchaseTab(t){
       <label>Remarks</label><input type="text" id="rq-remarks">
       <button class="btn gold" style="margin-top:8px;" onclick="reqRaise()">Submit request</button>
       <div id="rq-msg"></div>` : ''}
-      <h4 class="sec" style="margin-top:16px;">Material requests</h4>
+      <h4 class="sec" style="margin-top:16px;">Material requests — pending only</h4>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Requested → Approved → Ordered. A request disappears from here on its own the moment its PO is received (it becomes Fulfilled), or when it is rejected or marked closed.</p>
       <div class="table-scroll"><table><thead><tr><th>Request</th><th>Vendor</th><th>Materials</th><th>Needed by</th><th>Status</th><th>Remarks</th><th></th></tr></thead><tbody>
       ${(reqs||[]).map(r=>`<tr><td><b>${esc(r.req_no)}</b></td>` +
         `<td>${esc(venName(r.vendor_id))}</td>` +
@@ -2188,12 +2189,15 @@ async function poReceiveForm(id, poNo){
   const G = db.schema('mfg');
   const { data: lines } = await G.from('po_lines').select('*').eq('po_id', id);
   const { data: recd } = await G.from('rm_receipts').select('rm_item_id, qty').eq('po_id', id);
-  let mmcPO = false;
+  let mmcPO = false, reqPO = false;
   try { const { data: pr } = await G.from('purchase_orders').select('bill_to_mmc').eq('id', id).maybeSingle(); mmcPO = !!(pr && pr.bill_to_mmc); } catch(e){}
+  try { const { data: rq } = await G.from('rm_requests').select('id').eq('po_id', id).limit(1); reqPO = !!(rq && rq.length); } catch(e){}
+  const toMMC = mmcPO || reqPO;
   const recdBy = {}; (recd||[]).forEach(r => recdBy[r.rm_item_id] = (recdBy[r.rm_item_id]||0) + Number(r.qty));
   $('po-recv').innerHTML = `
     <h4 class="sec" style="margin-top:16px;">Receive against ${esc(poNo)}</h4>
     ${mmcPO ? '<div class="msg ok" style="margin:6px 0;">This PO is billed &amp; delivered <b>directly to MMC</b> — so “Received at” below is preset to MMC. The material remains Aurum property; it will show under <b>At MMC (custody)</b>.</div>' : ''}
+    ${!mmcPO && reqPO ? '<div class="msg ok" style="margin:6px 0;">This PO fulfils a <b>production material request</b> — so “Received at” below is preset to <b>MMC</b>: on recording, the request closes and the stock lands under <b>At MMC (custody)</b> for production. Change it to the company store if the material actually stayed with the office.</div>' : ''}
     <div class="table-scroll"><table><thead><tr><th>Material</th><th class="amount">Ordered</th><th class="amount">Received</th><th class="amount">Pending</th><th style="width:130px;">Receive now</th></tr></thead><tbody>
     ${(lines||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};const got=recdBy[l.rm_item_id]||0;const pend=Number(l.qty)-got;
       return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${Number(l.qty)}</td><td class="amount">${got}</td><td class="amount">${pend}</td>` +
@@ -2201,8 +2205,8 @@ async function poReceiveForm(id, poNo){
     </tbody></table></div>
     <div class="row2c" style="margin-top:8px;">
       <div><label>Received at *</label><select id="rcv-dest">
-        <option value="STORE" ${mmcPO?'':'selected'}>Company / office store</option>
-        <option value="MMC" ${mmcPO?'selected':''}>MMC — delivered straight to MMC</option></select>
+        <option value="STORE" ${toMMC?'':'selected'}>Company / office store</option>
+        <option value="MMC" ${toMMC?'selected':''}>MMC — delivered straight to MMC</option></select>
         <span style="font-size:11px;color:#999;">If MMC is chosen, the stock is booked in and moved to <b>At MMC (custody)</b> in one step — the store shows it came in and went out.</span></div>
       <div><div class="row2c"><div><label>Challan no.</label><input type="text" id="rcv-challan"></div>
       <div><label>Invoice no.</label><input type="text" id="rcv-invoice"></div></div></div>
