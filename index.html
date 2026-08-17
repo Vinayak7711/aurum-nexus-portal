@@ -367,6 +367,7 @@
       <button class="chip" id="pu-req" onclick="purchaseTab('req')">Material requests</button>
       <button class="chip" id="pu-grn" onclick="purchaseTab('grn')">Receipts &amp; QC</button>
       <button class="chip" id="pu-store" onclick="purchaseTab('store')">RM store</button>
+      <button class="chip" id="pu-hist" onclick="purchaseTab('hist')">PO history</button>
     </div>
     <div id="purchase-body"></div>
   </section>
@@ -1791,13 +1792,14 @@ async function rmQuickAdd(backTab){
 const PO_COL = { PENDING_APPROVAL:'#b3261e', PLACED:'#b8860b', DISPATCHED:'#0b57d0', PARTIAL:'#b8860b', RECEIVED:'#1a7f37', CANCELLED:'#777' };
 const PO_LABEL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 async function purchaseTab(t){
-  for (const k of ['pos','new','req','grn','store']) $('pu-'+k).classList.toggle('on', k === t);
+  for (const k of ['pos','new','req','grn','store','hist']) $('pu-'+k).classList.toggle('on', k === t);
   const B = $('purchase-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const G = db.schema('mfg');
 
   if (t === 'pos'){
-    const { data: pos, error } = await G.from('v_po_tracking').select('*').order('order_date', {ascending:false}).limit(200);
+    const { data: allPos, error } = await G.from('v_po_tracking').select('*').order('order_date', {ascending:false}).limit(200);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    const pos = (allPos||[]).filter(p => p.status !== 'RECEIVED' && p.status !== 'CANCELLED');
     let mmcBy = {};
     if ((pos||[]).length){
       try { const { data: fl } = await G.from('purchase_orders').select('id, bill_to_mmc').in('id', pos.map(p=>p.id));
@@ -1814,6 +1816,7 @@ async function purchaseTab(t){
     }
     B.innerHTML = `
       <h4 class="sec">Purchase orders — placed → dispatched → received</h4>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Open orders only. Once an order is fully received (or cancelled) it moves automatically to the <b>PO history</b> tab.</p>
       <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
       ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
@@ -1823,7 +1826,7 @@ async function purchaseTab(t){
               (canFinEdit() ? (p.status==='PENDING_APPROVAL' ? `<button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
               (p.status==='PLACED' ? `<button class="mini" onclick="poDispatch('${p.id}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
               (['PLACED','DISPATCHED','PARTIAL'].includes(p.status) ? `<button class="mini" onclick="poReceiveForm('${p.id}','${esc(p.po_no)}')">Receive…</button>` : '') : '')} ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "purchaseTab('pos')")}</td></tr>`).join('')
-        || '<tr><td colspan="8" style="color:#777">No purchase orders yet — place one from the New PO tab.</td></tr>'}
+        || '<tr><td colspan="8" style="color:#777">No open purchase orders — place one from the New PO tab, or see finished ones in PO history.</td></tr>'}
       </tbody></table></div>
       <div id="po-recv"></div><div id="po-msg"></div>`;
     return;
@@ -1977,6 +1980,99 @@ async function purchaseTab(t){
       </tbody></table></div>`;
     return;
   }
+
+  if (t === 'hist'){
+    const { data: allVen } = await db.schema('sales').from('vendors').select('id, code, name').order('name');
+    B.innerHTML = `
+      <h4 class="sec">Purchase order history — received &amp; closed orders</h4>
+      <p style="font-size:12px;color:#777;margin:4px 0 10px;">Every PO that has been fully received (or cancelled) lands here automatically. Pull the history back date-wise, month-wise, year-wise — or for one party.</p>
+      <div class="row2c">
+        <div><label>Show by</label><select id="ph-mode" onchange="poHistMode()">
+          <option value="all">All history</option>
+          <option value="range">Date range</option>
+          <option value="month">A month</option>
+          <option value="year">A year</option></select></div>
+        <div><label>Party / vendor</label><select id="ph-vendor"><option value="">— all parties —</option>${(allVen||[]).map(v=>`<option value="${v.id}">${esc(v.name)} (${esc(v.code)})</option>`).join('')}</select></div>
+      </div>
+      <div class="row2c" style="margin-top:8px;"><div id="ph-when1"></div><div id="ph-when2"></div></div>
+      <button class="btn gold sm" style="margin-top:10px;" onclick="poHistRun()">Show history</button>
+      <div id="ph-out" style="margin-top:12px;"></div><div id="po-msg"></div>`;
+    poHistMode();
+    poHistRun();
+    return;
+  }
+}
+function poHistMode(){
+  const m = $('ph-mode') ? $('ph-mode').value : 'all';
+  const w1 = $('ph-when1'), w2 = $('ph-when2'); if (!w1 || !w2) return;
+  const now = new Date();
+  const fyStart = (now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear()-1) + '-04-01';
+  if (m === 'range'){
+    w1.innerHTML = `<label>From date</label><input type="date" id="ph-from" value="${fyStart}">`;
+    w2.innerHTML = `<label>To date</label><input type="date" id="ph-to" value="${calFmt(now)}">`;
+  } else if (m === 'month'){
+    w1.innerHTML = `<label>Month</label><input type="month" id="ph-month" value="${calFmt(now).slice(0,7)}">`;
+    w2.innerHTML = '';
+  } else if (m === 'year'){
+    w1.innerHTML = `<label>Year</label><input type="number" id="ph-year" min="2000" max="2100" value="${now.getFullYear()}" style="width:120px;">`;
+    w2.innerHTML = '';
+  } else { w1.innerHTML = ''; w2.innerHTML = ''; }
+}
+async function poHistRun(){
+  const out = $('ph-out'); if (!out) return;
+  out.innerHTML = '<p style="color:#777">Loading…</p>';
+  const m = $('ph-mode').value;
+  let from = null, to = null;
+  if (m === 'range'){ from = $('ph-from').value || null; to = $('ph-to').value || null; }
+  else if (m === 'month'){
+    const mv = $('ph-month').value;   // yyyy-mm
+    if (mv){ const [y, mo] = mv.split('-').map(Number); from = mv + '-01'; to = mv + '-' + String(new Date(y, mo, 0).getDate()).padStart(2,'0'); }
+  } else if (m === 'year'){
+    const y = Number($('ph-year').value);
+    if (y){ from = y + '-01-01'; to = y + '-12-31'; }
+  }
+  const G = db.schema('mfg');
+  let q = G.from('v_po_tracking').select('*').in('status', ['RECEIVED','CANCELLED']).order('order_date', {ascending:false}).limit(500);
+  if (from) q = q.gte('order_date', from);
+  if (to) q = q.lte('order_date', to);
+  const { data: pos, error } = await q;
+  if (error){ out.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+  let rows = pos || [];
+  // party filter + received-on dates come from the base table
+  const meta = {};
+  if (rows.length){
+    try { const { data: fl } = await G.from('purchase_orders').select('id, vendor_id, received_at, bill_to_mmc').in('id', rows.map(p=>p.id));
+          (fl||[]).forEach(f => meta[f.id] = f); } catch(e){ /* optional */ }
+  }
+  const ven = $('ph-vendor').value;
+  if (ven) rows = rows.filter(p => (meta[p.id]||{}).vendor_id === ven);
+  let amounts = {};
+  if (canFin() && rows.length){
+    const { data: lines } = await G.from('po_lines').select('id, po_id').in('po_id', rows.map(p=>p.id));
+    if (lines && lines.length){
+      const { data: vals } = await G.from('po_values').select('line_id, amount, tax_amount').in('line_id', lines.map(l=>l.id));
+      const byLine = {}; (vals||[]).forEach(v => byLine[v.line_id] = Number(v.amount) + Number(v.tax_amount||0));
+      lines.forEach(l => { if (byLine[l.id]!=null) amounts[l.po_id] = (amounts[l.po_id]||0) + byLine[l.id]; });
+    }
+  }
+  const recd = rows.filter(p=>p.status==='RECEIVED');
+  const totVal = recd.reduce((s,p)=>s+(amounts[p.id]||0),0);
+  out.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+      <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Orders received</div><div style="font-size:20px;font-weight:700;">${recd.length}</div></div>
+      ${canFin()?`<div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Value received ₹ (incl. tax)</div><div style="font-size:20px;font-weight:700;">₹ ${inr(totVal)}</div></div>`:''}
+      <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Cancelled</div><div style="font-size:20px;font-weight:700;color:#777">${rows.length-recd.length}</div></div>
+    </div>
+    <div class="table-scroll"><table><thead><tr><th>PO</th><th>Party</th><th>Order date</th><th>Received on</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
+    ${rows.map(p=>{const mt=meta[p.id]||{};
+      return `<tr><td><b>${esc(p.po_no)}</b>${mt.bill_to_mmc?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor billed & delivered directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td>` +
+        `<td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${mt.received_at?String(mt.received_at).slice(0,10):'—'}</td>` +
+        `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
+        (canFin()?`<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>`:'') +
+        `<td><span style="color:${p.status==='RECEIVED'?'#1a7f37':'#777'};font-weight:600">${p.status}</span></td>` +
+        `<td>${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "poHistRun()")}</td></tr>`;}).join('')
+      || `<tr><td colspan="${canFin()?8:7}" style="color:#777">No received or closed orders ${m==='all'?'yet':'in this period'}${ven?' for this party':''}.</td></tr>`}
+    </tbody></table></div>`;
 }
 function poLineTax(l){
   const tr = Number(l.tax_rate||0);
