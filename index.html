@@ -2592,7 +2592,7 @@ async function acctTab(t){
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Vendor</th><th class="amount">Amount ₹</th><th>Paid by</th><th>Ref / note</th><th></th></tr></thead><tbody>
       ${pays.map(p=>`<tr><td><b>${esc(p.pay_no)}</b></td><td>${p.pay_date}</td><td>${esc(p.vendor?.name||'—')}</td>` +
         `<td class="amount" style="font-weight:600;">${inr(p.amount)}</td>` +
-        `<td>${p.mode==='BANK'?'🏦 '+esc(p.bank?.name||'Bank'):'💵 Cash'}</td>` +
+        `<td>${p.mode!=='CASH'?'🏦 '+esc(p.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(p.mode)+')</span>':'💵 Cash'}</td>` +
         `<td style="font-size:12px;">${esc(p.ref_no||'')}${p.remarks?'<br><span style="color:#777">'+esc(p.remarks)+'</span>':''}</td>` +
         `<td>${dirDelBtn('acct','vendor_payments', p.id, p.pay_no, "acctTab('vdues')")}</td></tr>`).join('')
         || '<tr><td colspan="7" style="color:#777">No payments recorded yet.</td></tr>'}
@@ -2622,8 +2622,8 @@ async function acctTab(t){
           <div><label>Paid to</label><input type="text" id="ex-payee" placeholder="Who received the money"></div></div>
         <label>Details</label><input type="text" id="ex-desc" placeholder="What this expense was for">
         <div class="row2c" style="margin-top:8px;">
-          <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='BANK'?'':'none'">
-            <option value="BANK">Bank account</option><option value="PETTY">Petty cash box</option></select></div>
+          <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='PETTY'?'none':'';">
+            <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="PETTY">Petty cash box</option></select></div>
           <div id="ex-bank-wrap"><label>Bank account</label><select id="ex-bank">${bankOpts}</select></div>
         </div>
         <button class="btn gold sm" style="margin-top:10px;" onclick="acExpenseAdd()">Record expense</button>
@@ -2633,7 +2633,7 @@ async function acctTab(t){
       ${rows.map(r=>`<tr><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td>${esc(r.category)}</td>` +
         `<td>${esc(r.payee||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
         `<td class="amount" style="font-weight:600;color:#b3261e">${inr(r.amount)}</td>` +
-        `<td>${r.mode==='BANK'?'🏦 '+esc(r.bank?.name||'Bank'):'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':'')}</td>` +
+        `<td>${r.mode!=='PETTY'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':'')}</td>` +
         `<td>${dirDelBtn('acct','expenses', r.id, r.exp_no, "acctTab('exp')")}</td></tr>`).join('')
         || '<tr><td colspan="7" style="color:#777">No expenses recorded yet.</td></tr>'}
       </tbody></table></div>`;
@@ -2738,8 +2738,9 @@ function acVendorPayForm(vid, vname, out){
       <div class="row2c"><div><label>Amount ₹ *</label><input type="number" id="vp-amt" min="1" step="any" value="${out>0?out:''}"></div>
         <div><label>Date</label><input type="date" id="vp-date" value="${calFmt(new Date())}"></div></div>
       <div class="row2c" style="margin-top:8px;">
-        <div><label>Paid by *</label><select id="vp-mode" onchange="$('vp-bank-wrap').style.display=this.value==='BANK'?'':'none'">
-          <option value="BANK">Bank account</option><option value="CASH">Cash</option></select></div>
+        <div><label>Paid by *</label><select id="vp-mode" onchange="$('vp-bank-wrap').style.display=this.value==='CASH'?'none':'';">
+          <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="CASH">Cash</option></select>
+          <span style="font-size:11px;color:#999;">Bank payments post into the finance ledger; cash payments are recorded in this book only.</span></div>
         <div id="vp-bank-wrap"><label>From bank</label><select id="vp-bank">${bankOpts}</select></div>
       </div>
       <div class="row2c" style="margin-top:8px;"><div><label>Reference</label><input type="text" id="vp-ref" placeholder="UTR / cheque no. / receipt"></div>
@@ -2755,7 +2756,7 @@ async function acVendorPay(vid){
   const mode = $('vp-mode').value;
   const { error } = await db.schema('acct').rpc('vendor_pay', {
     p_vendor: vid, p_amount: amt, p_date: $('vp-date').value || null,
-    p_mode: mode, p_bank: mode === 'BANK' ? $('vp-bank').value : null,
+    p_mode: mode, p_bank: mode !== 'CASH' ? $('vp-bank').value : null,
     p_ref: $('vp-ref').value.trim() || null, p_note: $('vp-note').value.trim() || null });
   if (error){ say('vp-msg','Could not record the payment: '+error.message,false); return; }
   acctTab('vdues');
@@ -2767,7 +2768,7 @@ async function acExpenseAdd(){
   const { error } = await db.schema('acct').rpc('expense_add', {
     p_date: $('ex-date').value || null, p_category: $('ex-cat').value, p_amount: amt,
     p_payee: $('ex-payee').value.trim() || null, p_desc: $('ex-desc').value.trim() || null,
-    p_mode: mode, p_bank: mode === 'BANK' ? $('ex-bank').value : null });
+    p_mode: mode, p_bank: mode !== 'PETTY' ? $('ex-bank').value : null });
   if (error){ say('ex-msg','Could not record: '+error.message,false); return; }
   acctTab('exp');
 }
