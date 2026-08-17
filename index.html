@@ -1800,10 +1800,10 @@ async function purchaseTab(t){
     const { data: allPos, error } = await G.from('v_po_tracking').select('*').order('order_date', {ascending:false}).limit(200);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const pos = (allPos||[]).filter(p => p.status !== 'RECEIVED' && p.status !== 'CANCELLED');
-    let mmcBy = {};
+    let mmcBy = {}, termsBy = {};
     if ((pos||[]).length){
-      try { const { data: fl } = await G.from('purchase_orders').select('id, bill_to_mmc').in('id', pos.map(p=>p.id));
-            (fl||[]).forEach(f => mmcBy[f.id] = f.bill_to_mmc); } catch(e){ /* badge optional */ }
+      try { const { data: fl } = await G.from('purchase_orders').select('id, bill_to_mmc, payment_terms').in('id', pos.map(p=>p.id));
+            (fl||[]).forEach(f => { mmcBy[f.id] = f.bill_to_mmc; if (f.payment_terms) termsBy[f.id] = f.payment_terms; }); } catch(e){ /* badge optional */ }
     }
     let amounts = {};
     if (canFin() && (pos||[]).length){
@@ -1818,7 +1818,7 @@ async function purchaseTab(t){
       <h4 class="sec">Purchase orders — placed → dispatched → received</h4>
       <p style="font-size:12px;color:#777;margin:4px 0 8px;">Open orders only. Once an order is fully received (or cancelled) it moves automatically to the <b>PO history</b> tab.</p>
       <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
-      ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
+      ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td><td>${esc(p.vendor_name||'—')}${termsBy[p.id]?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(termsBy[p.id].slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
         `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${PO_LABEL[p.status]||p.status}</span></td>` +
@@ -1884,6 +1884,8 @@ async function purchaseTab(t){
       </tbody></table></div>
       <p style="font-size:13px;" id="pol-totals"></p>
       ${(()=>{setTimeout(poNewTotals,0);return '';})()}
+      <label>Payment terms <span style="color:#999;font-weight:normal;font-size:11px;">— as agreed with the vendor, in your own words</span></label>
+      <input type="text" id="po-terms" placeholder="e.g. 50% advance, balance within 30 days of delivery">
       <label>Remarks</label><input type="text" id="po-remarks">
       ${canFinApprove() ? '' : '<p style="font-size:12px;color:#b8860b;margin-top:6px;">This order will wait for approval by the Accounts head or the Director before it can be dispatched or received.</p>'}
       <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">${canFinApprove() ? 'Place purchase order' : 'Submit for approval'}</button>
@@ -2041,7 +2043,7 @@ async function poHistRun(){
   // party filter + received-on dates come from the base table
   const meta = {};
   if (rows.length){
-    try { const { data: fl } = await G.from('purchase_orders').select('id, vendor_id, received_at, bill_to_mmc').in('id', rows.map(p=>p.id));
+    try { const { data: fl } = await G.from('purchase_orders').select('id, vendor_id, received_at, bill_to_mmc, payment_terms').in('id', rows.map(p=>p.id));
           (fl||[]).forEach(f => meta[f.id] = f); } catch(e){ /* optional */ }
   }
   const ven = $('ph-vendor').value;
@@ -2066,7 +2068,7 @@ async function poHistRun(){
     <div class="table-scroll"><table><thead><tr><th>PO</th><th>Party</th><th>Order date</th><th>Received on</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
     ${rows.map(p=>{const mt=meta[p.id]||{};
       return `<tr><td><b>${esc(p.po_no)}</b>${mt.bill_to_mmc?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor billed & delivered directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td>` +
-        `<td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td><td>${mt.received_at?String(mt.received_at).slice(0,10):'—'}</td>` +
+        `<td>${esc(p.vendor_name||'—')}${mt.payment_terms?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(String(mt.payment_terms).slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${mt.received_at?String(mt.received_at).slice(0,10):'—'}</td>` +
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin()?`<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>`:'') +
         `<td><span style="color:${p.status==='RECEIVED'?'#1a7f37':'#777'};font-weight:600">${p.status}</span></td>` +
@@ -2133,6 +2135,11 @@ async function poPlace(){
   if (taxes.length && data){
     const { error: tErr } = await db.schema('mfg').rpc('po_set_line_tax', { p_po: data, p_taxes: taxes });
     if (tErr){ say('pon-msg','PO created, but the tax details could not be saved: '+tErr.message,false); return; }
+  }
+  const terms = $('po-terms') ? $('po-terms').value.trim() : '';
+  if (terms && data){
+    const { error: pErr } = await db.schema('mfg').rpc('po_set_payment_terms', { p_po: data, p_terms: terms });
+    if (pErr){ say('pon-msg','PO created, but the payment terms could not be saved: '+pErr.message,false); return; }
   }
   poLines = []; poLinkReq = null; purchaseTab('pos');
 }
