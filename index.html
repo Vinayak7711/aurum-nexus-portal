@@ -257,6 +257,7 @@
     <div class="subtabs">
       <button class="chip on" id="mt-fg" onclick="mfgTab('fg')">FG stock</button>
       <button class="chip" id="mt-batches" onclick="mfgTab('batches')">Batches &amp; QC</button>
+      <button class="chip" id="mt-report" onclick="mfgTab('report')">Production report</button>
       <button class="chip" id="mt-rm" onclick="mfgTab('rm')">Raw material</button>
     </div>
     <div id="mfg-body"></div>
@@ -1133,7 +1134,7 @@ async function saveMcActual(structId){
 /* ================= MODULE 2: MANUFACTURING ================= */
 async function openMfg(){ await loadMasters(); mfgTab('fg'); show('mfg'); }
 async function mfgTab(which){
-  ['fg','batches','rm'].forEach(k => $('mt-'+k).classList.toggle('on', k===which));
+  ['fg','batches','report','rm'].forEach(k => $('mt-'+k).classList.toggle('on', k===which));
   const B = $('mfg-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
   const MF = db.schema('mfg');
   if (which === 'fg'){
@@ -1168,6 +1169,47 @@ async function mfgTab(which){
         <td>${esc(b.qc_remarks||'')}</td><td>${act}</td></tr>`;
     }
     B.innerHTML = html + '</tbody></table></div><div id="mfg-msg2"></div>';
+  }
+  if (which === 'report'){
+    const [{ data: stock }, { data: batches }, { data: skusFG }] = await Promise.all([
+      MF.from('v_rm_stock').select('*').order('code'),
+      MF.from('batches').select('*, sku:sku_id(sku_code)').order('created_at',{ascending:false}).limit(30),
+      MF.from('v_fg_stock').select('*')
+    ]);
+    window.__prStock = stock || [];
+    const consumable = (stock||[]).filter(r => Number(r.balance) > 0);
+    const iopts = consumable.map(i=>`<option value="${i.rm_item_id}">${esc(i.code)} — ${esc(i.name)} (at MMC: ${Number(i.balance)} ${i.unit})</option>`).join('');
+    const skuOpts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
+    const fgBy = {}; (skusFG||[]).forEach(f => fgBy[f.sku_code] = Number(f.cases));
+    // consumption lines for the batches shown
+    let rmBy = {};
+    if ((batches||[]).length){
+      const { data: brm } = await MF.from('batch_rm').select('batch_id, qty, item:rm_item_id(code,unit)').in('batch_id', batches.map(b=>b.id));
+      (brm||[]).forEach(l => { (rmBy[l.batch_id] ??= []).push(l); });
+    }
+    B.innerHTML = `
+      <div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Daily production &amp; raw-material consumption report</h2>
+        <p style="font-size:12px;color:#777;margin:4px 0 8px;">One entry does everything: the materials consumed are minused from the MMC raw-material stock, and the cases produced go into FG stock (immediately if “QC passed” stays ticked — otherwise after QC passes the batch).</p>
+        <div class="row2c"><div><label>SKU produced *</label><select id="pr-sku">${skuOpts}</select></div>
+          <div class="row2c"><div><label>Cases *</label><input type="number" id="pr-cases" min="1"></div>
+          <div><label>Date</label><input type="date" id="pr-date" value="${calFmt(new Date())}"></div></div></div>
+        <h4 class="sec" style="margin-top:12px;">Raw material consumed</h4>
+        <div class="row2c"><div><label>Material (at MMC)</label><select id="pr-item">${iopts || '<option value="">— nothing at MMC — send material from the store first —</option>'}</select></div>
+          <div class="row2c"><div><label>Qty consumed</label><input type="number" id="pr-qty" min="0.001" step="any"></div>
+          <div><label>&nbsp;</label><button class="btn ghost sm" style="display:block;" onclick="prodRepAddLine()">+ Add material</button></div></div></div>
+        <div id="pr-lines" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
+        <div class="switch" style="margin:10px 0;"><input type="checkbox" id="pr-qc" checked><span>QC passed — put the cases straight into FG stock</span></div>
+        <button class="btn gold sm" onclick="prodRepSave()">Record production &amp; consumption</button>
+        <div id="pr-msg"></div></div>
+      <h4 class="sec">Recent production report</h4>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Batch</th><th>SKU</th><th class="amount">Cases</th><th>Materials consumed</th><th>QC</th></tr></thead><tbody>
+      ${(batches||[]).map(b=>`<tr><td>${b.production_date}</td><td><b>${esc(b.batch_no)}</b></td><td>${esc(b.sku?.sku_code)}</td><td class="amount">${b.cases}</td>` +
+        `<td style="font-size:12px;">${(rmBy[b.id]||[]).map(l=>esc(l.item?.code||'?')+' × '+Number(l.qty)+' '+(l.item?.unit||'')).join(', ')||'—'}</td>` +
+        `<td><span class="pill ${b.qc_status==='PASSED'?'DELIVERED':(b.qc_status==='FAILED'?'CANCELLED':'RECEIVED')}">${b.qc_status}</span></td></tr>`).join('')
+        || '<tr><td colspan="6" style="color:#777">No production recorded yet.</td></tr>'}
+      </tbody></table></div>`;
+    prodRepRender();
+    return;
   }
   if (which === 'rm'){
     const [{ data: stock, error: e1 }, { data: issues }, { data: store }] = await Promise.all([
@@ -1293,6 +1335,39 @@ async function delProdTarget(id){
   const { error } = await db.schema('mfg').rpc('delete_prod_target', { p_target: id });
   if (error){ say('pt-msg2', error.message, false); return; }
   prodTab('targets');
+}
+let prodRepLines = [];
+function prodRepRender(){
+  const out = $('pr-lines'); if (!out) return;
+  out.innerHTML = prodRepLines.length
+    ? prodRepLines.map((l,i)=>`🧪 ${esc(l.label)} × <b>${l.qty}</b> <a href="#" onclick="prodRepLines.splice(${i},1);prodRepRender();return false;" style="color:#b3261e;text-decoration:none;font-weight:600;">✖</a>`).join('<br>')
+    : '<span style="color:#999">No materials added yet — add each material consumed in this production.</span>';
+}
+function prodRepAddLine(){
+  const sel = $('pr-item'); const qty = Number($('pr-qty').value);
+  if (!sel || !sel.value){ say('pr-msg','No material at MMC to consume.',false); return; }
+  if (!(qty > 0)){ say('pr-msg','Enter the quantity consumed.',false); return; }
+  const st = (window.__prStock||[]).find(s=>s.rm_item_id===sel.value) || {};
+  const already = prodRepLines.filter(l=>l.rm_item_id===sel.value).reduce((s,l)=>s+l.qty,0);
+  if (qty + already > Number(st.balance||0)){ say('pr-msg','Only '+Number(st.balance||0)+' '+(st.unit||'')+' of '+(st.code||'this material')+' is lying at MMC — cannot consume more than that.',false); return; }
+  const ex = prodRepLines.find(l=>l.rm_item_id===sel.value);
+  if (ex) ex.qty += qty; else prodRepLines.push({ rm_item_id: sel.value, qty, label: (st.code||'?')+' '+(st.name||'') });
+  $('pr-qty').value = '';
+  say('pr-msg','',true); prodRepRender();
+}
+async function prodRepSave(){
+  const cases = Number($('pr-cases').value);
+  if (!(cases > 0)){ say('pr-msg','Enter the cases produced.',false); return; }
+  const { data: batchId, error } = await db.schema('mfg').rpc('create_batch', {
+    p_sku: $('pr-sku').value, p_cases: cases, p_date: $('pr-date').value || null,
+    p_rm: prodRepLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty })) });
+  if (error){ say('pr-msg','Could not record: '+error.message,false); return; }
+  if ($('pr-qc').checked && batchId){
+    const { error: qErr } = await db.schema('mfg').rpc('qc_set', { p_batch: batchId, p_status: 'PASSED', p_remarks: 'Passed at production report entry' });
+    if (qErr){ say('pr-msg','Production recorded and material consumed — but QC could not be marked passed ('+qErr.message+'). The cases will enter FG stock once QC passes the batch in Batches & QC.',false); prodRepLines=[]; return; }
+  }
+  prodRepLines = [];
+  mfgTab('report');
 }
 async function createBatch(){
   const cases = Number($('nb-cases').value);
@@ -1815,11 +1890,12 @@ async function purchaseTab(t){
     const { data: allPos, error } = await G.from('v_po_tracking').select('*').order('order_date', {ascending:false}).limit(200);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const pos = (allPos||[]).filter(p => p.status !== 'RECEIVED' && p.status !== 'CANCELLED');
-    let mmcBy = {}, termsBy = {};
+    let mmcBy = {}, termsBy = {}, catBy = {};
     if ((pos||[]).length){
-      try { const { data: fl } = await G.from('purchase_orders').select('id, bill_to_mmc, payment_terms').in('id', pos.map(p=>p.id));
-            (fl||[]).forEach(f => { mmcBy[f.id] = f.bill_to_mmc; if (f.payment_terms) termsBy[f.id] = f.payment_terms; }); } catch(e){ /* badge optional */ }
+      try { const { data: fl } = await G.from('purchase_orders').select('id, bill_to_mmc, payment_terms, category').in('id', pos.map(p=>p.id));
+            (fl||[]).forEach(f => { mmcBy[f.id] = f.bill_to_mmc; if (f.payment_terms) termsBy[f.id] = f.payment_terms; catBy[f.id] = f.category || 'RM'; }); } catch(e){ /* badge optional */ }
     }
+    const posShown = window.poCatFilter ? pos.filter(p => (catBy[p.id]||'RM') === window.poCatFilter) : pos;
     let amounts = {};
     if (canFin() && (pos||[]).length){
       const { data: lines } = await G.from('po_lines').select('id, po_id').in('po_id', pos.map(p=>p.id));
@@ -1832,8 +1908,14 @@ async function purchaseTab(t){
     B.innerHTML = `
       <h4 class="sec">Purchase orders — placed → dispatched → received</h4>
       <p style="font-size:12px;color:#777;margin:4px 0 8px;">Open orders only. Once an order is fully received (or cancelled) it moves automatically to the <b>PO history</b> tab.</p>
+      <div style="margin:0 0 8px;"><label style="font-size:12px;color:#777;">Show:</label> <select onchange="window.poCatFilter=this.value;purchaseTab('pos')" style="width:auto;display:inline-block;padding:6px 10px;">
+        <option value="" ${!window.poCatFilter?'selected':''}>All purchases</option>
+        <option value="RM" ${window.poCatFilter==='RM'?'selected':''}>Raw material only</option>
+        <option value="OFFICE" ${window.poCatFilter==='OFFICE'?'selected':''}>Office &amp; admin only</option>
+        <option value="SERVICES" ${window.poCatFilter==='SERVICES'?'selected':''}>Services only</option>
+        <option value="OTHER" ${window.poCatFilter==='OTHER'?'selected':''}>Other only</option></select></div>
       <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
-      ${(pos||[]).map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td><td>${esc(p.vendor_name||'—')}${termsBy[p.id]?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(termsBy[p.id].slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
+      ${posShown.map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}<br>${poCatTag(p.id, catBy[p.id])}</td><td>${esc(p.vendor_name||'—')}${termsBy[p.id]?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(termsBy[p.id].slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
         `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${PO_LABEL[p.status]||p.status}</span></td>` +
@@ -1866,6 +1948,14 @@ async function purchaseTab(t){
       <div class="row2c">
         <div><label>Vendor (registered) *</label><select id="po-vendor">${(vendors||[]).map(v=>`<option value="${v.id}" ${preVendor===v.id?'selected':''}>${esc(v.name)} (${esc(v.code)})${v.status==='PENDING'?' — pending':''}</option>`).join('')}</select>${preVendor?'<span style="font-size:11px;color:#1a7f37;">✔ vendor taken from the material request</span>':''}</div>
         <div><label>Expected delivery</label><input type="date" id="po-expected"></div>
+      </div>
+      <div class="row2c" style="margin-top:8px;">
+        <div><label>What is this purchase for? *</label><select id="po-cat">
+          <option value="RM">Raw material (production)</option>
+          <option value="OFFICE">Office &amp; admin</option>
+          <option value="SERVICES">Services</option>
+          <option value="OTHER">Other</option></select></div>
+        <div><span style="font-size:11px;color:#999;">Non-raw-material orders (office things, services, expenses) are kept separate in the PO lists so production purchases stay clean.</span></div>
       </div>
       <div class="switch" style="margin:10px 0;"><input type="checkbox" id="po-billmmc"><span>Vendor bills &amp; delivers <b>directly to MMC</b> — material still belongs to Aurum; on receipt the stock is taken into the <b>company store</b> as usual</span></div>
       <label>Fulfils material request</label>
@@ -2017,6 +2107,15 @@ async function purchaseTab(t){
           <option value="year">A year</option></select></div>
         <div><label>Party / vendor</label><select id="ph-vendor"><option value="">— all parties —</option>${(allVen||[]).map(v=>`<option value="${v.id}">${esc(v.name)} (${esc(v.code)})</option>`).join('')}</select></div>
       </div>
+      <div class="row2c" style="margin-top:8px;">
+        <div><label>Purchase category</label><select id="ph-cat">
+          <option value="">All categories</option>
+          <option value="RM">Raw material</option>
+          <option value="OFFICE">Office &amp; admin</option>
+          <option value="SERVICES">Services</option>
+          <option value="OTHER">Other</option></select></div>
+        <div></div>
+      </div>
       <div class="row2c" style="margin-top:8px;"><div id="ph-when1"></div><div id="ph-when2"></div></div>
       <button class="btn gold sm" style="margin-top:10px;" onclick="poHistRun()">Show history</button>
       <div id="ph-out" style="margin-top:12px;"></div><div id="po-msg"></div>`;
@@ -2064,11 +2163,13 @@ async function poHistRun(){
   // party filter + received-on dates come from the base table
   const meta = {};
   if (rows.length){
-    try { const { data: fl } = await G.from('purchase_orders').select('id, vendor_id, received_at, bill_to_mmc, payment_terms').in('id', rows.map(p=>p.id));
+    try { const { data: fl } = await G.from('purchase_orders').select('id, vendor_id, received_at, bill_to_mmc, payment_terms, category').in('id', rows.map(p=>p.id));
           (fl||[]).forEach(f => meta[f.id] = f); } catch(e){ /* optional */ }
   }
   const ven = $('ph-vendor').value;
   if (ven) rows = rows.filter(p => (meta[p.id]||{}).vendor_id === ven);
+  const hcat = $('ph-cat') ? $('ph-cat').value : '';
+  if (hcat) rows = rows.filter(p => ((meta[p.id]||{}).category || 'RM') === hcat);
   let amounts = {};
   if (canFin() && rows.length){
     const { data: lines } = await G.from('po_lines').select('id, po_id').in('po_id', rows.map(p=>p.id));
@@ -2088,7 +2189,7 @@ async function poHistRun(){
     </div>
     <div class="table-scroll"><table><thead><tr><th>PO</th><th>Party</th><th>Order date</th><th>Received on</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
     ${rows.map(p=>{const mt=meta[p.id]||{};
-      return `<tr><td><b>${esc(p.po_no)}</b>${mt.bill_to_mmc?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor billed & delivered directly to MMC — material belongs to Aurum">→ MMC</span>':''}</td>` +
+      return `<tr><td><b>${esc(p.po_no)}</b>${mt.bill_to_mmc?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor billed & delivered directly to MMC — material belongs to Aurum">→ MMC</span>':''}<br>${poCatTag(p.id, mt.category, 'hist')}</td>` +
         `<td>${esc(p.vendor_name||'—')}${mt.payment_terms?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(String(mt.payment_terms).slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${mt.received_at?String(mt.received_at).slice(0,10):'—'}</td>` +
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin()?`<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>`:'') +
@@ -2168,12 +2269,31 @@ async function poPlace(){
     const { error: rErr } = await db.schema('mfg').rpc('rm_request_mark_ordered', { p_request: poLinkReq, p_po: data });
     if (rErr){ say('pon-msg','PO created, but the material request could not be marked as ordered: '+rErr.message,false); return; }
   }
+  const cat = $('po-cat') ? $('po-cat').value : 'RM';
+  if (cat !== 'RM' && data){
+    const { error: cErr } = await db.schema('mfg').rpc('po_set_category', { p_po: data, p_cat: cat });
+    if (cErr){ say('pon-msg','PO created, but the category could not be saved: '+cErr.message,false); return; }
+  }
   poLines = []; poLinkReq = null; purchaseTab('pos');
 }
 async function poApprove(id){
   const { error } = await db.schema('mfg').rpc('po_approve', { p_po: id });
   if (error){ say('po-msg','Could not approve: '+error.message,false); return; }
   purchaseTab('pos');
+}
+const PO_CAT_LBL = { RM:'Raw material', OFFICE:'Office & admin', SERVICES:'Services', OTHER:'Other' };
+const PO_CAT_COL = { RM:'#1a7f37', OFFICE:'#0b57d0', SERVICES:'#b8860b', OTHER:'#777' };
+// Category tag — a live dropdown for Accounts/Director (so past orders can be re-classified), a plain tag for everyone else.
+function poCatTag(id, cat, after){
+  cat = cat || 'RM';
+  if (!canFinEdit()) return `<span style="background:${PO_CAT_COL[cat]};color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">${PO_CAT_LBL[cat]}</span>`;
+  return `<select onchange="poSetCat('${id}', this.value, '${after||'pos'}')" title="Purchase category — change it any time" style="width:auto;font-size:10.5px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;color:${PO_CAT_COL[cat]};font-weight:600;">` +
+    ['RM','OFFICE','SERVICES','OTHER'].map(c=>`<option value="${c}" ${c===cat?'selected':''}>${PO_CAT_LBL[c]}</option>`).join('') + '</select>';
+}
+async function poSetCat(id, cat, after){
+  const { error } = await db.schema('mfg').rpc('po_set_category', { p_po: id, p_cat: cat });
+  if (error){ alert('Could not change the category: '+error.message); return; }
+  if (after === 'hist') poHistRun(); else purchaseTab('pos');
 }
 async function poDispatch(id){
   const { error } = await db.schema('mfg').rpc('po_set_status', { p_po: id, p_status: 'DISPATCHED' });
