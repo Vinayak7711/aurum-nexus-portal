@@ -2193,15 +2193,19 @@ async function poReceiveForm(id, poNo){
   const recdBy = {}; (recd||[]).forEach(r => recdBy[r.rm_item_id] = (recdBy[r.rm_item_id]||0) + Number(r.qty));
   $('po-recv').innerHTML = `
     <h4 class="sec" style="margin-top:16px;">Receive against ${esc(poNo)}</h4>
-    ${mmcPO ? '<div class="msg ok" style="margin:6px 0;">This PO is billed &amp; delivered <b>directly to MMC</b> — on recording, the stock is received into the <b>company store</b>. The material remains Aurum property; issue it to MMC later through the normal RM issue flow when needed.</div>' : ''}
+    ${mmcPO ? '<div class="msg ok" style="margin:6px 0;">This PO is billed &amp; delivered <b>directly to MMC</b> — so “Received at” below is preset to MMC. The material remains Aurum property; it will show under <b>At MMC (custody)</b>.</div>' : ''}
     <div class="table-scroll"><table><thead><tr><th>Material</th><th class="amount">Ordered</th><th class="amount">Received</th><th class="amount">Pending</th><th style="width:130px;">Receive now</th></tr></thead><tbody>
     ${(lines||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};const got=recdBy[l.rm_item_id]||0;const pend=Number(l.qty)-got;
       return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${Number(l.qty)}</td><td class="amount">${got}</td><td class="amount">${pend}</td>` +
         `<td><input type="number" class="rcv-qty" data-item="${l.rm_item_id}" min="0" max="${pend}" step="any" placeholder="0" style="width:110px;"></td></tr>`;}).join('')}
     </tbody></table></div>
     <div class="row2c" style="margin-top:8px;">
-      <div><label>Challan no.</label><input type="text" id="rcv-challan"></div>
-      <div><label>Invoice no.</label><input type="text" id="rcv-invoice"></div>
+      <div><label>Received at *</label><select id="rcv-dest">
+        <option value="STORE" ${mmcPO?'':'selected'}>Company / office store</option>
+        <option value="MMC" ${mmcPO?'selected':''}>MMC — delivered straight to MMC</option></select>
+        <span style="font-size:11px;color:#999;">If MMC is chosen, the stock is booked in and moved to <b>At MMC (custody)</b> in one step — the store shows it came in and went out.</span></div>
+      <div><div class="row2c"><div><label>Challan no.</label><input type="text" id="rcv-challan"></div>
+      <div><label>Invoice no.</label><input type="text" id="rcv-invoice"></div></div></div>
     </div>
     <h4 class="sec" style="margin-top:14px;">Incoming inspection (QC)</h4>
     <div class="row2c">
@@ -2244,6 +2248,18 @@ async function poReceiveSave(id){
     p_remarks: ($('rcv-qremarks') && $('rcv-qremarks').value.trim()) || null,
     p_inspected: inspDate });
   if (iErr){ say('rcv-msg','Receipt saved, but the inspection note could not be saved: '+iErr.message, false); return; }
+  // Delivered straight to MMC? Book the same quantities out of the store into MMC custody in one step.
+  const dest = $('rcv-dest') ? $('rcv-dest').value : 'STORE';
+  if (dest === 'MMC'){
+    const nowIso = new Date().toISOString();
+    const rows = lines.map(l => ({
+      rm_item_id: l.rm_item_id, qty: l.qty,
+      challan_no: 'MMC-DIRECT' + (challan ? ' / ' + challan : ''),
+      created_by: me.id, received_by: me.id, received_at: nowIso
+    }));
+    const { error: fErr } = await db.schema('mfg').from('rm_issues').insert(rows);
+    if (fErr){ say('rcv-msg','Receipt saved, but the stock could not be moved to MMC custody: '+fErr.message+' — move it from Manufacturing @ MMC → Raw material instead.', false); return; }
+  }
   purchaseTab('grn');
 }
 async function reqClose(id){
