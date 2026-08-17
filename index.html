@@ -1170,21 +1170,36 @@ async function mfgTab(which){
     B.innerHTML = html + '</tbody></table></div><div id="mfg-msg2"></div>';
   }
   if (which === 'rm'){
-    const [{ data: stock, error: e1 }, { data: issues }] = await Promise.all([
+    const [{ data: stock, error: e1 }, { data: issues }, { data: store }] = await Promise.all([
       MF.from('v_rm_stock').select('*').order('code'),
-      MF.from('rm_issues').select('*, item:rm_item_id(code,name)').order('created_at',{ascending:false}).limit(50)
+      MF.from('rm_issues').select('*, item:rm_item_id(code,name)').order('created_at',{ascending:false}).limit(50),
+      MF.from('v_rm_store').select('*')
     ]);
     if (e1){ B.innerHTML = `<div class="msg err">${esc(e1.message)}</div>`; return; }
-    const iopts = (stock||[]).map(i=>`<option value="${i.rm_item_id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('');
+    const storeBy = {}; (store||[]).forEach(s => storeBy[s.rm_item_id] = s);
+    // Only materials that actually have something happening — in the company store,
+    // issued, consumed or lying at MMC. All-zero materials stay hidden until a
+    // purchase receipt (or issue) brings them to life.
+    const live = (stock||[]).filter(r => {
+      const s = storeBy[r.rm_item_id] || {};
+      return Number(s.received||0) !== 0 || Number(s.store_balance||0) !== 0 ||
+             Number(r.issued||0) !== 0 || Number(r.consumed||0) !== 0 || Number(r.balance||0) !== 0;
+    });
+    const iopts = live.filter(i => Number((storeBy[i.rm_item_id]||{}).store_balance||0) > 0)
+      .map(i=>`<option value="${i.rm_item_id}">${esc(i.code)} — ${esc(i.name)} (store: ${Number((storeBy[i.rm_item_id]||{}).store_balance||0)})</option>`).join('');
     let html = `<div class="card" style="margin-bottom:14px;max-width:560px;"><h2 style="font-size:15px;">Record material sent to MMC</h2>
-      <div class="row2c" style="margin-top:8px;"><select id="ri-item">${iopts}</select>
+      <p style="font-size:11.5px;color:#777;margin:4px 0 0;">Only materials with balance in the company store can be sent.</p>
+      <div class="row2c" style="margin-top:8px;"><select id="ri-item">${iopts || '<option value="">— nothing in the company store —</option>'}</select>
       <input type="number" id="ri-qty" placeholder="Quantity"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="ri-challan" placeholder="Challan no.">
       <button class="btn gold sm" style="padding:11px;" onclick="rmIssue()">Record issue</button></div>
       <div id="mfg-msg3"></div></div>`;
-    html += '<h4 class="sec">Balance at MMC</h4><div class="table-scroll"><table><thead><tr><th>Item</th><th class="amount">Issued</th><th class="amount">Consumed</th><th class="amount">Balance</th><th>Unit</th></tr></thead><tbody>';
-    for (const r of (stock||[]))
-      html += `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${r.issued}</td><td class="amount">${r.consumed}</td><td class="amount"><b>${r.balance}</b></td><td>${r.unit}</td></tr>`;
+    html += '<h4 class="sec">Raw material position</h4><p style="font-size:12px;color:#777;margin:4px 0 8px;">Received purchases sit in the <b>company store</b>; what you send to MMC moves to <b>At MMC</b> and falls as batches consume it. Materials with nothing anywhere are hidden until stock arrives.</p><div class="table-scroll"><table><thead><tr><th>Item</th><th class="amount">In company store</th><th class="amount">Issued to MMC</th><th class="amount">Consumed</th><th class="amount"><b>At MMC (balance)</b></th><th>Unit</th></tr></thead><tbody>';
+    for (const r of live){
+      const s = storeBy[r.rm_item_id] || {};
+      html += `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount" style="font-weight:600;color:${Number(s.store_balance||0)>0?'#1a7f37':'#777'}">${Number(s.store_balance||0)}</td><td class="amount">${r.issued}</td><td class="amount">${r.consumed}</td><td class="amount"><b>${r.balance}</b></td><td>${r.unit}</td></tr>`;
+    }
+    if (!live.length) html += '<tr><td colspan="6" style="color:#777">No materials in hand yet — a material appears here the moment a purchase is received into the store.</td></tr>';
     html += '</tbody></table></div><h4 class="sec">Recent issues</h4><div class="table-scroll"><table><thead><tr><th>Date</th><th>Item</th><th class="amount">Qty</th><th>Challan</th><th>Received at MMC</th></tr></thead><tbody>';
     for (const r of (issues||[]))
       html += `<tr><td>${r.issue_date}</td><td>${esc(r.item?.code)}</td><td class="amount">${r.qty}</td><td>${esc(r.challan_no||'—')}</td>
@@ -1972,14 +1987,18 @@ async function purchaseTab(t){
       G.from('v_rm_stock').select('*').order('code')
     ]);
     const mmcBy = {}; (mmc.data||[]).forEach(r => mmcBy[r.rm_item_id] = r);
+    // Hide materials with nothing anywhere — they join the list the moment a receipt (or issue) touches them.
+    const live = (st.data||[]).filter(r=>{const m=mmcBy[r.rm_item_id]||{};
+      return Number(r.received)!==0 || Number(r.issued_to_mmc)!==0 || Number(r.store_balance)!==0 ||
+             Number(m.balance||0)!==0 || Number(m.consumed||0)!==0;});
     B.innerHTML = `
       <h4 class="sec">Raw material inventory</h4>
-      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it.</p>
+      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.</p>
       <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th><th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th></tr></thead><tbody>
-      ${(st.data||[]).map(r=>{const m=mmcBy[r.rm_item_id]||{};return `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td>${r.unit}</td>` +
+      ${live.map(r=>{const m=mmcBy[r.rm_item_id]||{};return `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td>${r.unit}</td>` +
         `<td class="amount">${Number(r.received)}</td><td class="amount">${Number(r.issued_to_mmc)}</td>` +
         `<td class="amount" style="font-weight:700;color:${Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance)}</td>` +
-        `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td></tr>`;}).join('') || '<tr><td colspan="6" style="color:#777">No materials.</td></tr>'}
+        `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td></tr>`;}).join('') || '<tr><td colspan="6" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
       </tbody></table></div>`;
     return;
   }
