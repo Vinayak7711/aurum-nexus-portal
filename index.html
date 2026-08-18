@@ -1192,7 +1192,7 @@ async function mfgTab(which){
     }
     B.innerHTML = `
       <div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Daily production &amp; raw-material consumption report</h2>
-        <p style="font-size:12px;color:#777;margin:4px 0 8px;">One entry does everything: the materials consumed are minused from the MMC raw-material stock, and the cases produced go into FG stock (immediately if “QC passed” stays ticked — otherwise after QC passes the batch).</p>
+        <p style="font-size:12px;color:#777;margin:4px 0 8px;">One entry does everything: the materials consumed are minused from the MMC raw-material stock, the cases produced go into FG stock (immediately if “QC passed” stays ticked — otherwise after QC passes the batch), and the cases automatically count towards that month's target in the <b>Production</b> section.</p>
         <div class="row2c"><div><label>SKU produced *</label><select id="pr-sku">${skuOpts}</select></div>
           <div class="row2c"><div><label>Cases *</label><input type="number" id="pr-cases" min="1"></div>
           <div><label>Date</label><input type="date" id="pr-date" value="${calFmt(new Date())}"></div></div></div>
@@ -1266,7 +1266,7 @@ async function prodTab(t){
     const now = monthLabelJS();
     const cur = rows.filter(r=>r.period===now);
     const curTgt = cur.reduce((a,r)=>a+Number(r.target_cases||0),0);
-    const curDone = cur.reduce((a,r)=>a+Number(r.reported_cases||0),0);
+    const curDone = cur.reduce((a,r)=>a+Math.max(Number(r.reported_cases||0), Number(r.produced_cases||0)),0);
     const curPct = curTgt ? Math.round(curDone*100/curTgt) : 0;
     let html = `<div class="statgrid">
       <div class="stat"><div class="n">${inr(curTgt)}</div><div class="l">This month's target (cases)</div></div>
@@ -1282,14 +1282,16 @@ async function prodTab(t){
         <input type="text" id="pt-note" placeholder="Note (optional)" style="margin-top:8px;">
         <div id="pt-msg"></div></div>`;
     }
-    html += '<div class="table-scroll"><table><thead><tr><th>Month</th><th>SKU</th><th class="amount">Target</th><th class="amount">Completed</th><th class="amount">Produced</th><th>Progress</th><th></th></tr></thead><tbody>';
+    html += '<div class="table-scroll"><table><thead><tr><th>Month</th><th>SKU</th><th class="amount">Target</th><th class="amount">Completed</th><th class="amount">Produced (batch book)</th><th>Progress</th><th></th></tr></thead><tbody>';
     for (const r of rows){
       const pct = Number(r.pct)||0;
       const barColor = pct>=100 ? '#1a7f37' : (pct>=60 ? '#b8860b' : '#b3382c');
       const canUpd = isDir() || canMfgAdd();
+      const effDone = Math.max(Number(r.reported_cases||0), Number(r.produced_cases||0));
+      const fromProd = Number(r.produced_cases||0) >= Number(r.reported_cases||0);
       html += `<tr><td><b>${r.period}</b></td><td>${esc(r.sku_code)}${r.brand_name?'<br><span style="font-size:11px;color:#777">'+esc(r.brand_name)+'</span>':''}</td>` +
         `<td class="amount">${inr(r.target_cases)}</td>` +
-        `<td class="amount"><b>${r.reported_cases!=null?inr(r.reported_cases):'—'}</b>${r.reported_on?'<br><span style="font-size:11px;color:#777">'+r.reported_on+'</span>':''}</td>` +
+        `<td class="amount"><b>${effDone?inr(effDone):'—'}</b><br><span style="font-size:11px;color:#777">${effDone?(fromProd?'from production report':'marked manually'+(r.reported_on?' · '+r.reported_on:'')):''}</span></td>` +
         `<td class="amount" style="color:#555">${inr(r.produced_cases)}</td>` +
         `<td><div style="background:#eee;border-radius:6px;height:16px;width:120px;overflow:hidden;"><div style="height:16px;width:${Math.min(pct,100)}%;background:${barColor};"></div></div><span style="font-size:11px;color:${barColor};font-weight:600">${pct}%</span></td>` +
         `<td style="white-space:nowrap">${canUpd?`<button class="mini" onclick="updProdCompletion('${r.id}','${esc(r.sku_code)}',${r.reported_cases||0})">Mark completion</button>`:''}` +
