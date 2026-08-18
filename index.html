@@ -2492,23 +2492,34 @@ async function acctTab(t){
       <div class="row2c"><div><label>From date</label><input type="date" id="led-from" value="${window.acLedFrom}" onchange="window.acLedFrom=this.value;acctTab('ledger')"></div>
       <div><label>To date</label><input type="date" id="led-to" value="${window.acLedTo}" onchange="window.acLedTo=this.value;acctTab('ledger')"></div></div>`;
     if (!sel){
-      const { data: vlistL } = await db.schema('sales').from('vendors').select('name').order('name');
-      const vendorNamesL = (vlistL||[]).map(v=>v.name);
+      const { data: vlistL } = await db.schema('sales').from('vendors').select('id,name').order('name');
+      const vDuesL = {};
+      if (window.acLedType === 'V:'){
+        const { data: voL } = await A.rpc('vendor_outstanding');
+        (voL||[]).forEach(r=>{ vDuesL[r.vendor_id] = r; });
+      }
+      window.__ledVenNames = window.__ledVenNames || {};
+      const vendorItemsL = (vlistL||[]).map(v=>{
+        window.__ledVenNames[v.id] = v.name;
+        const d = vDuesL[v.id];
+        return { key: 'V:'+v.id, label: v.name + (d && Number(d.outstanding) ? ' — due ₹ '+inr(d.outstanding) : '') };
+      });
+      const mkItemsL = (pfx2, arr) => arr.map(n=>({ key: pfx2+n, label: n }));
       const LT = {
-        'B:': ['🏦 Bank accounts', [...new Set((all||[]).flatMap(e=>[e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort()],
-        'P:': ['🤝 Party / distributor', [...new Set((all||[]).map(e=>e.party_name).filter(Boolean))].sort()],
-        'V:': ['💳 Vendor', vendorNamesL],
-        'S:': ['👤 Staff', [...new Set((all||[]).map(e=>e.staff_name).filter(Boolean))].sort()],
+        'B:': ['🏦 Bank accounts', mkItemsL('B:', [...new Set((all||[]).flatMap(e=>[e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort())],
+        'P:': ['🤝 Party / distributor', mkItemsL('P:', [...new Set((all||[]).map(e=>e.party_name).filter(Boolean))].sort())],
+        'V:': ['💳 Vendor', vendorItemsL],
+        'S:': ['👤 Staff', mkItemsL('S:', [...new Set((all||[]).map(e=>e.staff_name).filter(Boolean))].sort())],
       };
       const typeBar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">` +
         Object.keys(LT).map(k=>`<button class="btn sm ${window.acLedType===k?'gold':'ghost'}" onclick="window.acLedType='${k}';window.acLedSel='';acctTab('ledger')">${LT[k][0]} (${LT[k][1].length})</button>`).join('') + `</div>`;
       if (!LT[window.acLedType]) window.acLedType = 'B:';
       const pfx = window.acLedType, names = LT[pfx][1];
       window.__ledKeys = [];
-      const acctOpts = names.map(n=>{
-        const idx = window.__ledKeys.push(pfx+n) - 1;
-        const es2 = (all||[]).filter(e=>matchLed(e, pfx+n));
-        return `<option value="${idx}">${esc(n)} (${es2.length})</option>`;
+      const acctOpts = names.map(it=>{
+        const idx = window.__ledKeys.push(it.key) - 1;
+        const cnt = pfx==='V:' ? '' : ' ('+(all||[]).filter(e=>matchLed(e, it.key)).length+')';
+        return `<option value="${idx}">${esc(it.label)}${cnt}</option>`;
       }).join('');
       B.innerHTML = `
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
@@ -2531,6 +2542,41 @@ async function acctTab(t){
       return;
     }
     const isAllLed = sel === 'ALL';
+    if (!isAllLed && sel.slice(0,2) === 'V:'){
+      const vidL = sel.slice(2);
+      const vnameL = (window.__ledVenNames||{})[vidL] || 'Vendor';
+      const { data: vled, error: vlerr } = await A.rpc('vendor_ledger', { p_vendor: vidL, p_from: window.acLedFrom || null, p_to: window.acLedTo || null });
+      if (vlerr){ B.innerHTML = `<div class="msg err">Load failed: ${esc(vlerr.message)}</div>`; return; }
+      const docs = vled || [];
+      const totBil = docs.reduce((s,r)=>s+Number(r.billed||0),0);
+      const totPaid = docs.reduce((s,r)=>s+Number(r.paid||0),0);
+      const outst = totBil - totPaid;
+      window.__ledRows = docs.map(r=>({ entry_no:r.doc_no, entry_date:r.doc_date, kind:r.kind, payee:vnameL, narration:r.detail,
+        bank_name_label:'', counter_bank_label:'', mode:'', ref_no:'', amount:Number(r.billed||0)+Number(r.paid||0),
+        direction:r.kind==='BILL'?'IN':'OUT', status:r.kind==='BILL'?'BILLED':'PAID' }));
+      window.__ledLabel = 'Vendor ledger — ' + vnameL;
+      B.innerHTML = `
+      <button class="btn ghost sm" onclick="acLedBack()">‹ Back to all ledgers</button>
+      ${dateBar}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Billed (purchases)</div><div style="font-size:19px;font-weight:700;">₹ ${inr(totBil)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid</div><div style="font-size:19px;font-weight:700;color:#1a7f37">₹ ${inr(totPaid)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Outstanding</div><div style="font-size:19px;font-weight:700;color:${outst>0?'#b3261e':'#1a7f37'}">₹ ${inr(outst)}</div></div>
+      </div>
+      <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
+      <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
+      <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${docs.length} record${docs.length===1?'':'s'}</h4>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Doc no.</th><th>Type</th><th>Details</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th></tr></thead><tbody>
+      ${docs.map(r=>`<tr><td>${r.doc_date}</td><td><b>${esc(r.doc_no)}</b></td>` +
+        `<td>${r.kind==='BILL'?'🧾 Purchase bill':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
+        `<td class="amount" style="color:#b3261e">${Number(r.billed)?inr(r.billed):''}</td>` +
+        `<td class="amount" style="color:#1a7f37">${Number(r.paid)?inr(r.paid):''}</td></tr>`).join('')
+        || '<tr><td colspan="6" style="color:#777">No purchase bills or payments for this vendor in this date range.</td></tr>'}
+      ${docs.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${inr(totBil)}</td><td class="amount">${inr(totPaid)}</td></tr>
+      <tr style="font-weight:700;"><td colspan="4">Outstanding (billed − paid)</td><td colspan="2" class="amount" style="color:${outst>0?'#b3261e':'#1a7f37'}">₹ ${inr(outst)}</td></tr>`:''}
+      </tbody></table></div>`;
+      return;
+    }
     const es = (all||[]).filter(e => isAllLed ? true : matchLed(e, sel));
     const totIn = es.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
     const totOut = es.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
