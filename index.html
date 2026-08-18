@@ -2503,28 +2503,29 @@ async function acctTab(t){
       if (!LT[window.acLedType]) window.acLedType = 'B:';
       const pfx = window.acLedType, names = LT[pfx][1];
       window.__ledKeys = [];
-      const rows = names.map(n=>{
+      const acctOpts = names.map(n=>{
         const idx = window.__ledKeys.push(pfx+n) - 1;
         const es2 = (all||[]).filter(e=>matchLed(e, pfx+n));
-        const tin = es2.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
-        const tout = es2.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
-        return `<tr style="cursor:pointer" onclick="acLedOpen(${idx})"><td><b>${esc(n)}</b></td><td class="amount">${es2.length}</td>`+
-          `<td class="amount" style="color:#1a7f37">${inr(tin)}</td><td class="amount" style="color:#b3261e">${inr(tout)}</td>`+
-          `<td class="amount" style="font-weight:700;color:${tin-tout>=0?'#1a7f37':'#b3261e'}">${inr(tin-tout)}</td>`+
-          `<td><button class="mini" onclick="event.stopPropagation();acLedOpen(${idx})">Open ›</button></td></tr>`;
+        return `<option value="${idx}">${esc(n)} (${es2.length})</option>`;
       }).join('');
-      const listHtml = names.length
-        ? `<div class="table-scroll"><table><thead><tr><th>Account name</th><th class="amount">Entries</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th class="amount">Net ₹</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-        : '<div class="msg">No accounts of this type have entries yet.</div>';
       B.innerHTML = `
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
           ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button>`:''}
-          <span style="font-size:12px;color:#777">Choose the account type, then tap an account name to open its ledger.</span>
+          <span style="font-size:12px;color:#777">Choose the account type, pick the account from the list, set the dates, then view its ledger.</span>
         </div>
         <div id="ac-entry-form"></div>
         ${typeBar}
-        <h4 class="sec" style="margin-top:8px;">${LT[pfx][0]} ledgers (${names.length})</h4>
-        ${listHtml}`;
+        <div class="card" style="padding:14px;margin-top:8px;">
+          <div><label>Select the ${LT[pfx][0].replace(/^[^ ]+ /,'')} account</label>
+            <select id="led-acct">${names.length
+              ? `<option value="">— Choose from ${names.length} account${names.length===1?'':'s'} —</option>` + acctOpts
+              : '<option value="">No accounts of this type have entries yet</option>'}</select></div>
+          <div class="row2c" style="margin-top:10px;">
+            <div><label>From date (leave blank for beginning)</label><input type="date" id="led-from" value="${window.acLedFrom}" onchange="window.acLedFrom=this.value"></div>
+            <div><label>To date (leave blank for today)</label><input type="date" id="led-to" value="${window.acLedTo}" onchange="window.acLedTo=this.value"></div>
+          </div>
+          <button class="btn gold" style="margin-top:12px;" onclick="acLedView()">📖 View this ledger</button>
+        </div>`;
       return;
     }
     const isAllLed = sel === 'ALL';
@@ -2829,6 +2830,7 @@ async function acctTab(t){
   }
 }
 function acLedOpen(i){ window.acLedSel = i < 0 ? 'ALL' : (window.__ledKeys||[])[i] || ''; acctTab('ledger'); }
+function acLedView(){ const s = document.getElementById('led-acct'); if (!s || s.value === ''){ alert('Choose the account from the list first.'); return; } acLedOpen(Number(s.value)); }
 function acLedBack(){ window.acLedSel = ''; acctTab('ledger'); }
 async function acNewGo(kind){
   if (kind === 'ledger'){ await acctTab('ledger'); if (typeof acEntryForm === 'function'){ acEntryForm(); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); } }
