@@ -2492,10 +2492,12 @@ async function acctTab(t){
       <div class="row2c"><div><label>From date</label><input type="date" id="led-from" value="${window.acLedFrom}" onchange="window.acLedFrom=this.value;acctTab('ledger')"></div>
       <div><label>To date</label><input type="date" id="led-to" value="${window.acLedTo}" onchange="window.acLedTo=this.value;acctTab('ledger')"></div></div>`;
     if (!sel){
+      const { data: vlistL } = await db.schema('sales').from('vendors').select('name').order('name');
+      const vendorNamesL = (vlistL||[]).map(v=>v.name);
       const LT = {
         'B:': ['🏦 Bank accounts', [...new Set((all||[]).flatMap(e=>[e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort()],
         'P:': ['🤝 Party / distributor', [...new Set((all||[]).map(e=>e.party_name).filter(Boolean))].sort()],
-        'V:': ['💳 Payee / vendor', [...new Set((all||[]).map(e=>e.payee).filter(Boolean))].sort()],
+        'V:': ['💳 Vendor', vendorNamesL],
         'S:': ['👤 Staff', [...new Set((all||[]).map(e=>e.staff_name).filter(Boolean))].sort()],
       };
       const typeBar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">` +
@@ -2533,7 +2535,7 @@ async function acctTab(t){
     const totIn = es.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
     const totOut = es.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
     window.__ledRows = es;
-    window.__ledLabel = isAllLed ? 'All entries' : (sel.slice(0,2)==='B:'?'Bank ledger — ':sel.slice(0,2)==='P:'?'Party ledger — ':sel.slice(0,2)==='V:'?'Payee ledger — ':'Staff ledger — ') + sel.slice(2);
+    window.__ledLabel = isAllLed ? 'All entries' : (sel.slice(0,2)==='B:'?'Bank ledger — ':sel.slice(0,2)==='P:'?'Party ledger — ':sel.slice(0,2)==='V:'?'Vendor ledger — ':'Staff ledger — ') + sel.slice(2);
     B.innerHTML = `
       <button class="btn ghost sm" onclick="acLedBack()">‹ Back to all ledgers</button>
       ${dateBar}
