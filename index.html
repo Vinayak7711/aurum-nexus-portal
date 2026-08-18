@@ -223,11 +223,18 @@
   <section id="view-parties" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Party Master</h2>
-      <p>Distributors — one row each, forever. Deactivate, never delete.</p></div>
-    <div class="toolbar"><button class="btn gold sm" onclick="openPartyEdit(null)">+ Add distributor</button></div>
+      <p>Distributors and vendors — kept in separate lists. One row each, forever. Deactivate, never delete.</p></div>
+    <div class="toolbar"><button class="btn gold sm" onclick="openPartyEdit(null,'DISTRIBUTOR')">+ Add distributor</button>
+      <button class="btn ghost sm" onclick="openPartyEdit(null,'VENDOR')">+ Add vendor</button></div>
+    <h4 class="sec">🤝 Distributors (<span id="party-count-d">0</span>)</h4>
     <div class="table-scroll"><table>
       <thead><tr><th>Code</th><th>Name</th><th>City</th><th>Territory</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows"></tbody>
+    </table></div>
+    <h4 class="sec" style="margin-top:18px;">💳 Vendors — suppliers &amp; service providers (<span id="party-count-v">0</span>)</h4>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Code</th><th>Name</th><th>City</th><th>GSTIN</th><th>Contact</th><th>Active</th><th></th></tr></thead>
+      <tbody id="party-rows-v"></tbody>
     </table></div>
   </section>
 
@@ -468,6 +475,7 @@
   <div class="sheet">
     <h3 id="pe-title">Distributor</h3>
     <p class="email" id="pe-code"></p>
+    <label>Type *</label><select id="pe-type"><option value="DISTRIBUTOR">🤝 Distributor (we sell to them)</option><option value="VENDOR">💳 Vendor (we buy from them)</option></select>
     <label>Name *</label><input type="text" id="pe-name">
     <div class="row2c">
       <div><label>City</label><input type="text" id="pe-city"></div>
@@ -533,7 +541,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
 
 const MODULES = [
   {key:'sales',   ico:'🧾', name:'Sales & Orders',   desc:'Distributor orders, approval, dispatch', live:true,  open:()=>openOrders()},
-  {key:'party',   ico:'🤝', name:'Party Master',     desc:'Distributors & their salespersons',      live:true,  open:()=>openParties()},
+  {key:'party',   ico:'🤝', name:'Party Master',     desc:'Distributors & vendors — separate lists', live:true,  open:()=>openParties()},
   {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Deccan Crest, Frost 91 family, packs',   live:true,  open:()=>openBrands()},
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
@@ -801,7 +809,7 @@ function addLineRow(){
 }
 async function openNewOrder(){
   await loadMasters();
-  const mine = M.parties.filter(p=>p.is_active);
+  const mine = M.parties.filter(p=>p.is_active && (p.party_type||'DISTRIBUTOR')==='DISTRIBUTOR');
   $('no-party').innerHTML = mine.map(p=>`<option value="${p.id}">${esc(p.code)} — ${esc(p.name)}</option>`).join('');
   $('no-lines').innerHTML = ''; lineCounter = 0; addLineRow();
   $('no-remarks').value = ''; say('no-msg','');
@@ -914,23 +922,41 @@ async function openOrderDetail(id){
 /* ================= PARTIES ================= */
 async function openParties(){
   await loadMasters();
-  const tb = $('party-rows'); tb.innerHTML = '';
+  const tbD = $('party-rows'), tbV = $('party-rows-v'); tbD.innerHTML = ''; tbV.innerHTML = '';
   const ownerName = id => (M.users.find(u=>u.id===id)||{}).full_name || (id===me.id?'me':'—');
+  let nD = 0, nV = 0;
   for (const p of M.parties){
+    const isVen = (p.party_type||'DISTRIBUTOR') === 'VENDOR';
     const tr = document.createElement('tr');
     if (!p.is_active) tr.className='inactive';
-    const tname = ((M.terr||[]).find(t=>t.id===p.territory_id)||{}).name;
-    tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td><td>${esc(tname||'—')}</td>` +
-      `<td>${esc(ownerName(p.owner_id))}</td><td>${p.is_active?'✔':'✖'}</td>` +
-      `<td style="white-space:nowrap"><button class="mini btn-edit">Edit</button> ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
-    tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
-    tb.appendChild(tr);
+    if (isVen){
+      nV++;
+      tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td><td>${esc(p.gstin||'—')}</td>` +
+        `<td>${esc(p.contact_person||p.phone||'—')}</td><td>${p.is_active?'✔':'✖'}</td>` +
+        `<td style="white-space:nowrap"><button class="mini btn-edit">Edit</button> ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
+      tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
+      tbV.appendChild(tr);
+    } else {
+      nD++;
+      const tname = ((M.terr||[]).find(t=>t.id===p.territory_id)||{}).name;
+      tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td><td>${esc(tname||'—')}</td>` +
+        `<td>${esc(ownerName(p.owner_id))}</td><td>${p.is_active?'✔':'✖'}</td>` +
+        `<td style="white-space:nowrap"><button class="mini btn-edit">Edit</button> ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
+      tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
+      tbD.appendChild(tr);
+    }
   }
+  $('party-count-d').textContent = nD; $('party-count-v').textContent = nV;
+  if (!nD) tbD.innerHTML = '<tr><td colspan="7" style="color:#777">No distributors yet — use “+ Add distributor”.</td></tr>';
+  if (!nV) tbV.innerHTML = '<tr><td colspan="7" style="color:#777">No vendors yet — use “+ Add vendor”.</td></tr>';
   show('parties');
 }
-function openPartyEdit(p){
+function openPartyEdit(p, kind){
   editingParty = p;
-  $('pe-title').textContent = p ? 'Edit distributor' : 'Add distributor';
+  const t = p ? (p.party_type||'DISTRIBUTOR') : (kind||'DISTRIBUTOR');
+  const tw = t === 'VENDOR' ? 'vendor' : 'distributor';
+  $('pe-title').textContent = (p ? 'Edit ' : 'Add ') + tw;
+  if ($('pe-type')) $('pe-type').value = t;
   $('pe-code').textContent = p ? p.code : 'Code will be issued automatically (DST-…)';
   $('pe-name').value = p?.name||''; $('pe-city').value = p?.city||'';
   $('pe-credit').value = p?.credit_days??0; $('pe-license').value = p?.license_no||'';
@@ -951,7 +977,8 @@ $('btn-save-party').onclick = async () => {
     license_no: $('pe-license').value.trim()||null, gstin: $('pe-gstin').value.trim()||null,
     contact_person: $('pe-contact').value.trim()||null, phone: $('pe-phone').value.trim()||null,
     email: $('pe-email').value.trim()||null, owner_id: $('pe-owner').value, is_active: $('pe-active').checked,
-    territory_id: $('pe-territory').value || null
+    territory_id: $('pe-territory').value || null,
+    party_type: $('pe-type') ? $('pe-type').value : 'DISTRIBUTOR'
   };
   let error;
   if (editingParty){
