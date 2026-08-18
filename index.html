@@ -2565,10 +2565,13 @@ async function acctTab(t){
 
   if (t === 'petty'){
     const { data: pcs, error } = await A.from('petty_cash').select('*')
-      .order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(200);
+      .order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(1000);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const rows = pcs || [];
+    window.__pcAll = rows;
     const ym = new Date().toISOString().slice(0,7);
+    window.acPcFrom = window.acPcFrom || (ym + '-01');
+    window.acPcTo = window.acPcTo || calFmt(new Date());
     const isTop = r => r.entry_kind === 'TOPUP';
     const cashInHand = rows.filter(r=>r.status==='APPROVED')
                           .reduce((s,r)=>s + (isTop(r) ? Number(r.amount) : -Number(r.amount)), 0);
@@ -2603,20 +2606,35 @@ async function acctTab(t){
         <label>Note</label><input type="text" id="pc-desc" placeholder="What it was for (e.g. A4 paper, snacks for meeting, urgent tap repair)">
         <button class="btn gold sm" style="margin-top:10px;" onclick="acPettyAdd()">Post expense</button>
         <div id="pc-msg"></div></div>` : ''}
-      <h4 class="sec">Petty cash book</h4>
-      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / note</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Posted by</th><th>Status</th><th></th></tr></thead><tbody>
-      ${rows.map(r=>`<tr${isTop(r)?' style="background:#f4faf5;"':''}><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td>` +
-        `<td>${isTop(r)?'💵 Top-up from <b>'+esc(bankName(r.bank_id))+'</b>':esc(r.category)}</td>` +
-        `<td>${esc(r.paid_to||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}${r.approval_note?'<br><span style="font-size:10.5px;color:#b8860b">note: '+esc(r.approval_note)+'</span>':''}</td>` +
-        `<td class="amount" style="font-weight:600;color:#1a7f37">${isTop(r)?inr(r.amount):''}</td>` +
-        `<td class="amount" style="font-weight:600;color:#b3261e">${isTop(r)?'':inr(r.amount)}</td>` +
-        `<td style="font-size:12px;">${esc(acStaffName(r.created_by))}</td>` +
-        `<td><span style="color:${AC_ST[r.status]||'#333'};font-weight:600;font-size:12px">${acLbl(r.status)}</span>${r.approved_by?'<br><span style="font-size:10.5px;color:#777">by '+esc(acStaffName(r.approved_by))+'</span>':''}</td>` +
-        `<td style="white-space:nowrap">${r.status==='PENDING_APPROVAL'&&canFinApprove()
-            ? `<button class="mini" onclick="acPettyDecide('${r.id}',true)">Approve</button> <button class="mini" onclick="acPettyDecide('${r.id}',false)" style="color:#c0392b;">Reject</button> `
-            : ''}${dirDelBtn('acct','petty_cash', r.id, r.pc_no, "acctTab('petty')")}</td></tr>`).join('')
-        || '<tr><td colspan="9" style="color:#777">No petty cash entries yet — top up the box from a bank withdrawal first.</td></tr>'}
+      ${(()=>{
+        const pcRow = r => `<tr${isTop(r)?' style="background:#f4faf5;"':''}><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td>` +
+          `<td>${isTop(r)?'💵 Top-up from <b>'+esc(bankName(r.bank_id))+'</b>':esc(r.category)}</td>` +
+          `<td>${esc(r.paid_to||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}${r.approval_note?'<br><span style="font-size:10.5px;color:#b8860b">note: '+esc(r.approval_note)+'</span>':''}</td>` +
+          `<td class="amount" style="font-weight:600;color:#1a7f37">${isTop(r)?inr(r.amount):''}</td>` +
+          `<td class="amount" style="font-weight:600;color:#b3261e">${isTop(r)?'':inr(r.amount)}</td>` +
+          `<td style="font-size:12px;">${esc(acStaffName(r.created_by))}</td>` +
+          `<td><span style="color:${AC_ST[r.status]||'#333'};font-weight:600;font-size:12px">${acLbl(r.status)}</span>${r.approved_by?'<br><span style="font-size:10.5px;color:#777">by '+esc(acStaffName(r.approved_by))+'</span>':''}</td>` +
+          `<td style="white-space:nowrap"><button class="mini" onclick="acPettyVoucher('${r.id}')">🖨 Voucher</button> ${r.status==='PENDING_APPROVAL'&&canFinApprove()
+              ? `<button class="mini" onclick="acPettyDecide('${r.id}',true)">Approve</button> <button class="mini" onclick="acPettyDecide('${r.id}',false)" style="color:#c0392b;">Reject</button> `
+              : ''}${dirDelBtn('acct','petty_cash', r.id, r.pc_no, "acctTab('petty')")}</td></tr>`;
+        const head = '<tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / note</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Posted by</th><th>Status</th><th></th></tr>';
+        const pend = rows.filter(r=>r.status==='PENDING_APPROVAL');
+        const appr = rows.filter(r=>r.status!=='PENDING_APPROVAL'
+          && String(r.expense_date) >= window.acPcFrom && String(r.expense_date) <= window.acPcTo);
+        return `
+      <h4 class="sec">Awaiting approval (${pend.length})</h4>
+      <div class="table-scroll"><table><thead>${head}</thead><tbody>
+      ${pend.map(pcRow).join('') || '<tr><td colspan="9" style="color:#777">Nothing is waiting for approval.</td></tr>'}
       </tbody></table></div>
+      <h4 class="sec" style="margin-top:18px;">Approved &amp; past entries — pick the date range</h4>
+      <div class="row2c" style="max-width:680px;">
+        <div><label>From date</label><input type="date" id="pc-af" value="${window.acPcFrom}" onchange="window.acPcFrom=this.value;acctTab('petty')"></div>
+        <div><label>To date</label><input type="date" id="pc-at" value="${window.acPcTo}" onchange="window.acPcTo=this.value;acctTab('petty')"></div>
+      </div>
+      <div class="table-scroll" style="margin-top:8px;"><table><thead>${head}</thead><tbody>
+      ${appr.map(pcRow).join('') || '<tr><td colspan="9" style="color:#777">No approved entries in this date range.</td></tr>'}
+      </tbody></table></div>`;
+      })()}
       <div id="pc-list-msg"></div>`;
     return;
   }
@@ -2930,6 +2948,28 @@ function acExpVoucher(id){
     <div class="sig"><div>Prepared by</div><div>Approved by</div><div>Received by</div></div>
     <p style="font-size:10.5px;color:#666;margin-top:26px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
   printHtml('Expense voucher '+r.exp_no, body);
+}
+function acPettyVoucher(id){
+  const r = (window.__pcAll||[]).find(x=>x.id===id);
+  if (!r){ alert('Open the Petty Cash tab again and retry.'); return; }
+  const isTop = r.entry_kind === 'TOPUP';
+  const bk = acBanks.find(x=>x.id===r.bank_id);
+  const body = `
+    <h1 style="text-align:center;">AURUM SPIRITS INDIA LIMITED</h1>
+    <h2 style="text-align:center;">PETTY CASH ${isTop?'TOP-UP':''} VOUCHER</h2>
+    <table style="margin-top:10px;">
+      <tr><th style="width:30%;">Voucher no.</th><td><b>${esc(r.pc_no)}</b></td></tr>
+      <tr><th>Date</th><td>${r.expense_date}</td></tr>
+      <tr><th>${isTop?'Cash withdrawn from':'Category'}</th><td>${isTop?esc(bk?bk.name:'bank'):esc(r.category||'—')}</td></tr>
+      <tr><th>Paid to</th><td>${esc(r.paid_to||'—')}</td></tr>
+      <tr><th>Details</th><td>${esc(r.description||'—')}</td></tr>
+      <tr class="tot"><th>Amount ${isTop?'credited to cash box':'paid in cash'}</th><td><b>₹ ${inr(r.amount)}</b></td></tr>
+      <tr><th>Amount in words</th><td>${esc(inrWords(r.amount))}</td></tr>
+      <tr><th>Status</th><td>${acLbl(r.status)}${r.approved_by?' — by '+esc(acStaffName(r.approved_by)):''}</td></tr>
+    </table>
+    <div class="sig"><div>Prepared by</div><div>Approved by</div><div>Received by</div></div>
+    <p style="font-size:10.5px;color:#666;margin-top:26px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml('Petty cash voucher '+r.pc_no, body);
 }
 function acVendorPayForm(vid, vname, out){
   const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
