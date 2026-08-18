@@ -380,6 +380,7 @@
       <p>Bank records, the finance ledger, staff salary slips, advances and the asset register. Accounts and Director only. Entries wait for approval before money moves; the Director can edit, delete or approve anything.</p></div>
     <div class="subtabs">
       <button class="chip on" id="ac-banks" onclick="acctTab('banks')">Banks</button>
+      <button class="chip" id="ac-newe" onclick="acctTab('newe')" style="font-weight:700;">＋ New Entry</button>
       <button class="chip" id="ac-ledger" onclick="acctTab('ledger')">Ledger</button>
       <button class="chip" id="ac-petty" onclick="acctTab('petty')">Petty Cash</button>
       <button class="chip" id="ac-tax" onclick="acctTab('tax')">Purchase Tax</button>
@@ -2447,7 +2448,7 @@ async function openAcct(){
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
 function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
 async function acctTab(t){
-  for (const k of ['banks','ledger','petty','tax','vdues','exp','salary','adv','assets']) $('ac-'+k).classList.toggle('on', k===t);
+  for (const k of ['banks','newe','ledger','petty','tax','vdues','exp','salary','adv','assets']) $('ac-'+k).classList.toggle('on', k===t);
   const B = $('acct-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const A = db.schema('acct');
 
@@ -2468,12 +2469,55 @@ async function acctTab(t){
   }
 
   if (t === 'ledger'){
-    const { data: es, error } = await A.from('v_entries').select('*').order('entry_date', {ascending:false}).order('created_at', {ascending:false}).limit(200);
+    const nowL = new Date();
+    const fyStartL = (nowL.getMonth() >= 3 ? nowL.getFullYear() : nowL.getFullYear()-1) + '-04-01';
+    window.acLedFrom = window.acLedFrom || fyStartL;
+    window.acLedTo = window.acLedTo || calFmt(nowL);
+    window.acLedSel = window.acLedSel || '';
+    const { data: all, error } = await A.from('v_entries').select('*')
+      .gte('entry_date', window.acLedFrom).lte('entry_date', window.acLedTo)
+      .order('entry_date', {ascending:false}).order('created_at', {ascending:false}).limit(1000);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    const banksL = [...new Set((all||[]).flatMap(e=>[e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort();
+    const partiesL = [...new Set((all||[]).map(e=>e.party_name).filter(Boolean))].sort();
+    const payeesL = [...new Set((all||[]).map(e=>e.payee).filter(Boolean))].sort();
+    const staffL = [...new Set((all||[]).map(e=>e.staff_name).filter(Boolean))].sort();
+    const sel = window.acLedSel;
+    const es = (all||[]).filter(e=>{
+      if (!sel) return true;
+      const [k, name] = [sel.slice(0,2), sel.slice(2)];
+      if (k==='B:') return e.bank_name_label===name || e.counter_bank_label===name;
+      if (k==='P:') return e.party_name===name;
+      if (k==='V:') return e.payee===name;
+      if (k==='S:') return e.staff_name===name;
+      return true;
+    });
+    const totIn = es.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
+    const totOut = es.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
+    window.__ledRows = es;
+    window.__ledLabel = !sel ? 'All entries' : (sel.slice(0,2)==='B:'?'Bank ledger — ':sel.slice(0,2)==='P:'?'Party ledger — ':sel.slice(0,2)==='V:'?'Payee ledger — ':'Staff ledger — ') + sel.slice(2);
     B.innerHTML = `
-      ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button>`:''}
+      <div class="row2c">
+        <div class="row2c"><div><label>From date</label><input type="date" id="led-from" value="${window.acLedFrom}" onchange="window.acLedFrom=this.value;acctTab('ledger')"></div>
+        <div><label>To date</label><input type="date" id="led-to" value="${window.acLedTo}" onchange="window.acLedTo=this.value;acctTab('ledger')"></div></div>
+        <div><label>Which ledger?</label><select onchange="window.acLedSel=this.value;acctTab('ledger')">
+          <option value="">All entries (${(all||[]).length})</option>
+          ${banksL.length?'<optgroup label="Bank ledgers">'+banksL.map(n=>`<option value="B:${esc(n)}" ${sel==='B:'+n?'selected':''}>🏦 ${esc(n)}</option>`).join('')+'</optgroup>':''}
+          ${partiesL.length?'<optgroup label="Party / distributor ledgers">'+partiesL.map(n=>`<option value="P:${esc(n)}" ${sel==='P:'+n?'selected':''}>🤝 ${esc(n)}</option>`).join('')+'</optgroup>':''}
+          ${payeesL.length?'<optgroup label="Payee ledgers (vendors & others)">'+payeesL.map(n=>`<option value="V:${esc(n)}" ${sel==='V:'+n?'selected':''}>💳 ${esc(n)}</option>`).join('')+'</optgroup>':''}
+          ${staffL.length?'<optgroup label="Staff ledgers">'+staffL.map(n=>`<option value="S:${esc(n)}" ${sel==='S:'+n?'selected':''}>👤 ${esc(n)}</option>`).join('')+'</optgroup>':''}
+        </select></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Money in</div><div style="font-size:19px;font-weight:700;color:#1a7f37">₹ ${inr(totIn)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Money out</div><div style="font-size:19px;font-weight:700;color:#b3261e">₹ ${inr(totOut)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Net</div><div style="font-size:19px;font-weight:700;color:${totIn-totOut>=0?'#1a7f37':'#b3261e'}">₹ ${inr(totIn-totOut)}</div></div>
+      </div>
+      ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button> `:''}
+      <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
+      <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
       <div id="ac-entry-form"></div>
-      <h4 class="sec" style="margin-top:12px;">Finance ledger</h4>
+      <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom} → ${window.acLedTo} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
       ${(es||[]).map(e=>{const who=e.staff_name||e.party_name||e.payee||'';const inA=e.direction==='IN'?inr(e.amount):'';const outA=e.direction==='OUT'?inr(e.amount):'';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
@@ -2564,6 +2608,31 @@ async function acctTab(t){
     return;
   }
 
+  if (t === 'newe'){
+    if (!canFinEdit()){ B.innerHTML = '<p style="color:#777">New accounting entries are made by Accounts (finance) or the Director.</p>'; return; }
+    const CARD = (icon, title, desc, kind) => `
+      <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;cursor:pointer;" onclick="acNewGo('${kind}')">
+        <div style="font-size:26px;">${icon}</div>
+        <h2 style="font-size:15px;margin:6px 0 4px;">${title}</h2>
+        <p style="font-size:12px;color:#777;margin:0 0 10px;">${desc}</p>
+        <button class="btn gold sm" onclick="event.stopPropagation();acNewGo('${kind}')">Make this entry</button>
+      </div>`;
+    B.innerHTML = `
+      <h4 class="sec">One place for every accounting entry</h4>
+      <p style="font-size:12px;color:#777;margin:4px 0 12px;">Pick what you are entering — it opens the right form, and once saved the entry automatically reflects in its own section (and in the ledger / petty book / vendor dues wherever it belongs).</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        ${CARD('🏦','Bank / ledger entry','Money in, money out, transfers between banks, receipts &amp; recoveries — straight into the finance ledger.','ledger')}
+        ${CARD('💳','Vendor payment','Pay a vendor against their purchase bills — reduces that party’s outstanding in Vendor Dues.','vpay')}
+        ${CARD('🧾','Business expense','Rent, utilities, travel, fees… paid by bank (hits the ledger) or petty cash (goes for approval).','exp')}
+        ${CARD('💵','Petty cash expense','Small day-to-day cash spends from the box — waits for approval in the Petty Cash book.','petty')}
+        ${CARD('🏧','Petty cash top-up','Cash withdrawn from a bank into the box — posts the bank withdrawal in the ledger on approval.','topup')}
+        ${CARD('👤','Salary slip','Generate a staff salary slip in the Salary section.','salary')}
+        ${CARD('🤝','Staff advance','Give or recover a staff advance in the Advances section.','adv')}
+        ${CARD('🏢','Asset / document','Add an asset or its papers in the Asset register.','asset')}
+      </div>`;
+    return;
+  }
+
   if (t === 'vdues'){
     const [{ data: rows, error }, payRes] = await Promise.all([
       A.rpc('vendor_outstanding'),
@@ -2604,6 +2673,7 @@ async function acctTab(t){
     const { data: exps, error } = await A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status)').order('exp_date',{ascending:false}).order('created_at',{ascending:false}).limit(200);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const rows = exps || [];
+    window.__expRows = rows;
     const ym = new Date().toISOString().slice(0,7);
     const monthTot = rows.filter(r=>String(r.exp_date).slice(0,7)===ym).reduce((s,r)=>s+Number(r.amount),0);
     const CATS_EXP = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'];
@@ -2634,7 +2704,7 @@ async function acctTab(t){
         `<td>${esc(r.payee||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
         `<td class="amount" style="font-weight:600;color:#b3261e">${inr(r.amount)}</td>` +
         `<td>${r.mode!=='PETTY'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':'')}</td>` +
-        `<td>${dirDelBtn('acct','expenses', r.id, r.exp_no, "acctTab('exp')")}</td></tr>`).join('')
+        `<td style="white-space:nowrap"><button class="mini" onclick="acExpVoucher('${r.id}')" title="Print or save a PDF voucher for your physical records">🖨 Voucher</button> ${dirDelBtn('acct','expenses', r.id, r.exp_no, "acctTab('exp')")}</td></tr>`).join('')
         || '<tr><td colspan="7" style="color:#777">No expenses recorded yet.</td></tr>'}
       </tbody></table></div>`;
     return;
@@ -2729,6 +2799,103 @@ async function acctTab(t){
       <div id="ac-asset-panel"></div>`;
     return;
   }
+}
+async function acNewGo(kind){
+  if (kind === 'ledger'){ await acctTab('ledger'); if (typeof acEntryForm === 'function'){ acEntryForm(); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); } }
+  else if (kind === 'vpay'){ await acctTab('vdues'); }
+  else if (kind === 'exp'){ await acctTab('exp'); const el=$('ex-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
+  else if (kind === 'petty'){ await acctTab('petty'); const el=$('pc-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
+  else if (kind === 'topup'){ await acctTab('petty'); const el=$('pt-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
+  else if (kind === 'salary'){ await acctTab('salary'); if (typeof acSlipForm === 'function') acSlipForm(); }
+  else if (kind === 'adv'){ await acctTab('adv'); }
+  else if (kind === 'asset'){ await acctTab('assets'); }
+}
+function printHtml(title, bodyHtml){
+  const w = window.open('', '_blank');
+  if (!w){ alert('The browser blocked the print window — please allow pop-ups for this site and try again.'); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+    <style>body{font-family:Georgia,'Times New Roman',serif;color:#1a1a2e;margin:28px;}
+    h1{font-size:20px;margin:0;} h2{font-size:14px;font-weight:normal;color:#555;margin:2px 0 14px;}
+    table{width:100%;border-collapse:collapse;font-size:12.5px;} th,td{border:1px solid #999;padding:6px 8px;text-align:left;}
+    th{background:#f0ead8;} .amount{text-align:right;} .tot{font-weight:bold;background:#faf6ea;}
+    .sig{display:flex;justify-content:space-between;margin-top:56px;font-size:12px;}
+    .sig div{border-top:1px solid #333;padding-top:5px;width:28%;text-align:center;}
+    @media print { .noprint{display:none} }</style></head><body>${bodyHtml}
+    <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>`);
+  w.document.close();
+}
+function acLedCsv(){
+  const rows = window.__ledRows || [];
+  const esc2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const lines = [['Entry no','Date','Kind','Detail','Bank','In (INR)','Out (INR)','Mode','Ref','Narration','Status'].join(',')];
+  rows.forEach(e=>{
+    const who = e.staff_name || e.party_name || e.payee || '';
+    lines.push([esc2(e.entry_no), esc2(e.entry_date), esc2(e.kind), esc2(who),
+      esc2((e.bank_name_label||'') + (e.kind==='TRANSFER' ? ' -> '+(e.counter_bank_label||'') : '')),
+      e.direction==='IN'?Number(e.amount):'', e.direction==='OUT'?Number(e.amount):'',
+      esc2(e.mode||''), esc2(e.ref_no||''), esc2(e.narration||''), esc2(e.status)].join(','));
+  });
+  const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'ledger-' + (window.acLedFrom||'') + '-to-' + (window.acLedTo||'') + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function acLedPrint(){
+  const rows = window.__ledRows || [];
+  const totIn = rows.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
+  const totOut = rows.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
+  const body = `
+    <h1>AURUM SPIRITS INDIA LIMITED</h1>
+    <h2>Finance ledger · ${esc(window.__ledLabel||'All entries')} · ${window.acLedFrom} to ${window.acLedTo}</h2>
+    <table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th></tr></thead><tbody>
+    ${rows.map(e=>{const who=e.staff_name||e.party_name||e.payee||'';
+      return `<tr><td>${esc(e.entry_no)}</td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>`+
+        `<td>${esc(who)}${e.narration?'<br><span style="font-size:10px;color:#666">'+esc(e.narration)+'</span>':''}</td>`+
+        `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}</td>`+
+        `<td class="amount">${e.direction==='IN'?inr(e.amount):''}</td><td class="amount">${e.direction==='OUT'?inr(e.amount):''}</td><td>${e.status}</td></tr>`;}).join('')}
+    <tr class="tot"><td colspan="5">Total (${rows.length} entries)</td><td class="amount">${inr(totIn)}</td><td class="amount">${inr(totOut)}</td><td></td></tr>
+    </tbody></table>
+    <p style="font-size:11px;color:#666;margin-top:10px;">Net: ₹ ${inr(totIn-totOut)} · Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml('Ledger — Aurum Spirits', body);
+}
+function inrWords(n){
+  n = Math.round(Number(n)); if (!isFinite(n) || n <= 0) return '';
+  const a=['','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen'];
+  const b=['','','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'];
+  const two = x => x<20 ? a[x] : (b[Math.floor(x/10)] + (x%10 ? ' ' + a[x%10] : ''));
+  const three = x => (x>=100 ? a[Math.floor(x/100)]+' hundred'+(x%100?' ':'') : '') + (x%100 ? two(x%100) : '');
+  let out='';
+  const cr=Math.floor(n/10000000); n%=10000000;
+  const lk=Math.floor(n/100000); n%=100000;
+  const th=Math.floor(n/1000); n%=1000;
+  if (cr) out+=three(cr)+' crore ';
+  if (lk) out+=three(lk)+' lakh ';
+  if (th) out+=three(th)+' thousand ';
+  if (n) out+=three(n);
+  out = (out.trim()||'zero') + ' rupees only';
+  return out.charAt(0).toUpperCase()+out.slice(1);
+}
+function acExpVoucher(id){
+  const r = (window.__expRows||[]).find(x=>x.id===id);
+  if (!r){ alert('Open the Expenses tab again and retry.'); return; }
+  const paidFrom = r.mode!=='PETTY' ? ('Bank — '+(r.bank?.name||'')+' ('+r.mode+')') : ('Petty cash box'+(r.petty?' — '+r.petty.pc_no+' ('+acLbl(r.petty.status)+')':''));
+  const body = `
+    <h1 style="text-align:center;">AURUM SPIRITS INDIA LIMITED</h1>
+    <h2 style="text-align:center;">EXPENSE VOUCHER</h2>
+    <table style="margin-top:10px;">
+      <tr><th style="width:30%;">Voucher no.</th><td><b>${esc(r.exp_no)}</b></td></tr>
+      <tr><th>Date</th><td>${r.exp_date}</td></tr>
+      <tr><th>Category</th><td>${esc(r.category)}</td></tr>
+      <tr><th>Paid to</th><td>${esc(r.payee||'—')}</td></tr>
+      <tr><th>Details</th><td>${esc(r.description||'—')}</td></tr>
+      <tr><th>Paid from</th><td>${esc(paidFrom)}</td></tr>
+      <tr class="tot"><th>Amount</th><td><b>₹ ${inr(r.amount)}</b></td></tr>
+      <tr><th>Amount in words</th><td>${esc(inrWords(r.amount))}</td></tr>
+    </table>
+    <div class="sig"><div>Prepared by</div><div>Approved by</div><div>Received by</div></div>
+    <p style="font-size:10.5px;color:#666;margin-top:26px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml('Expense voucher '+r.exp_no, body);
 }
 function acVendorPayForm(vid, vname, out){
   const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
