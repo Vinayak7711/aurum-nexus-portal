@@ -1464,6 +1464,7 @@ async function onbTab(which){
   if (which === 'vendors'){
     const { data, error } = await S.from('vendors').select('*').order('created_at',{ascending:false});
     if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    window.__vnRows = data || [];
     let html = `<div class="card" style="margin-bottom:14px;max-width:640px;"><h2 style="font-size:15px;">Register vendor</h2>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-name" placeholder="Vendor name *">
       <input type="text" id="vn-cat" placeholder="Category (bottles / caps / transport …)"></div>
@@ -1471,16 +1472,69 @@ async function onbTab(which){
       <input type="text" id="vn-phone" placeholder="Phone"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-contact" placeholder="Contact person">
       <button class="btn gold sm" style="padding:11px;" onclick="vnAdd()">Register</button></div>
-      <div id="vn-msg"></div></div>`;
+      <div id="vn-msg"></div></div>
+      <div id="vn-editbox"></div>`;
     html += '<div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>';
     for (const v of (data||[])){
       const pill = v.status==='ACTIVE'?'DELIVERED':(v.status==='INACTIVE'?'CANCELLED':'RECEIVED');
-      html += `<tr><td><b>${esc(v.code)}</b></td><td>${esc(v.name)}</td><td>${esc(v.category||'—')}</td>
+      html += `<tr><td><b>${esc(v.code)}</b>${v.party_id?'<br><span style="font-size:10px;color:#999" title="Also in Party Master">🔗 Party Master</span>':''}</td><td>${esc(v.name)}</td><td>${esc(v.category||'—')}</td>
         <td><span class="pill ${pill}">${v.status}</span></td>
-        <td style="white-space:nowrap"><button class="mini" onclick="vnStatus('${v.id}','${v.status==='ACTIVE'?'INACTIVE':'ACTIVE'}')">${v.status==='ACTIVE'?'Deactivate':'Activate'}</button> ${dirDelBtn('sales','vendors', v.id, v.name, "onbTab('vendors')")}</td></tr>`;
+        <td style="white-space:nowrap">${isDir()?`<button class="mini" onclick="vnEdit('${v.id}')">Edit</button> `:''}<button class="mini" onclick="vnStatus('${v.id}','${v.status==='ACTIVE'?'INACTIVE':'ACTIVE'}')">${v.status==='ACTIVE'?'Deactivate':'Activate'}</button> ${dirDelBtn('sales','vendors', v.id, v.name, "onbTab('vendors')")}</td></tr>`;
     }
     B.innerHTML = html + '</tbody></table></div>';
   }
+}
+function vnEdit(id){
+  const v = (window.__vnRows||[]).find(x=>x.id===id);
+  if (!v){ alert('Open the Vendors tab again and retry.'); return; }
+  const box = $('vn-editbox'); if (!box) return;
+  box.innerHTML = `
+    <div class="card" style="margin-bottom:14px;max-width:680px;border:1px solid #b8860b;"><h2 style="font-size:15px;">Edit ${esc(v.code)} — ${esc(v.name)}</h2>
+      ${v.party_id?'<p style="font-size:12px;color:#777;margin:4px 0 8px;">This record is linked to the Party Master — saving here updates it there too.</p>':''}
+      <div class="row2c" style="margin-top:8px;"><div><label>Name *</label><input type="text" id="ve-name" value="${esc(v.name)}"></div>
+        <div><label>Category</label><input type="text" id="ve-cat" value="${esc(v.category||'')}"></div></div>
+      <div class="row2c" style="margin-top:8px;"><div><label>GSTIN</label><input type="text" id="ve-gstin" value="${esc(v.gstin||'')}"></div>
+        <div><label>Phone</label><input type="text" id="ve-phone" value="${esc(v.phone||'')}"></div></div>
+      <div class="row2c" style="margin-top:8px;"><div><label>Contact person</label><input type="text" id="ve-contact" value="${esc(v.contact_person||'')}"></div>
+        <div><label>Email</label><input type="text" id="ve-email" value="${esc(v.email||'')}"></div></div>
+      <div style="margin-top:8px;"><label>Type *</label><select id="ve-type">
+        <option value="VENDOR" selected>💳 Vendor (we buy from them)</option>
+        <option value="DISTRIBUTOR">🤝 Distributor (we sell to them) — moves it to the Party Master distributor list</option></select></div>
+      <div class="row2" style="margin-top:12px;">
+        <button class="btn ghost sm" onclick="$('vn-editbox').innerHTML=''">Cancel</button>
+        <button class="btn gold sm" onclick="vnEditSave('${v.id}')">Save changes</button></div>
+      <div id="ve-msg"></div></div>`;
+  box.scrollIntoView({behavior:'smooth', block:'center'});
+}
+async function vnEditSave(id){
+  const v = (window.__vnRows||[]).find(x=>x.id===id);
+  if (!v) return;
+  const name = $('ve-name').value.trim();
+  if (!name){ say('ve-msg','Name is required.',false); return; }
+  const f = { name, category: $('ve-cat').value.trim()||null, gstin: $('ve-gstin').value.trim()||null,
+              phone: $('ve-phone').value.trim()||null, contact_person: $('ve-contact').value.trim()||null,
+              email: $('ve-email').value.trim()||null };
+  const toDist = $('ve-type').value === 'DISTRIBUTOR';
+  const S2 = db.schema('sales');
+  let error = null;
+  if (v.party_id){
+    ({ error } = await S2.from('parties').update({ name: f.name, gstin: f.gstin, phone: f.phone,
+        contact_person: f.contact_person, email: f.email,
+        party_type: toDist ? 'DISTRIBUTOR' : 'VENDOR' }).eq('id', v.party_id));
+    if (!error) ({ error } = await S2.from('vendors').update({ category: f.category }).eq('id', id));
+  } else if (!toDist){
+    ({ error } = await S2.from('vendors').update(f).eq('id', id));
+  } else {
+    const { data: code, error: e1 } = await db.schema('app').rpc('next_party_code');
+    if (e1){ say('ve-msg', e1.message, false); return; }
+    ({ error } = await S2.from('parties').insert({ code, name: f.name, gstin: f.gstin, phone: f.phone,
+        contact_person: f.contact_person, email: f.email, party_type: 'DISTRIBUTOR',
+        state_id: 'MH', is_active: true, owner_id: me.id, created_by: me.id }));
+    if (!error) ({ error } = await S2.from('vendors').update({ status: 'INACTIVE' }).eq('id', id));
+  }
+  if (error){ say('ve-msg','Save failed: '+error.message,false); return; }
+  if (toDist) alert('Saved. '+name+' is now a DISTRIBUTOR — find it in the Party Master distributor list. It will no longer appear in vendor lists for new POs.');
+  onbTab('vendors');
 }
 async function onbAdd(){
   const name = $('ob-name').value.trim();
