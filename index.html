@@ -2469,14 +2469,15 @@ async function acctTab(t){
   }
 
   if (t === 'ledger'){
-    const nowL = new Date();
-    const fyStartL = (nowL.getMonth() >= 3 ? nowL.getFullYear() : nowL.getFullYear()-1) + '-04-01';
-    window.acLedFrom = window.acLedFrom || fyStartL;
-    window.acLedTo = window.acLedTo || calFmt(nowL);
+    if (window.acLedFrom === undefined) window.acLedFrom = '';
+    if (window.acLedTo === undefined) window.acLedTo = '';
     window.acLedSel = window.acLedSel || '';
-    const { data: all, error } = await A.from('v_entries').select('*')
-      .gte('entry_date', window.acLedFrom).lte('entry_date', window.acLedTo)
-      .order('entry_date', {ascending:false}).order('created_at', {ascending:false}).limit(1000);
+    window.acLedType = window.acLedType || 'B:';
+    let qLed = A.from('v_entries').select('*');
+    if (window.acLedFrom) qLed = qLed.gte('entry_date', window.acLedFrom);
+    if (window.acLedTo) qLed = qLed.lte('entry_date', window.acLedTo);
+    const { data: all, error } = await qLed
+      .order('entry_date', {ascending:false}).order('created_at', {ascending:false}).limit(2000);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const sel = window.acLedSel;
     const matchLed = (e, key) => {
@@ -2491,36 +2492,39 @@ async function acctTab(t){
       <div class="row2c"><div><label>From date</label><input type="date" id="led-from" value="${window.acLedFrom}" onchange="window.acLedFrom=this.value;acctTab('ledger')"></div>
       <div><label>To date</label><input type="date" id="led-to" value="${window.acLedTo}" onchange="window.acLedTo=this.value;acctTab('ledger')"></div></div>`;
     if (!sel){
-      const groupsL = [
-        ['🏦 Bank ledgers','B:', [...new Set((all||[]).flatMap(e=>[e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort()],
-        ['🤝 Party / distributor ledgers','P:', [...new Set((all||[]).map(e=>e.party_name).filter(Boolean))].sort()],
-        ['💳 Payee ledgers (vendors & others)','V:', [...new Set((all||[]).map(e=>e.payee).filter(Boolean))].sort()],
-        ['👤 Staff ledgers','S:', [...new Set((all||[]).map(e=>e.staff_name).filter(Boolean))].sort()],
-      ];
+      const LT = {
+        'B:': ['🏦 Bank accounts', [...new Set((all||[]).flatMap(e=>[e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort()],
+        'P:': ['🤝 Party / distributor', [...new Set((all||[]).map(e=>e.party_name).filter(Boolean))].sort()],
+        'V:': ['💳 Payee / vendor', [...new Set((all||[]).map(e=>e.payee).filter(Boolean))].sort()],
+        'S:': ['👤 Staff', [...new Set((all||[]).map(e=>e.staff_name).filter(Boolean))].sort()],
+      };
+      const typeBar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">` +
+        Object.keys(LT).map(k=>`<button class="btn sm ${window.acLedType===k?'gold':'ghost'}" onclick="window.acLedType='${k}';window.acLedSel='';acctTab('ledger')">${LT[k][0]} (${LT[k][1].length})</button>`).join('') + `</div>`;
+      if (!LT[window.acLedType]) window.acLedType = 'B:';
+      const pfx = window.acLedType, names = LT[pfx][1];
       window.__ledKeys = [];
-      const gHtml = groupsL.map(([title, pfx, names])=>{
-        if (!names.length) return '';
-        const rows = names.map(n=>{
-          const idx = window.__ledKeys.push(pfx+n) - 1;
-          const es2 = (all||[]).filter(e=>matchLed(e, pfx+n));
-          const tin = es2.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
-          const tout = es2.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
-          return `<tr style="cursor:pointer" onclick="acLedOpen(${idx})"><td><b>${esc(n)}</b></td><td class="amount">${es2.length}</td>`+
-            `<td class="amount" style="color:#1a7f37">${inr(tin)}</td><td class="amount" style="color:#b3261e">${inr(tout)}</td>`+
-            `<td class="amount" style="font-weight:700;color:${tin-tout>=0?'#1a7f37':'#b3261e'}">${inr(tin-tout)}</td>`+
-            `<td><button class="mini" onclick="event.stopPropagation();acLedOpen(${idx})">Open ›</button></td></tr>`;
-        }).join('');
-        return `<h4 class="sec" style="margin-top:14px;">${title} (${names.length})</h4>
-          <div class="table-scroll"><table><thead><tr><th>Account name</th><th class="amount">Entries</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th class="amount">Net ₹</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      const rows = names.map(n=>{
+        const idx = window.__ledKeys.push(pfx+n) - 1;
+        const es2 = (all||[]).filter(e=>matchLed(e, pfx+n));
+        const tin = es2.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
+        const tout = es2.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
+        return `<tr style="cursor:pointer" onclick="acLedOpen(${idx})"><td><b>${esc(n)}</b></td><td class="amount">${es2.length}</td>`+
+          `<td class="amount" style="color:#1a7f37">${inr(tin)}</td><td class="amount" style="color:#b3261e">${inr(tout)}</td>`+
+          `<td class="amount" style="font-weight:700;color:${tin-tout>=0?'#1a7f37':'#b3261e'}">${inr(tin-tout)}</td>`+
+          `<td><button class="mini" onclick="event.stopPropagation();acLedOpen(${idx})">Open ›</button></td></tr>`;
       }).join('');
-      B.innerHTML = `${dateBar}
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0;">
+      const listHtml = names.length
+        ? `<div class="table-scroll"><table><thead><tr><th>Account name</th><th class="amount">Entries</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th class="amount">Net ₹</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : '<div class="msg">No accounts of this type have entries yet.</div>';
+      B.innerHTML = `
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
           ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button>`:''}
-          <button class="btn ghost sm" onclick="acLedOpen(-1)">📒 View all entries (${(all||[]).length})</button>
-          <span style="font-size:12px;color:#777">Pick an account name below to open its ledger.</span>
+          <span style="font-size:12px;color:#777">Choose the account type, then tap an account name to open its ledger.</span>
         </div>
         <div id="ac-entry-form"></div>
-        ${gHtml || '<div class="msg">No entries in this date range.</div>'}`;
+        ${typeBar}
+        <h4 class="sec" style="margin-top:8px;">${LT[pfx][0]} ledgers (${names.length})</h4>
+        ${listHtml}`;
       return;
     }
     const isAllLed = sel === 'ALL';
@@ -2541,7 +2545,7 @@ async function acctTab(t){
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
       <div id="ac-entry-form"></div>
-      <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom} → ${window.acLedTo} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
+      <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
       ${(es||[]).map(e=>{const who=e.staff_name||e.party_name||e.payee||'';const inA=e.direction==='IN'?inr(e.amount):'';const outA=e.direction==='OUT'?inr(e.amount):'';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
@@ -2864,7 +2868,7 @@ function acLedCsv(){
   const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'ledger-' + (window.acLedFrom||'') + '-to-' + (window.acLedTo||'') + '.csv';
+  a.download = 'ledger-' + (window.acLedFrom||'start') + '-to-' + (window.acLedTo||'today') + '.csv';
   document.body.appendChild(a); a.click(); a.remove();
 }
 function acLedPrint(){
@@ -2873,7 +2877,7 @@ function acLedPrint(){
   const totOut = rows.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
   const body = `
     <h1>AURUM SPIRITS INDIA LIMITED</h1>
-    <h2>Finance ledger · ${esc(window.__ledLabel||'All entries')} · ${window.acLedFrom} to ${window.acLedTo}</h2>
+    <h2>Finance ledger · ${esc(window.__ledLabel||'All entries')} · ${window.acLedFrom||'beginning'} to ${window.acLedTo||'today'}</h2>
     <table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th></tr></thead><tbody>
     ${rows.map(e=>{const who=e.staff_name||e.party_name||e.payee||'';
       return `<tr><td>${esc(e.entry_no)}</td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>`+
