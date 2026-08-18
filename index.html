@@ -2866,7 +2866,9 @@ async function acctTab(t){
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there.</p>
         <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
           <div><label>Category *</label><select id="ex-cat">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}</select></div></div>
-        <div class="row2c" style="margin-top:8px;"><div><label>Bill amount ₹ *</label><input type="number" id="ex-amt" min="1" step="any" oninput="acExpCalc()"></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Bill / taxable amount ₹ (before GST) *</label><input type="number" id="ex-amt" min="1" step="any" oninput="acExpCalc()"></div>
+          <div><label>HSN / SAC code (if on the bill)</label><input type="text" id="ex-hsn" placeholder="e.g. 9983" maxlength="10"></div></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>GST % (0 if not applicable)</label><input type="number" id="ex-gst" min="0" max="100" step="any" value="0" oninput="acExpCalc()"></div>
           <div><label>TDS deducted % (0 if none)</label><input type="number" id="ex-tds" min="0" max="99.99" step="any" value="0" oninput="acExpCalc()"></div></div>
         <div id="ex-calc" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
         <div class="row2c" style="margin-top:8px;"><div><label>Paid to</label><input type="text" id="ex-payee" placeholder="Who received the money"></div>
@@ -2879,15 +2881,16 @@ async function acctTab(t){
         <button class="btn gold sm" style="margin-top:10px;" onclick="acExpenseAdd()">Record expense</button>
         <div id="ex-msg"></div></div>` : ''}
       <h4 class="sec">Expense book</h4>
-      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / details</th><th class="amount">Bill ₹</th><th class="amount">TDS ₹</th><th class="amount">Paid ₹</th><th>Paid from</th><th></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / details</th><th class="amount">Bill ₹</th><th class="amount">GST ₹</th><th class="amount">TDS ₹</th><th class="amount">Paid ₹</th><th>Paid from</th><th></th></tr></thead><tbody>
       ${rows.map(r=>`<tr><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td>${esc(r.category)}</td>` +
         `<td>${esc(r.payee||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
         `<td class="amount">${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td>` +
+        `<td class="amount" style="color:#1a7f37">${Number(r.gst_amount)>0?inr(r.gst_amount)+'<br><span style="font-size:10.5px;">('+Number(r.gst_rate)+'%'+(r.hsn_code?' · HSN '+esc(r.hsn_code):'')+')</span>':'—'}</td>` +
         `<td class="amount" style="color:#b8860b">${Number(r.tds_amount)>0?inr(r.tds_amount)+'<br><span style="font-size:10.5px;">('+Number(r.tds_rate)+'%)</span>':'—'}</td>` +
         `<td class="amount" style="font-weight:600;color:#b3261e">${inr(r.amount)}</td>` +
         `<td>${r.mode!=='PETTY'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':'')}</td>` +
         `<td style="white-space:nowrap"><button class="mini" onclick="acExpVoucher('${r.id}')" title="Print or save a PDF voucher for your physical records">🖨 Voucher</button> ${dirDelBtn('acct','expenses', r.id, r.exp_no, "acctTab('exp')")}</td></tr>`).join('')
-        || '<tr><td colspan="9" style="color:#777">No expenses recorded yet.</td></tr>'}
+        || '<tr><td colspan="10" style="color:#777">No expenses recorded yet.</td></tr>'}
       </tbody></table></div>`;
     return;
   }
@@ -3075,7 +3078,9 @@ function acExpVoucher(id){
       <tr><th>Paid to</th><td>${esc(r.payee||'—')}</td></tr>
       <tr><th>Details</th><td>${esc(r.description||'—')}</td></tr>
       <tr><th>Paid from</th><td>${esc(paidFrom)}</td></tr>
-      <tr><th>Bill amount</th><td>₹ ${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td></tr>
+      ${r.hsn_code?`<tr><th>HSN / SAC code</th><td>${esc(r.hsn_code)}</td></tr>`:''}
+      <tr><th>Bill / taxable amount</th><td>₹ ${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td></tr>
+      ${Number(r.gst_amount)>0?`<tr><th>Add: GST (${Number(r.gst_rate)}%)</th><td>₹ ${inr(r.gst_amount)}</td></tr>`:''}
       ${Number(r.tds_amount)>0?`<tr><th>Less: TDS deducted (${Number(r.tds_rate)}%)</th><td>₹ ${inr(r.tds_amount)}</td></tr>`:''}
       <tr class="tot"><th>Amount paid</th><td><b>₹ ${inr(r.amount)}</b></td></tr>
       <tr><th>Amount in words</th><td>${esc(inrWords(r.amount))}</td></tr>
@@ -3140,23 +3145,30 @@ async function acVendorPay(vid){
 function acExpCalc(){
   const el = $('ex-calc'); if (!el) return;
   const bill = Number($('ex-amt')?.value) || 0;
+  const gstR = Number($('ex-gst')?.value) || 0;
   const rate = Number($('ex-tds')?.value) || 0;
   if (!(bill > 0)){ el.innerHTML = ''; return; }
+  const gst = Math.round(bill * gstR) / 100;
   const tds = Math.round(bill * rate) / 100;
-  const paid = Math.round((bill - tds) * 100) / 100;
-  el.innerHTML = rate > 0
-    ? `Bill ₹ ${inr(bill)} − TDS ${rate}% (₹ ${inr(tds)}) = <b>Paid ₹ ${inr(paid)}</b> <span style="color:#999">· the TDS shows in Purchase Tax</span>`
-    : `No TDS — <b>Paid ₹ ${inr(bill)}</b>`;
+  const paid = Math.round((bill + gst - tds) * 100) / 100;
+  const parts = [`Taxable ₹ ${inr(bill)}`];
+  if (gstR > 0) parts.push(`+ GST ${gstR}% (₹ ${inr(gst)})`);
+  if (rate > 0) parts.push(`− TDS ${rate}% (₹ ${inr(tds)})`);
+  el.innerHTML = `${parts.join(' ')} = <b>Paid ₹ ${inr(paid)}</b>` +
+    (gstR > 0 || rate > 0 ? ' <span style="color:#999">· GST & TDS show in Purchase Tax</span>' : '');
 }
 async function acExpenseAdd(){
   const bill = Number($('ex-amt').value);
+  const gstR = Number($('ex-gst')?.value) || 0;
   const rate = Number($('ex-tds')?.value) || 0;
   if (!(bill > 0)){ say('ex-msg','Enter the bill amount.',false); return; }
+  if (gstR < 0 || gstR > 100){ say('ex-msg','GST % must be between 0 and 100.',false); return; }
   if (rate < 0 || rate >= 100){ say('ex-msg','TDS % must be between 0 and 100.',false); return; }
   const mode = $('ex-mode').value;
   const { error } = await db.schema('acct').rpc('expense_add', {
     p_date: $('ex-date').value || null, p_category: $('ex-cat').value,
     p_bill: bill, p_tds_rate: rate, p_amount: null,
+    p_hsn: $('ex-hsn')?.value.trim() || null, p_gst_rate: gstR,
     p_payee: $('ex-payee').value.trim() || null, p_desc: $('ex-desc').value.trim() || null,
     p_mode: mode, p_bank: mode !== 'PETTY' ? $('ex-bank').value : null });
   if (error){ say('ex-msg','Could not record: '+error.message,false); return; }
