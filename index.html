@@ -2005,7 +2005,8 @@ async function purchaseTab(t){
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
         `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${PO_LABEL[p.status]||p.status}</span></td>` +
-        `<td>${(p.status==='PENDING_APPROVAL' && canFinApprove() ? `<button class="mini" onclick="poApprove('${p.id}')">Approve</button> ` : '') +
+        `<td>${(p.status!=='PENDING_APPROVAL' ? `<button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ` : '') +
+              (p.status==='PENDING_APPROVAL' && canFinApprove() ? `<button class="mini" onclick="poApprove('${p.id}')">Approve</button> ` : '') +
               (canFinEdit() ? (p.status==='PENDING_APPROVAL' ? `<button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
               (p.status==='PLACED' ? `<button class="mini" onclick="poDispatch('${p.id}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
               (['PLACED','DISPATCHED','PARTIAL'].includes(p.status) ? `<button class="mini" onclick="poReceiveForm('${p.id}','${esc(p.po_no)}')">Receive…</button>` : '') : '')} ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "purchaseTab('pos')")}</td></tr>`).join('')
@@ -2280,9 +2281,62 @@ async function poHistRun(){
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin()?`<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>`:'') +
         `<td><span style="color:${p.status==='RECEIVED'?'#1a7f37':'#777'};font-weight:600">${p.status}</span></td>` +
-        `<td>${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "poHistRun()")}</td></tr>`;}).join('')
+        `<td><button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "poHistRun()")}</td></tr>`;}).join('')
       || `<tr><td colspan="${canFin()?8:7}" style="color:#777">No received or closed orders ${m==='all'?'yet':'in this period'}${ven?' for this party':''}.</td></tr>`}
     </tbody></table></div>`;
+}
+async function poPrint(id){
+  const G = db.schema('mfg');
+  const [poRes, lnRes] = await Promise.all([
+    G.from('purchase_orders').select('*, vendor:vendor_id(code,name,gstin,phone,email,contact_person,address)').eq('id', id).single(),
+    G.from('po_lines').select('*, item:rm_item_id(code,name,unit)').eq('po_id', id)
+  ]);
+  const po = poRes.data;
+  if (!po){ alert('Could not load this purchase order.'); return; }
+  const lines = lnRes.data || [];
+  const vals = {};
+  if (canFin() && lines.length){
+    const { data: v } = await G.from('po_values').select('*').in('line_id', lines.map(l=>l.id));
+    (v||[]).forEach(x=>vals[x.line_id]=x);
+  }
+  const showMoney = canFin() && Object.keys(vals).length > 0;
+  let tot = 0, totTax = 0;
+  const lineRows = lines.map((l,i)=>{
+    const v = vals[l.id]||{};
+    const amt = Number(v.amount||0), tax = Number(v.tax_amount||0); tot += amt; totTax += tax;
+    return `<tr><td>${i+1}</td><td>${esc(l.item?.code||'')} — ${esc(l.item?.name||'')}</td><td class="amount">${Number(l.qty)}</td><td>${esc(l.item?.unit||'')}</td>` +
+      (showMoney?`<td class="amount">${inr(v.rate_per_unit||0)}</td><td class="amount">${inr(amt)}</td><td>${v.tax_type&&v.tax_type!=='NONE'?esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate||0)+'%':'—'}</td><td class="amount">${inr(tax)}</td><td class="amount">${inr(amt+tax)}</td>`:'') + '</tr>';
+  }).join('');
+  const ven = po.vendor || {};
+  const body = `
+    <h1>AURUM SPIRITS INDIA LIMITED</h1>
+    <h2>PURCHASE ORDER · ${esc(po.po_no)} · ${esc((typeof PO_LABEL!=='undefined'&&PO_LABEL[po.status])||po.status)}</h2>
+    <table>
+      <tr><th style="width:28%;">PO number</th><td><b>${esc(po.po_no)}</b></td></tr>
+      <tr><th>Order date</th><td>${po.order_date}</td></tr>
+      ${po.expected_date?`<tr><th>Expected delivery</th><td>${po.expected_date}</td></tr>`:''}
+      ${po.category&&po.category!=='RM'&&typeof PO_CAT_LBL!=='undefined'?`<tr><th>Order type</th><td>${esc(PO_CAT_LBL[po.category]||po.category)}</td></tr>`:''}
+      <tr><th>Deliver / bill to</th><td>${po.bill_to_mmc?'Directly to MMC — material belongs to Aurum Spirits India Limited':'Aurum Spirits India Limited — company store'}</td></tr>
+    </table>
+    <h2 style="margin-top:14px;">Vendor</h2>
+    <table>
+      <tr><th style="width:28%;">Name</th><td><b>${esc(ven.name||'—')}</b>${ven.code?' ('+esc(ven.code)+')':''}</td></tr>
+      ${ven.gstin?`<tr><th>GSTIN</th><td>${esc(ven.gstin)}</td></tr>`:''}
+      ${(ven.contact_person||ven.phone)?`<tr><th>Contact</th><td>${esc(ven.contact_person||'')}${ven.phone?' · '+esc(ven.phone):''}</td></tr>`:''}
+      ${ven.email?`<tr><th>Email</th><td>${esc(ven.email)}</td></tr>`:''}
+      ${ven.address?`<tr><th>Address</th><td>${esc(String(ven.address))}</td></tr>`:''}
+    </table>
+    <h2 style="margin-top:14px;">Items ordered</h2>
+    <table><thead><tr><th>#</th><th>Material</th><th class="amount">Qty</th><th>Unit</th>${showMoney?'<th class="amount">Rate ₹/unit</th><th class="amount">Amount ₹</th><th>Tax</th><th class="amount">Tax ₹</th><th class="amount">Total ₹</th>':''}</tr></thead><tbody>
+      ${lineRows || `<tr><td colspan="${showMoney?9:4}">No lines.</td></tr>`}
+      ${showMoney&&lineRows?`<tr class="tot"><td colspan="5">Total</td><td class="amount">${inr(tot)}</td><td></td><td class="amount">${inr(totTax)}</td><td class="amount">${inr(tot+totTax)}</td></tr>`:''}
+    </tbody></table>
+    ${showMoney&&(tot+totTax)>0?`<p style="font-size:12px;"><b>Order value (incl. tax): ₹ ${inr(tot+totTax)}</b> · ${esc(inrWords(tot+totTax))}</p>`:''}
+    ${po.payment_terms?`<p style="font-size:12px;"><b>Payment terms:</b> ${esc(po.payment_terms)}</p>`:''}
+    ${po.remarks?`<p style="font-size:12px;"><b>Remarks:</b> ${esc(po.remarks)}</p>`:''}
+    <div class="sig"><div>Prepared by</div><div>Approved by</div><div>Authorised signatory</div></div>
+    <p style="font-size:10.5px;color:#666;margin-top:26px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml('Purchase order '+po.po_no, body);
 }
 function poLineTax(l){
   const tr = Number(l.tax_rate||0);
