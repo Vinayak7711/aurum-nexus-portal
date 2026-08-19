@@ -2287,13 +2287,15 @@ async function poHistRun(){
 }
 async function poPrint(id){
   const G = db.schema('mfg');
-  const [poRes, lnRes] = await Promise.all([
-    G.from('purchase_orders').select('*, vendor:vendor_id(code,name,gstin,phone,email,contact_person,address)').eq('id', id).single(),
-    G.from('po_lines').select('*, item:rm_item_id(code,name,unit)').eq('po_id', id)
-  ]);
+  const poRes = await G.from('purchase_orders').select('*').eq('id', id).single();
   const po = poRes.data;
-  if (!po){ alert('Could not load this purchase order.'); return; }
+  if (!po){ alert('Could not load this purchase order.' + (poRes.error ? ' (' + poRes.error.message + ')' : '')); return; }
+  const [lnRes, venRes] = await Promise.all([
+    G.from('po_lines').select('*, item:rm_item_id(code,name,unit)').eq('po_id', id),
+    po.vendor_id ? db.schema('sales').from('vendors').select('code,name,gstin,phone,email,contact_person,address').eq('id', po.vendor_id).single() : Promise.resolve({ data: null })
+  ]);
   const lines = lnRes.data || [];
+  po.vendor = venRes.data || null;
   const vals = {};
   if (canFin() && lines.length){
     const { data: v } = await G.from('po_values').select('*').in('line_id', lines.map(l=>l.id));
