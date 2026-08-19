@@ -2632,7 +2632,7 @@ async function acctTab(t){
     const isAllLed = sel === 'ALL';
     if (!isAllLed && sel.slice(0,2) === 'E:'){
       const catL = sel.slice(2);
-      let qE = A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status)').eq('category', catL)
+      let qE = A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status), items:expense_items(*)').eq('category', catL)
         .order('exp_date',{ascending:false}).order('created_at',{ascending:false}).limit(1000);
       if (window.acLedFrom) qE = qE.gte('exp_date', window.acLedFrom);
       if (window.acLedTo) qE = qE.lte('exp_date', window.acLedTo);
@@ -2897,10 +2897,11 @@ async function acctTab(t){
   }
 
   if (t === 'exp'){
-    const { data: exps, error } = await A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status)').order('exp_date',{ascending:false}).order('created_at',{ascending:false}).limit(200);
+    const { data: exps, error } = await A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status), items:expense_items(*)').order('exp_date',{ascending:false}).order('created_at',{ascending:false}).limit(200);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const rows = exps || [];
     window.__expRows = rows;
+    window.__exItems = [];
     const ym = new Date().toISOString().slice(0,7);
     const monthTot = rows.filter(r=>String(r.exp_date).slice(0,7)===ym).reduce((s,r)=>s+Number(r.amount),0);
     const CATS_EXP = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'];
@@ -2915,13 +2916,18 @@ async function acctTab(t){
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there.</p>
         <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
           <div><label>Category *</label><select id="ex-cat">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}</select></div></div>
-        <div class="row2c" style="margin-top:8px;"><div><label>Bill / taxable amount ₹ (before GST) *</label><input type="number" id="ex-amt" min="1" step="any" oninput="acExpCalc()"></div>
-          <div><label>HSN / SAC code (if on the bill)</label><input type="text" id="ex-hsn" placeholder="e.g. 9983" maxlength="10"></div></div>
-        <div class="row2c" style="margin-top:8px;"><div><label>GST % (0 if not applicable)</label><input type="number" id="ex-gst" min="0" max="100" step="any" value="0" oninput="acExpCalc()"></div>
-          <div><label>TDS deducted % (0 if none)</label><input type="number" id="ex-tds" min="0" max="99.99" step="any" value="0" oninput="acExpCalc()"></div></div>
-        <div id="ex-calc" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
-        <div class="row2c" style="margin-top:8px;"><div><label>Paid to</label><input type="text" id="ex-payee" placeholder="Who received the money"></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Supplier invoice no.</label><input type="text" id="ex-inv" placeholder="As printed on the supplier's bill"></div>
           <div><label>Department</label><select id="ex-dept"><option value="">— none / general —</option>${['Office / Admin','Accounts','Sales','Marketing','Production / MMC','Purchase','HR','Director'].map(d=>`<option>${d}</option>`).join('')}</select></div></div>
+        <h4 class="sec" style="margin-top:12px;">Bill items <span style="font-weight:normal;font-size:11px;color:#999">— one line per item; each can have its own HSN &amp; GST</span></h4>
+        <div class="row2c"><div><label>Item / description</label><input type="text" id="ex-iname" placeholder="What was bought"></div>
+          <div><label>HSN / SAC code</label><input type="text" id="ex-hsn" placeholder="e.g. 9983" maxlength="10"></div></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Amount ₹ (before GST) *</label><input type="number" id="ex-amt" min="0.01" step="any" oninput="acExpCalc()"></div>
+          <div><label>GST % (0 if not applicable)</label><input type="number" id="ex-gst" min="0" max="100" step="any" value="0" oninput="acExpCalc()"></div></div>
+        <button class="btn ghost sm" style="margin-top:8px;" onclick="acExpItemAdd()">＋ Add this item to the bill</button>
+        <div id="ex-items" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>TDS deducted % (0 if none)</label><input type="number" id="ex-tds" min="0" max="99.99" step="any" value="0" oninput="acExpCalc()"></div>
+          <div><label>Paid to</label><input type="text" id="ex-payee" placeholder="Who received the money"></div></div>
+        <div id="ex-calc" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
         <label style="margin-top:8px;display:block;">Details</label><input type="text" id="ex-desc" placeholder="What this expense was for">
         <div class="row2c" style="margin-top:8px;">
           <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='PETTY'?'none':'';">
@@ -2933,9 +2939,9 @@ async function acctTab(t){
       <h4 class="sec">Expense book</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / details</th><th class="amount">Bill ₹</th><th class="amount">GST ₹</th><th class="amount">TDS ₹</th><th class="amount">Paid ₹</th><th>Paid from</th><th></th></tr></thead><tbody>
       ${rows.map(r=>`<tr><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td>${esc(r.category)}${r.dept?'<br><span style="font-size:10.5px;color:#7a6a4a">'+esc(r.dept)+'</span>':''}</td>` +
-        `<td>${esc(r.payee||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
+        `<td>${esc(r.payee||'—')}${r.invoice_no?'<br><span style="font-size:10.5px;color:#7a6a4a">inv '+esc(r.invoice_no)+'</span>':''}${(r.items&&r.items.length)?'<br><span style="font-size:10.5px;color:#0b57d0">'+r.items.length+' item'+(r.items.length===1?'':'s')+'</span>':''}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
         `<td class="amount">${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td>` +
-        `<td class="amount" style="color:#1a7f37">${Number(r.gst_amount)>0?inr(r.gst_amount)+'<br><span style="font-size:10.5px;">('+Number(r.gst_rate)+'%'+(r.hsn_code?' · HSN '+esc(r.hsn_code):'')+')</span>':'—'}</td>` +
+        `<td class="amount" style="color:#1a7f37">${Number(r.gst_amount)>0?inr(r.gst_amount)+'<br><span style="font-size:10.5px;">'+((r.items&&r.items.length)?'(itemised)':'('+Number(r.gst_rate)+'%'+(r.hsn_code?' · HSN '+esc(r.hsn_code):'')+')')+'</span>':'—'}</td>` +
         `<td class="amount" style="color:#b8860b">${Number(r.tds_amount)>0?inr(r.tds_amount)+'<br><span style="font-size:10.5px;">('+Number(r.tds_rate)+'%)</span>':'—'}</td>` +
         `<td class="amount" style="font-weight:600;color:#b3261e">${inr(r.amount)}</td>` +
         `<td>${r.mode!=='PETTY'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':'')}</td>` +
@@ -3129,9 +3135,16 @@ function acExpVoucher(id){
       <tr><th>Paid to</th><td>${esc(r.payee||'—')}</td></tr>
       <tr><th>Details</th><td>${esc(r.description||'—')}</td></tr>
       <tr><th>Paid from</th><td>${esc(paidFrom)}</td></tr>
+      ${r.invoice_no?`<tr><th>Supplier invoice no.</th><td>${esc(r.invoice_no)}</td></tr>`:''}
       ${r.hsn_code?`<tr><th>HSN / SAC code</th><td>${esc(r.hsn_code)}</td></tr>`:''}
-      <tr><th>Bill / taxable amount</th><td>₹ ${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td></tr>
-      ${Number(r.gst_amount)>0?`<tr><th>Add: GST (${Number(r.gst_rate)}%)</th><td>₹ ${inr(r.gst_amount)}</td></tr>`:''}
+    </table>
+    ${(r.items&&r.items.length)?`
+    <table style="margin-top:10px;"><thead><tr><th>#</th><th>Item</th><th>HSN / SAC</th><th class="amount">Amount ₹</th><th class="amount">GST %</th><th class="amount">GST ₹</th></tr></thead><tbody>
+      ${r.items.map((it,i)=>`<tr><td>${i+1}</td><td>${esc(it.item_name)}</td><td>${esc(it.hsn_code||'—')}</td><td class="amount">${inr(it.amount)}</td><td class="amount">${Number(it.gst_rate)||0}</td><td class="amount">${inr(it.gst_amount)}</td></tr>`).join('')}
+    </tbody></table>`:''}
+    <table style="margin-top:10px;">
+      <tr><th style="width:30%;">Bill / taxable amount</th><td>₹ ${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td></tr>
+      ${Number(r.gst_amount)>0?`<tr><th>Add: GST${(r.items&&r.items.length)?'':' ('+Number(r.gst_rate)+'%)'}</th><td>₹ ${inr(r.gst_amount)}</td></tr>`:''}
       ${Number(r.tds_amount)>0?`<tr><th>Less: TDS deducted (${Number(r.tds_rate)}%)</th><td>₹ ${inr(r.tds_amount)}</td></tr>`:''}
       <tr class="tot"><th>Amount paid</th><td><b>₹ ${inr(r.amount)}</b></td></tr>
       <tr><th>Amount in words</th><td>${esc(inrWords(r.amount))}</td></tr>
@@ -3193,37 +3206,60 @@ async function acVendorPay(vid){
   if (error){ say('vp-msg','Could not record the payment: '+error.message,false); return; }
   acctTab('vdues');
 }
+function acExpPendItem(){
+  const amt = Number($('ex-amt')?.value) || 0;
+  if (!(amt > 0)) return null;
+  return { name: $('ex-iname')?.value.trim() || 'Item', hsn: $('ex-hsn')?.value.trim() || null,
+           amount: amt, gst_rate: Number($('ex-gst')?.value) || 0 };
+}
+function acExpItemAdd(){
+  const it = acExpPendItem();
+  if (!it){ say('ex-msg','Enter the item amount first.',false); return; }
+  if (it.gst_rate < 0 || it.gst_rate > 100){ say('ex-msg','GST % must be between 0 and 100.',false); return; }
+  window.__exItems = window.__exItems || [];
+  window.__exItems.push(it);
+  $('ex-iname').value=''; $('ex-hsn').value=''; $('ex-amt').value=''; $('ex-gst').value='0';
+  acExpItemsRender(); acExpCalc(); say('ex-msg','');
+  $('ex-iname').focus();
+}
+function acExpItemRm(i){ (window.__exItems||[]).splice(i,1); acExpItemsRender(); acExpCalc(); }
+function acExpItemsRender(){
+  const el = $('ex-items'); if (!el) return;
+  const its = window.__exItems || [];
+  el.innerHTML = its.map((it,i)=>`<div style="padding:4px 0;border-bottom:1px dashed #ddd;">${i+1}. <b>${esc(it.name)}</b>${it.hsn?' · HSN '+esc(it.hsn):''} — ₹ ${inr(it.amount)}${it.gst_rate>0?' + GST '+it.gst_rate+'% (₹ '+inr(Math.round(it.amount*it.gst_rate)/100)+')':''} <button class="mini" onclick="acExpItemRm(${i})" style="color:#c0392b;">✖ remove</button></div>`).join('');
+}
 function acExpCalc(){
   const el = $('ex-calc'); if (!el) return;
-  const bill = Number($('ex-amt')?.value) || 0;
-  const gstR = Number($('ex-gst')?.value) || 0;
+  const items = [...(window.__exItems||[])];
+  const p = acExpPendItem(); if (p) items.push(p);
   const rate = Number($('ex-tds')?.value) || 0;
-  if (!(bill > 0)){ el.innerHTML = ''; return; }
-  const gst = Math.round(bill * gstR) / 100;
+  if (!items.length){ el.innerHTML = ''; return; }
+  const bill = items.reduce((s,it)=>s+it.amount, 0);
+  const gst = items.reduce((s,it)=>s+Math.round(it.amount*it.gst_rate)/100, 0);
   const tds = Math.round(bill * rate) / 100;
   const paid = Math.round((bill + gst - tds) * 100) / 100;
-  const parts = [`Taxable ₹ ${inr(bill)}`];
-  if (gstR > 0) parts.push(`+ GST ${gstR}% (₹ ${inr(gst)})`);
-  if (rate > 0) parts.push(`− TDS ${rate}% (₹ ${inr(tds)})`);
-  el.innerHTML = `${parts.join(' ')} = <b>Paid ₹ ${inr(paid)}</b>` +
-    (gstR > 0 || rate > 0 ? ' <span style="color:#999">· GST & TDS show in Purchase Tax</span>' : '');
+  el.innerHTML = `<b>${items.length} item${items.length===1?'':'s'}</b> · Taxable ₹ ${inr(bill)}` +
+    (gst > 0 ? ` + GST ₹ ${inr(gst)}` : '') + (rate > 0 ? ` − TDS ${rate}% (₹ ${inr(tds)})` : '') +
+    ` = <b>Paid ₹ ${inr(paid)}</b> <span style="color:#999">· GST & TDS show in Purchase Tax</span>`;
 }
 async function acExpenseAdd(){
-  const bill = Number($('ex-amt').value);
-  const gstR = Number($('ex-gst')?.value) || 0;
+  const items = [...(window.__exItems||[])];
+  const p = acExpPendItem(); if (p) items.push(p);
+  if (!items.length){ say('ex-msg','Add at least one bill item (enter the amount).',false); return; }
+  if (items.some(it=>it.gst_rate < 0 || it.gst_rate > 100)){ say('ex-msg','GST % must be between 0 and 100.',false); return; }
   const rate = Number($('ex-tds')?.value) || 0;
-  if (!(bill > 0)){ say('ex-msg','Enter the bill amount.',false); return; }
-  if (gstR < 0 || gstR > 100){ say('ex-msg','GST % must be between 0 and 100.',false); return; }
   if (rate < 0 || rate >= 100){ say('ex-msg','TDS % must be between 0 and 100.',false); return; }
   const mode = $('ex-mode').value;
   const { error } = await db.schema('acct').rpc('expense_add', {
     p_date: $('ex-date').value || null, p_category: $('ex-cat').value,
-    p_bill: bill, p_tds_rate: rate, p_amount: null,
-    p_hsn: $('ex-hsn')?.value.trim() || null, p_gst_rate: gstR,
+    p_bill: null, p_amount: null, p_tds_rate: rate, p_hsn: null, p_gst_rate: 0,
     p_dept: $('ex-dept')?.value || null,
+    p_invoice: $('ex-inv')?.value.trim() || null,
+    p_items: items,
     p_payee: $('ex-payee').value.trim() || null, p_desc: $('ex-desc').value.trim() || null,
     p_mode: mode, p_bank: mode !== 'PETTY' ? $('ex-bank').value : null });
   if (error){ say('ex-msg','Could not record: '+error.message,false); return; }
+  window.__exItems = [];
   acctTab('exp');
 }
 async function acPettyTopup(){
