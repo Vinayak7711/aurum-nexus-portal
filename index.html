@@ -3474,6 +3474,21 @@ async function acEdit(id, cur){
   acctTab('ledger');
 }
 async function acDelEntry(id){
+  const A2 = db.schema('acct');
+  const [ex, vp] = await Promise.all([
+    A2.from('expenses').select('exp_no').eq('entry_id', id),
+    A2.from('vendor_payments').select('pay_no').eq('entry_id', id)
+  ]);
+  const linked = [...(ex.data||[]).map(x=>'expense '+x.exp_no), ...(vp.data||[]).map(x=>'vendor payment '+x.pay_no)];
+  if (linked.length && !confirm('This ledger entry belongs to ' + linked.join(' and ') + '. Deleting it will also delete that record (with its bill items). Continue?')) return;
+  if ((ex.data||[]).length){
+    const { error: e1 } = await A2.from('expenses').delete().eq('entry_id', id);
+    if (e1){ alert('Could not delete the linked expense: '+e1.message); return; }
+  }
+  if ((vp.data||[]).length){
+    const { error: e2 } = await A2.from('vendor_payments').delete().eq('entry_id', id);
+    if (e2){ alert('Could not delete the linked vendor payment: '+e2.message); return; }
+  }
   const { error } = await db.schema('acct').rpc('delete_entry', { p_entry: id });
   if (error){ alert('Could not delete: '+error.message); return; }
   acctTab('ledger');
