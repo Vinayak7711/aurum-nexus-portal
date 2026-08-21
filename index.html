@@ -4607,20 +4607,22 @@ function notifRow(n){ return `<div style="display:flex;gap:8px;padding:9px 12px;
   <span style="flex:0 0 4px;align-self:stretch;background:${n.color};border-radius:2px;"></span>
   <div style="flex:1;cursor:pointer;" onclick="notifGo('${n.route}')"><div style="font-size:12.5px;font-weight:${n.is_read?500:700};">${esc(n.title)}</div>
    <div style="font-size:11px;color:#777;">${esc(n.detail||'')}</div></div>
-  ${!n.is_read?`<button class="mini" title="Mark read" onclick="notifMark('${n.notif_key}')">✓</button>`:''}</div>`; }
+  ${!n.is_read?`<button class="mini" title="Mark read" onclick="notifMark('${n.notif_key}')">✓</button>`:''}<button class="mini" title="Delete this notification" onclick="notifDel('${n.notif_key}')" style="color:#c0392b;">✖</button></div>`; }
 function notifRender(list){ return list.length? list.map(notifRow).join('') : '<p style="color:#777;padding:14px;">Nothing pending right now. 🎉</p>'; }
 function notifToggle(e){ if(e){e.stopPropagation();} const p=$('notif-pop'); if(!p) return;
   if(p.classList.contains('hidden')){
-    p.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #eee;"><b>Notifications</b><span>${notifItems.some(n=>!n.is_read)?'<button class="mini" onclick="notifMarkAll()">Mark all read</button> ':''}<button class="mini" onclick="openNotifCentre()">Open centre</button></span></div>`+notifRender(notifItems.slice(0,12));
+    p.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #eee;"><b>Notifications</b><span>${notifItems.some(n=>!n.is_read)?'<button class="mini" onclick="notifMarkAll()">Mark all read</button> ':''}${notifItems.length?'<button class="mini" onclick="notifClearAll()" style="color:#c0392b;">Clear all</button> ':''}<button class="mini" onclick="openNotifCentre()">Open centre</button></span></div>`+notifRender(notifItems.slice(0,12));
     p.classList.remove('hidden');
   } else p.classList.add('hidden');
 }
 document.addEventListener('click',function(e){ const p=$('notif-pop'), b=$('notif-bell'); if(p&&!p.classList.contains('hidden')&&!p.contains(e.target)&&b&&!b.contains(e.target)) p.classList.add('hidden'); });
 async function notifMark(key){ await db.schema('tasks').rpc('notif_mark_read',{p_key:key}); await notifLoad(); notifAfter(); }
 async function notifMarkAll(){ await db.schema('tasks').rpc('notif_mark_all_read'); await notifLoad(); notifAfter(); }
+async function notifDel(key){ const {error}=await db.schema('tasks').rpc('notif_dismiss',{p_key:key}); if(error){alert('Could not delete: '+error.message);return;} await notifLoad(); notifAfter(); }
+async function notifClearAll(){ if(!confirm('Clear all notifications from the list? New events will still create fresh notifications.')) return; const {error}=await db.schema('tasks').rpc('notif_clear_all'); if(error){alert('Could not clear: '+error.message);return;} await notifLoad(); notifAfter(); }
 function notifAfter(){ const p=$('notif-pop'); if(p&&!p.classList.contains('hidden')){ p.classList.add('hidden'); notifToggle(); } if($('view-notif') && !$('view-notif').classList.contains('hidden')) openNotifCentre(); }
 function notifGo(route){ const p=$('notif-pop'); if(p) p.classList.add('hidden'); const map={tasks:openTasks,mail:(window.openMail||null),calendar:openCalendar,acct:openAcct,purchase:openPurchase,mkt:()=>{show('mkt');mktTab('requests');}}; const fn=map[route]; if(fn) try{fn();}catch(e){} }
-async function openNotifCentre(){ await notifLoad(); $('notif-centre').innerHTML=`<div style="max-width:720px;">${notifItems.some(n=>!n.is_read)?'<button class="btn ghost sm" onclick="notifMarkAll()">Mark all read</button>':''}<div class="card" style="margin-top:10px;padding:0;overflow:hidden;">${notifRender(notifItems)}</div></div>`; show('notif'); }
+async function openNotifCentre(){ await notifLoad(); $('notif-centre').innerHTML=`<div style="max-width:720px;">${notifItems.some(n=>!n.is_read)?'<button class="btn ghost sm" onclick="notifMarkAll()">Mark all read</button> ':''}${notifItems.length?'<button class="btn ghost sm" onclick="notifClearAll()" style="color:#c0392b;">🗑 Clear all</button>':''}<div class="card" style="margin-top:10px;padding:0;overflow:hidden;">${notifRender(notifItems)}</div></div>`; show('notif'); }
 
 init();
 </script>
