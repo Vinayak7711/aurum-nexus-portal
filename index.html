@@ -2620,6 +2620,8 @@ async function acctTab(t){
       const { data: vns } = await db.schema('sales').from('vendors').select('id,name');
       (vns||[]).forEach(v=>venBy[v.id]=v.name);
     }
+    window.__apprData = { ents, pcs, sls, advs, pos, rqs, mks, poAmt, venBy };
+    window.__pcAll = pcs;   // so the petty voucher printer works from this tab too
     const total = ents.length + pcs.length + sls.length + advs.length + pos.length + rqs.length + mks.length;
     const SEC = (title, count, inner) => count ? `<h4 class="sec" style="margin-top:16px;">${title} <span style="background:#b3261e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${count}</span></h4>${inner}` : '';
     const T = (head, rows) => `<div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -2631,29 +2633,31 @@ async function acctTab(t){
         ents.map(e=>`<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>`+
           `<td>${esc(e.staff_name||e.party_name||e.payee||'—')}${e.narration?'<br><span style="font-size:11px;color:#777">'+esc((e.narration||'').slice(0,60))+'</span>':''}</td>`+
           `<td>${esc(e.bank_name_label||'—')}</td><td class="amount" style="font-weight:700;color:${e.direction==='IN'?'#1a7f37':'#b3261e'}">${inr(e.amount)}</td>`+
-          `<td style="white-space:nowrap"><button class="mini" onclick="apprAct('entry','${e.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('entry','${e.id}',true)">Reject</button></td></tr>`).join('')))}
+          `<td style="white-space:nowrap"><button class="mini" onclick="apprView('entry','${e.id}')" title="See full details">👁 View</button> <button class="mini" onclick="apprPrint('entry','${e.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('entry','${e.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('entry','${e.id}',true)">Reject</button> ${dirDelBtn('acct','entries', e.id, e.entry_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('💵 Petty cash', pcs.length, T('<th>No.</th><th>Date</th><th>Type</th><th>Category</th><th>Paid to</th><th class="amount">Amount ₹</th><th></th>',
         pcs.map(r=>`<tr><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td><td>${r.entry_kind==='TOPUP'?'Top-up':'Expense'}</td><td>${esc(r.category||'—')}</td><td>${esc(r.payee||'—')}</td>`+
           `<td class="amount" style="font-weight:700">${inr(r.amount)}</td>`+
-          `<td style="white-space:nowrap"><button class="mini" onclick="apprAct('petty','${r.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('petty','${r.id}',true)">Reject</button></td></tr>`).join('')))}
+          `<td style="white-space:nowrap"><button class="mini" onclick="apprView('petty','${r.id}')" title="See full details">👁 View</button> <button class="mini" onclick="acPettyVoucher('${r.id}')" title="Print / save PDF voucher">🖨 Print</button> <button class="mini" onclick="apprAct('petty','${r.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('petty','${r.id}',true)">Reject</button> ${dirDelBtn('acct','petty_cash', r.id, r.pc_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('🧾 Salary slips', sls.length, T('<th>Slip</th><th>Staff</th><th>Month</th><th class="amount">Net ₹</th><th></th>',
         sls.map(s=>`<tr><td><b>${esc(s.slip_no)}</b></td><td>${esc(acStaffName(s.staff_id))}</td><td>${s.period}</td><td class="amount" style="font-weight:700">${inr(s.net_pay)}</td>`+
-          `<td style="white-space:nowrap"><button class="mini" onclick="apprAct('slip','${s.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('slip','${s.id}',true)">Reject</button></td></tr>`).join('')))}
+          `<td style="white-space:nowrap"><button class="mini" onclick="acSlipView('${s.id}')" title="See the full slip">👁 View</button> <button class="mini" onclick="apprPrint('slip','${s.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('slip','${s.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('slip','${s.id}',true)">Reject</button> ${dirDelBtn('acct','salary_slips', s.id, s.slip_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('🤝 Staff advances', advs.length, T('<th>No.</th><th>Staff</th><th>Date</th><th class="amount">Amount ₹</th><th></th>',
         advs.map(a=>`<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td><td class="amount" style="font-weight:700">${inr(a.amount)}</td>`+
-          `<td style="white-space:nowrap"><button class="mini" onclick="apprAct('adv','${a.id}',false)">✔ Approve &amp; pay</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('adv','${a.id}',true)">Reject</button></td></tr>`).join('')))}
+          `<td style="white-space:nowrap"><button class="mini" onclick="apprView('adv','${a.id}')" title="See full details">👁 View</button> <button class="mini" onclick="apprPrint('adv','${a.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('adv','${a.id}',false)">✔ Approve &amp; pay</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('adv','${a.id}',true)">Reject</button> ${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('📦 Purchase orders', pos.length, T('<th>PO</th><th>Vendor</th><th>Date</th>'+(canFin()?'<th class="amount">Value ₹ (incl. tax)</th>':'')+'<th></th>',
         pos.map(p=>`<tr><td><b>${esc(p.po_no)}</b></td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td>`+
           (canFin()?`<td class="amount" style="font-weight:700">${poAmt[p.id]!=null?inr(poAmt[p.id]):'—'}</td>`:'')+
-          `<td style="white-space:nowrap"><button class="mini" onclick="apprAct('po','${p.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('po','${p.id}',true)">Reject (cancel)</button></td></tr>`).join('')))}
+          `<td style="white-space:nowrap"><button class="mini" onclick="apprView('po','${p.id}')" title="See items and values">👁 View</button> <button class="mini" onclick="poPrint('${p.id}')" title="Print / save the PO document">🖨 Print</button> <button class="mini" onclick="apprAct('po','${p.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('po','${p.id}',true)">Reject (cancel)</button> ${dirDelBtn('mfg','purchase_orders', p.id, p.po_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('🧱 Material requests', rqs.length, T('<th>Request</th><th>Vendor</th><th>Needed by</th><th>Remarks</th><th></th>',
         rqs.map(r=>`<tr><td><b>${esc(r.req_no)}</b></td><td>${esc(venBy[r.vendor_id]||'—')}</td><td>${r.needed_by||'—'}</td><td style="max-width:240px">${esc(r.remarks||'')}</td>`+
-          `<td style="white-space:nowrap"><button class="mini" onclick="apprAct('rm','${r.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('rm','${r.id}',true)">Reject</button></td></tr>`).join('')))}
+          `<td style="white-space:nowrap"><button class="mini" onclick="apprView('rm','${r.id}')" title="See requested materials">👁 View</button> <button class="mini" onclick="apprPrint('rm','${r.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('rm','${r.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('rm','${r.id}',true)">Reject</button> ${dirDelBtn('mfg','rm_requests', r.id, r.req_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('📣 Marketing budget requests', mks.length, T('<th>Code</th><th>Category</th><th class="amount">Amount ₹</th><th>Purpose</th><th>Requested by</th><th></th>',
         mks.map(r=>`<tr><td><b>${esc(r.req_code)}</b></td><td>${esc(r.category)}</td><td class="amount" style="font-weight:700">${inr(r.amount)}</td>`+
           `<td style="max-width:240px">${esc(r.description||'—')}</td><td>${esc(r.requested_by_name||'—')}</td>`+
-          `<td style="white-space:nowrap"><button class="mini" onclick="apprAct('mkt','${r.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('mkt','${r.id}',true)">Reject</button></td></tr>`).join('')))}
-      <div id="appr-msg"></div>`;
+          `<td style="white-space:nowrap"><button class="mini" onclick="apprView('mkt','${r.id}')" title="See full request">👁 View</button> <button class="mini" onclick="apprPrint('mkt','${r.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('mkt','${r.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('mkt','${r.id}',true)">Reject</button> ${dirDelBtn('sales','mkt_requests', r.id, r.req_code, "acctTab('appr')")}</td></tr>`).join('')))}
+      <div id="appr-msg"></div>
+      <div id="appr-view"></div>
+      <div id="ac-slip-view"></div>`;
     return;
   }
 
@@ -3728,6 +3732,111 @@ async function apprAct(kind, id, reject){
   }
   if (r && r.error){ alert('Could not update: ' + r.error.message); return; }
   acctTab('appr');
+}
+function apprRowsHtml(pairs){
+  return '<table style="margin-top:8px;">' + pairs.filter(p=>p[1]!==undefined && p[1]!==null && p[1]!=='')
+    .map(p=>`<tr><th style="width:34%;text-align:left;padding:4px 8px;background:#faf6ea;">${p[0]}</th><td style="padding:4px 8px;">${p[1]}</td></tr>`).join('') + '</table>';
+}
+async function apprView(kind, id){
+  const D = window.__apprData || {};
+  const V = $('appr-view'); if (!V) return;
+  let title = '', rows = [];
+  if (kind === 'entry'){
+    const e = (D.ents||[]).find(x=>x.id===id); if (!e) return;
+    title = 'Ledger entry ' + e.entry_no;
+    rows = [['No.', '<b>'+esc(e.entry_no)+'</b>'], ['Date', e.entry_date], ['Kind', esc(e.kind)], ['Direction', e.direction==='IN'?'Money IN':'Money OUT'],
+      ['Amount', '<b>₹ '+inr(e.amount)+'</b><br><span style="font-size:11px;color:#777">'+esc(inrWords(e.amount))+'</span>'],
+      ['Bank', esc(e.bank_name_label||'—') + (e.kind==='TRANSFER'&&e.counter_bank_label?' → '+esc(e.counter_bank_label):'')],
+      ['Party / payee', esc(e.staff_name||e.party_name||e.payee||'—')], ['Mode', esc(e.mode||'—')], ['Narration', esc(e.narration||'—')], ['Status', acLbl(e.status)]];
+  } else if (kind === 'petty'){
+    const r = (D.pcs||[]).find(x=>x.id===id); if (!r) return;
+    title = 'Petty cash ' + r.pc_no;
+    rows = [['No.', '<b>'+esc(r.pc_no)+'</b>'], ['Date', r.expense_date], ['Type', r.entry_kind==='TOPUP'?'Cash box top-up':'Cash expense'],
+      ['Category', esc(r.category||'—')], ['Paid to', esc(r.paid_to||'—')], ['Details', esc(r.description||'—')],
+      ['Amount', '<b>₹ '+inr(r.amount)+'</b><br><span style="font-size:11px;color:#777">'+esc(inrWords(r.amount))+'</span>'], ['Status', acLbl(r.status)]];
+  } else if (kind === 'adv'){
+    const a = (D.advs||[]).find(x=>x.id===id); if (!a) return;
+    title = 'Staff advance ' + a.adv_no;
+    rows = [['No.', '<b>'+esc(a.adv_no)+'</b>'], ['Staff', esc(a.staff_name)], ['Date', a.given_on],
+      ['Amount', '<b>₹ '+inr(a.amount)+'</b><br><span style="font-size:11px;color:#777">'+esc(inrWords(a.amount))+'</span>'],
+      ['Reason', esc(a.reason||'—')], ['Status', acLbl(a.status)]];
+  } else if (kind === 'po'){
+    const p = (D.pos||[]).find(x=>x.id===id); if (!p) return;
+    title = 'Purchase order ' + p.po_no;
+    const G = db.schema('mfg');
+    const { data: lines } = await G.from('po_lines').select('*').eq('po_id', id);
+    const { data: items } = await G.from('rm_items').select('id,code,name,unit');
+    let vals = [];
+    if (canFin() && lines && lines.length){ const vr = await G.from('po_values').select('*').in('line_id', lines.map(l=>l.id)); vals = vr.data||[]; }
+    const iBy = {}; (items||[]).forEach(i=>iBy[i.id]=i);
+    const vBy = {}; vals.forEach(v=>vBy[v.line_id]=v);
+    const lineHtml = (lines||[]).map(l=>{const i=iBy[l.rm_item_id]||{}; const v=vBy[l.id];
+      return esc((i.code||'?')+' - '+(i.name||''))+' × '+Number(l.qty)+' '+(i.unit||'')+(v?' — ₹ '+inr(Number(v.amount)+Number(v.tax_amount||0)):'');}).join('<br>') || '—';
+    rows = [['PO no.', '<b>'+esc(p.po_no)+'</b>'], ['Vendor', esc(p.vendor_name||'—')], ['Order date', p.order_date], ['Expected', p.expected_date||'—'],
+      ['Items', lineHtml], canFin()?['Total value (incl. tax)', '<b>₹ '+inr((D.poAmt||{})[id]||0)+'</b>']:['',''], ['Status', 'AWAITING APPROVAL']];
+  } else if (kind === 'rm'){
+    const r = (D.rqs||[]).find(x=>x.id===id); if (!r) return;
+    title = 'Material request ' + r.req_no;
+    const G = db.schema('mfg');
+    const [{ data: lines }, { data: items }] = await Promise.all([
+      G.from('rm_request_lines').select('*').eq('request_id', id), G.from('rm_items').select('id,code,name,unit')]);
+    const iBy = {}; (items||[]).forEach(i=>iBy[i.id]=i);
+    const lineHtml = (lines||[]).map(l=>{const i=iBy[l.rm_item_id]||{}; return esc((i.code||'?')+' - '+(i.name||''))+' × '+Number(l.qty)+' '+(i.unit||'');}).join('<br>') || '—';
+    rows = [['Request', '<b>'+esc(r.req_no)+'</b>'], ['Vendor', esc((D.venBy||{})[r.vendor_id]||'—')], ['Needed by', r.needed_by||'—'],
+      ['Materials', lineHtml], ['Remarks', esc(r.remarks||'—')], ['Status', 'REQUESTED']];
+  } else if (kind === 'mkt'){
+    const r = (D.mks||[]).find(x=>x.id===id); if (!r) return;
+    title = 'Marketing budget request ' + r.req_code;
+    rows = [['Code', '<b>'+esc(r.req_code)+'</b>'], ['Category', esc(r.category)],
+      ['Amount', '<b>₹ '+inr(r.amount)+'</b><br><span style="font-size:11px;color:#777">'+esc(inrWords(r.amount))+'</span>'],
+      ['Purpose', esc(r.description||'—')], ['Utilisation', esc(r.utilization||'—')], ['For period', r.period||'—'], ['Needed by', r.needed_by||'—'],
+      ['Requested by', esc(r.requested_by_name||'—')], ['Status', 'AWAITING APPROVAL']];
+  } else return;
+  V.innerHTML = `<div class="card" style="margin-top:14px;max-width:640px;">
+    <h3 style="font-size:15px;">${esc(title)}</h3>
+    ${apprRowsHtml(rows.filter(r=>r[0]))}
+    <div style="margin-top:10px;"><button class="mini" onclick="$('appr-view').innerHTML=''">Close</button></div></div>`;
+  V.scrollIntoView({behavior:'smooth'});
+}
+async function apprPrint(kind, id){
+  const D = window.__apprData || {};
+  const sig = '<div class="sig"><div>Prepared by</div><div>Approved by</div><div>Authorised signatory</div></div>';
+  const foot = `<p style="font-size:10.5px;color:#666;margin-top:26px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')} — PENDING APPROVAL at the time of printing</p>`;
+  const doc = (heading, trs, title) => printHtml(title, `<h1 style="text-align:center;">AURUM SPIRITS INDIA LIMITED</h1><h2 style="text-align:center;">${heading}</h2><table style="margin-top:10px;">${trs}</table>${sig}${foot}`);
+  const TR = pairs => pairs.filter(p=>p[0]).map(p=>`<tr><th style="width:30%;">${p[0]}</th><td>${p[1]}</td></tr>`).join('');
+  if (kind === 'entry'){
+    const e = (D.ents||[]).find(x=>x.id===id); if (!e) return;
+    doc('LEDGER ENTRY VOUCHER', TR([['Entry no.','<b>'+esc(e.entry_no)+'</b>'],['Date',e.entry_date],['Kind',esc(e.kind)+' ('+(e.direction==='IN'?'Money IN':'Money OUT')+')'],
+      ['Bank',esc(e.bank_name_label||'—')+(e.kind==='TRANSFER'&&e.counter_bank_label?' → '+esc(e.counter_bank_label):'')],
+      ['Party / payee',esc(e.staff_name||e.party_name||e.payee||'—')],['Mode',esc(e.mode||'—')],['Narration',esc(e.narration||'—')],
+      ['Amount','<b>₹ '+inr(e.amount)+'</b>'],['Amount in words',esc(inrWords(e.amount))],['Status','AWAITING APPROVAL']]), 'Entry '+e.entry_no);
+  } else if (kind === 'slip'){
+    const { data: s } = await db.schema('acct').from('salary_slips').select('*').eq('id', id).single();
+    if (!s) return;
+    const money = v => '₹ '+inr(v);
+    doc('SALARY SLIP (DRAFT — AWAITING APPROVAL)', TR([['Slip no.','<b>'+esc(s.slip_no)+'</b>'],['Staff',esc(acStaffName(s.staff_id))],['Month',s.period],
+      ['Basic',money(s.basic)],['HRA',money(s.hra)],['Allowances',money(s.allowances)],['Gross','<b>'+money(s.gross)+'</b>'],
+      ['PF',money(s.pf)],['Prof. tax',money(s.prof_tax)],['TDS',money(s.tds)],['Other deductions',money(s.other_deductions)],['Advance recovery',money(s.advance_recovery)],
+      ['Total deductions','<b>'+money(s.total_deductions)+'</b>'],['NET PAY','<b>'+money(s.net_pay)+'</b>'],['Net pay in words',esc(inrWords(s.net_pay))]]), 'Salary slip '+s.slip_no);
+  } else if (kind === 'adv'){
+    const a = (D.advs||[]).find(x=>x.id===id); if (!a) return;
+    doc('STAFF ADVANCE VOUCHER', TR([['No.','<b>'+esc(a.adv_no)+'</b>'],['Staff',esc(a.staff_name)],['Date',a.given_on],
+      ['Amount','<b>₹ '+inr(a.amount)+'</b>'],['Amount in words',esc(inrWords(a.amount))],['Reason',esc(a.reason||'—')],['Status','AWAITING APPROVAL']]), 'Advance '+a.adv_no);
+  } else if (kind === 'rm'){
+    const r = (D.rqs||[]).find(x=>x.id===id); if (!r) return;
+    const G = db.schema('mfg');
+    const [{ data: lines }, { data: items }] = await Promise.all([
+      G.from('rm_request_lines').select('*').eq('request_id', id), G.from('rm_items').select('id,code,name,unit')]);
+    const iBy = {}; (items||[]).forEach(i=>iBy[i.id]=i);
+    const lineHtml = (lines||[]).map(l=>{const i=iBy[l.rm_item_id]||{}; return esc((i.code||'?')+' - '+(i.name||''))+' × '+Number(l.qty)+' '+(i.unit||'');}).join('<br>') || '—';
+    doc('MATERIAL REQUEST', TR([['Request no.','<b>'+esc(r.req_no)+'</b>'],['Vendor',esc((D.venBy||{})[r.vendor_id]||'—')],['Needed by',r.needed_by||'—'],
+      ['Materials',lineHtml],['Remarks',esc(r.remarks||'—')],['Status','REQUESTED — AWAITING APPROVAL']]), 'Request '+r.req_no);
+  } else if (kind === 'mkt'){
+    const r = (D.mks||[]).find(x=>x.id===id); if (!r) return;
+    doc('MARKETING BUDGET REQUEST', TR([['Code','<b>'+esc(r.req_code)+'</b>'],['Category',esc(r.category)],
+      ['Amount','<b>₹ '+inr(r.amount)+'</b>'],['Amount in words',esc(inrWords(r.amount))],['Purpose',esc(r.description||'—')],
+      ['Utilisation',esc(r.utilization||'—')],['For period',r.period||'—'],['Requested by',esc(r.requested_by_name||'—')],['Status','AWAITING APPROVAL']]), 'Request '+r.req_code);
+  }
 }
 
 /* ----- assets (Module 11) ----- */
