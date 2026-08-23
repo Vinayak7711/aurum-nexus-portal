@@ -14,7 +14,7 @@ const MAX_ATTS = 20;                // at most 20 attachments kept per message
 
 class Pop {
   conn!: Deno.TlsConn; buf = ""; dec = new TextDecoder(); enc = new TextEncoder();
-  async connect() { this.conn = await Deno.connectTls({ hostname: "pop.hostinger.com", port: 995 }); await this.line(); }
+  async connect(host: string) { this.conn = await Deno.connectTls({ hostname: host || "pop.hostinger.com", port: 995 }); await this.line(); }
   async fill() { const b = new Uint8Array(16384); const n = await this.conn.read(b); if (n === null) throw new Error("closed"); this.buf += this.dec.decode(b.subarray(0, n)); }
   async line(): Promise<string> { while (!this.buf.includes("\r\n")) await this.fill(); const i = this.buf.indexOf("\r\n"); const l = this.buf.slice(0, i); this.buf = this.buf.slice(i + 2); return l; }
   async cmd(c: string): Promise<string> { await this.conn.write(this.enc.encode(c + "\r\n")); const l = await this.line(); if (!l.startsWith("+OK")) throw new Error(c.split(" ")[0] + " failed: " + l.slice(0, 80)); return l; }
@@ -176,6 +176,11 @@ export default {
       };
 
       const secretName = "MAIL_PASS_" + String(box.key).replace(/[^a-zA-Z0-9_]/g, "_").toUpperCase();
+      const popHost = (box as { pop_host?: string }).pop_host || "pop.hostinger.com";
+      const isGmail = /gmail/i.test(popHost);
+      const passHint = isGmail
+        ? "this mailbox is on Google, so the secret must be a Google App Password (Google Account \u2192 Security \u2192 2-Step Verification \u2192 App passwords) \u2014 the normal Gmail password will NOT work, and POP must be switched on in Gmail Settings \u2192 Forwarding and POP/IMAP"
+        : "it must exactly match this mailbox's Hostinger email password";
       let pop = new Pop();
       let fetched = 0, listed = 0, backfilled = 0;
       // Log in. Hostinger sometimes refuses even a CORRECT password when it is busy
@@ -184,7 +189,7 @@ export default {
       let loggedIn = false, lastErr = "";
       for (let attempt = 1; attempt <= 3 && !loggedIn; attempt++) {
         try {
-          await pop.connect();
+          await pop.connect(popHost);
           await pop.cmd("USER " + box.address);
           await pop.cmd("PASS " + pass);
           loggedIn = true;
@@ -199,7 +204,7 @@ export default {
         if (/too many|try again|temporar|rate|busy|lock|timed? ?out|closed/i.test(lastErr)) {
           return J({ error: "The mail server is busy right now — this is temporary, NOT a password problem. Wait a minute and press ‘Check for new mail’ again." }, 424);
         }
-        return J({ error: "The mail server refused this mailbox's password 3 times in a row, so the stored password is most likely wrong. Fix the secret " + secretName + " (Supabase → Edge Functions → Secrets) so it exactly matches this mailbox's Hostinger email password — no extra spaces. Server said: " + lastErr.slice(0, 90) }, 424);
+        return J({ error: "The mail server refused this mailbox's password 3 times in a row, so the stored password is most likely wrong. Fix the secret " + secretName + " (Supabase → Edge Functions → Secrets) — " + passHint + " — no extra spaces. Server said: " + lastErr.slice(0, 90) }, 424);
       }
       try {
         await pop.cmd("UIDL");
@@ -240,7 +245,7 @@ export default {
       return J({ ok: true, mailbox, on_server: listed, new_messages: fetched, backfilled_with_attachments: backfilled });
     } catch (e) {
       const msg = (e as Error).message || String(e);
-      if (/PASS failed|USER failed|AUTH/i.test(msg)) return J({ error: "The mail server refused this mailbox's password. Check the MAIL_PASS secret value matches the Hostinger email password." }, 424);
+      if (/PASS failed|USER failed|AUTH/i.test(msg)) return J({ error: "The mail server refused this mailbox's password. Check the MAIL_PASS secret — " + "for Google-hosted boxes it must be a Google App Password; for Hostinger boxes the Hostinger email password." }, 424);
       return J({ error: "Sync failed: " + msg.slice(0, 160) }, 500);
     }
   },

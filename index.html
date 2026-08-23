@@ -3805,8 +3805,16 @@ async function mailList(){
         : `<button class="btn ghost sm" id="btn-mail-sync" onclick="mailSync()">⟳ Check for new mail</button>`}
     </div>
     <div id="mail-sync-msg"></div>
-    <div class="table-scroll"><table><thead><tr><th style="width:150px;">${mailFolder==='SENT'?'To':'From'}</th><th>Subject</th><th style="width:120px;">When</th><th style="width:80px;">${mailFolder==='IN'?'Handled':''}</th><th style="width:90px;"></th></tr></thead><tbody>
+    <div id="mail-bulk" style="display:none;gap:8px;align-items:center;margin:6px 0;padding:8px 10px;background:#faf6ea;border:1px solid #e2d9be;border-radius:8px;flex-wrap:wrap;">
+      <b style="font-size:12.5px;"><span id="mail-selcount">0</span> selected</b>
+      ${mailFolder==='IN'?`<button class="mini" onclick="mailBulk('handled')">✔ Mark handled</button>`:''}
+      ${mailFolder!=='TRASH'?`<button class="mini" onclick="mailBulk('trash')" style="color:#c0392b;">🗑 Move to Trash</button>`:''}
+      ${mailFolder==='TRASH'?`<button class="mini" onclick="mailBulk('restore')">↩ Restore</button>`:''}
+      <button class="mini" onclick="mailSelAll(false)">Clear selection</button>
+    </div>
+    <div class="table-scroll"><table><thead><tr><th style="width:30px;"><input type="checkbox" id="mail-selall" title="Select all" onclick="mailSelAll(this.checked)"></th><th style="width:150px;">${mailFolder==='SENT'?'To':'From'}</th><th>Subject</th><th style="width:120px;">When</th><th style="width:80px;">${mailFolder==='IN'?'Handled':''}</th><th style="width:90px;"></th></tr></thead><tbody>
     ${mailMsgs.map(m=>`<tr style="cursor:pointer;${m.is_handled&&mailFolder==='IN'?'opacity:.55;':''}" onclick="mailRead('${m.id}')">` +
+      `<td onclick="event.stopPropagation();"><input type="checkbox" class="mail-sel" value="${m.id}" onclick="event.stopPropagation();mailSelUpd()"></td>` +
       `<td>${esc(((mailFolder==='SENT'?m.to_addr:m.from_addr)||'—').replace(/<.*>/,'').trim().slice(0,30))}</td>` +
       `<td>${m.is_handled||mailFolder!=='IN'?'':'<b>'}${esc((m.subject||'(no subject)').slice(0,80))}${m.is_handled||mailFolder!=='IN'?'':'</b>'}${m.has_attachments?' <span title="Has attachments">📎</span>':''}</td>` +
       `<td style="font-size:12px;">${m.sent_at? new Date(m.sent_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—'}</td>` +
@@ -3814,9 +3822,33 @@ async function mailList(){
       `<td>${mailFolder==='TRASH'
         ? `<button class="btn ghost sm" onclick="event.stopPropagation();mailRestore('${m.id}')" title="Put back">↩ Restore</button>`
         : `<button class="btn ghost sm" onclick="event.stopPropagation();mailTrash('${m.id}')" title="Move to Trash" style="color:#c0392b;">🗑</button>`}</td></tr>`).join('')
-      || `<tr><td colspan="5" style="color:#777">${mailFolder==='TRASH'?'Trash is empty.':'Nothing here yet — press “Check for new mail”.'}</td></tr>`}
+      || `<tr><td colspan="6" style="color:#777">${mailFolder==='TRASH'?'Trash is empty.':'Nothing here yet — press “Check for new mail”.'}</td></tr>`}
     </tbody></table></div>
     <div id="mail-read"></div>`;
+}
+function mailSelIds(){ return [...document.querySelectorAll('.mail-sel:checked')].map(c=>c.value); }
+function mailSelAll(on){ document.querySelectorAll('.mail-sel').forEach(c=>{c.checked=!!on;}); const a=$('mail-selall'); if(a) a.checked=!!on; mailSelUpd(); }
+function mailSelUpd(){
+  const n = mailSelIds().length;
+  const bar = $('mail-bulk'); if (bar) bar.style.display = n ? 'flex' : 'none';
+  const c = $('mail-selcount'); if (c) c.textContent = n;
+  const a = $('mail-selall'); if (a){ const tot=document.querySelectorAll('.mail-sel').length; a.checked = tot>0 && n===tot; }
+}
+async function mailBulk(action){
+  const ids = mailSelIds();
+  if (!ids.length) return;
+  if (action==='trash' && !confirm('Move '+ids.length+' email(s) to Trash?')) return;
+  const M2 = db.schema('mail');
+  let failed = 0;
+  for (const id of ids){
+    let r;
+    if (action==='handled') r = await M2.rpc('mark_handled', { p_msg: id, p_undo: false });
+    else if (action==='trash') r = await M2.rpc('trash_message', { p_msg: id });
+    else if (action==='restore') r = await M2.rpc('restore_message', { p_msg: id });
+    if (r && r.error) failed++;
+  }
+  say('mail-sync-msg', (ids.length-failed)+' email(s) '+(action==='handled'?'marked handled':(action==='trash'?'moved to Trash':'restored'))+(failed?' · '+failed+' failed':''), !failed);
+  mailOpen = null; mailList();
 }
 async function mailSync(){
   const btn = $('btn-mail-sync'); btn.disabled = true; btn.textContent = '⟳ Checking…';
