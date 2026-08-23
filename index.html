@@ -402,6 +402,12 @@
   </section>
 
   <!-- ============ MODULE 9: DEPARTMENT MAIL ============ -->
+  <section id="view-contacts" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Contact Book</h2>
+      <p>Everyone in one place — vendors, distributors, employees and your personal contacts. Add details, sort them into groups, and never miss a birthday or anniversary.</p></div>
+    <div id="contacts-body"></div>
+  </section>
   <section id="view-docs" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Documents</h2>
@@ -566,6 +572,7 @@ const MODULES = [
   {key:'notif',   ico:'🔔', name:'Notification Centre', desc:'Tasks, emails, to-dos & approvals',  live:true,  open:()=>openNotifCentre()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
+  {key:'contacts',ico:'📇', name:'Contact Book',     desc:'Vendors, distributors, staff & personal contacts — with birthday reminders', live:true, open:()=>openContacts()},
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
 ];
 const PERM_ACTIONS = ['view','add','edit','admin'];
@@ -579,7 +586,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','field','purchase','mail','acct','docs'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','field','purchase','mail','acct','docs','contacts'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -5185,6 +5192,142 @@ async function fieldSaveCred(uid, name){
 }
 
 /* ================= MODULE 17: NOTIFICATIONS ================= */
+/* ---------------- Contact Book ---------------- */
+let ctAll = [], ctQ = '', ctCat = 'ALL', ctGrp = 'ALL';
+async function openContacts(){ ctQ=''; ctCat='ALL'; ctGrp='ALL'; await ctList(); show('contacts'); }
+function ctDays(d){
+  if (!d) return null;
+  const now = new Date(); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const m = Number(String(d).slice(5,7))-1, day = Number(String(d).slice(8,10));
+  let next = new Date(today.getFullYear(), m, day);
+  if (next < today) next = new Date(today.getFullYear()+1, m, day);
+  return Math.round((next - today)/86400000);
+}
+function ctFmtD(d){ return d ? new Date(d+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) : ''; }
+async function ctList(){
+  const B = $('contacts-body'); B.innerHTML = '<p style="color:#555">Loading…</p>';
+  const { data, error } = await db.schema('app').from('contacts').select('*').order('full_name');
+  if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+  ctAll = data || [];
+  const upcoming = [];
+  ctAll.forEach(c=>{
+    const b = ctDays(c.birthday), a = ctDays(c.anniversary);
+    if (b!=null && b<=30) upcoming.push({c, isB:true, days:b, date:c.birthday});
+    if (a!=null && a<=30) upcoming.push({c, isB:false, days:a, date:c.anniversary});
+  });
+  upcoming.sort((x,y)=>x.days-y.days);
+  B.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
+      <button class="btn gold sm" onclick="ctForm()">＋ Add contact</button>
+      ${isDir()?`<button class="btn ghost sm" onclick="ctImport()" title="Pull the vendors, distributors and staff already in the ERP into the contact book">⇩ Import from ERP</button>`:''}
+      <input id="ct-q" placeholder="🔍 Search name, company, phone, email, city…" value="${esc(ctQ)}" style="flex:1;min-width:220px;max-width:360px;" oninput="ctQ=this.value;ctTable()">
+    </div>
+    ${upcoming.length?`<div class="card" style="margin:8px 0;padding:12px;background:#fffdf4;border:1px solid #e9d9a8;">
+      <b style="font-size:13px;">📅 Coming up in the next 30 days</b>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;">
+      ${upcoming.map(u=>`<span style="font-size:12.5px;">${u.isB?'🎂':'💍'} <b>${esc(u.c.full_name)}</b> — ${ctFmtD(u.date)} ${u.days===0?'<span style="color:#b3261e;font-weight:700;">(today!)</span>':u.days===1?'(tomorrow)':'(in '+u.days+' days)'}</span>`).join('')}
+      </div></div>`:''}
+    <div id="ct-form"></div>
+    <div id="ct-table"></div>`;
+  ctTable();
+}
+function ctSetGrp(i){ const g = (window.__ctGroups||[])[i]; ctGrp = ctGrp===g ? 'ALL' : g; ctTable(); }
+function ctTable(){
+  const T = $('ct-table'); if (!T) return;
+  const groups = [...new Set(ctAll.map(c=>c.group_name).filter(Boolean))].sort();
+  window.__ctGroups = groups;
+  const q = (ctQ||'').toLowerCase().trim();
+  const shown = ctAll.filter(c=>
+    (ctCat==='ALL' || c.category===ctCat) &&
+    (ctGrp==='ALL' || (c.group_name||'')===ctGrp) &&
+    (!q || [c.full_name,c.company,c.designation,c.phone,c.phone2,c.email,c.email2,c.address,c.city,c.group_name,c.notes].join(' ').toLowerCase().includes(q)));
+  T.innerHTML = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;">
+      ${['ALL','BUSINESS','PERSONAL'].map(c=>`<button class="chip ${ctCat===c?'on':''}" onclick="ctCat='${c}';ctTable()">${c==='ALL'?'All ('+ctAll.length+')':c==='BUSINESS'?'💼 Business':'🏠 Personal'}</button>`).join('')}
+      ${groups.map((g,i)=>`<button class="chip ${ctGrp===g?'on':''}" onclick="ctSetGrp(${i})" title="Group filter">🔖 ${esc(g)} (${ctAll.filter(c=>c.group_name===g).length})</button>`).join('')}
+    </div>
+    <div class="table-scroll"><table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Address</th><th>Group</th><th>Dates</th><th></th></tr></thead><tbody>
+    ${shown.map(c=>`<tr>
+      <td><b>${esc(c.full_name)}</b>${c.is_private?' <span title="Private — only you (and the Director) can see this">🔒</span>':''}${c.company&&c.company!==c.full_name?'<br><span style="font-size:11.5px;color:#555">'+esc(c.company)+(c.designation?' · '+esc(c.designation):'')+'</span>':(c.designation?'<br><span style="font-size:11.5px;color:#555">'+esc(c.designation)+'</span>':'')}${c.notes?'<br><span style="font-size:11px;color:#777">'+esc(c.notes.slice(0,60))+'</span>':''}</td>
+      <td style="font-size:12.5px;white-space:nowrap;">${c.phone?'<a href="tel:'+esc(c.phone)+'">'+esc(c.phone)+'</a>':'—'}${c.phone2?'<br><a href="tel:'+esc(c.phone2)+'">'+esc(c.phone2)+'</a>':''}</td>
+      <td style="font-size:12.5px;">${c.email?'<a href="mailto:'+esc(c.email)+'">'+esc(c.email)+'</a>':'—'}${c.email2?'<br><a href="mailto:'+esc(c.email2)+'">'+esc(c.email2)+'</a>':''}</td>
+      <td style="font-size:12px;max-width:190px;">${esc(c.address||'')}${c.city?(c.address?', ':'')+esc(c.city):''}</td>
+      <td style="font-size:12px;">${c.group_name?'<span style="background:#1a1a2e;color:#fff;border-radius:9px;padding:1px 8px;font-size:11px;white-space:nowrap;">'+esc(c.group_name)+'</span><br>':''}<span style="color:#555;">${c.category==='PERSONAL'?'🏠 Personal':'💼 Business'}</span></td>
+      <td style="font-size:12px;white-space:nowrap;">${c.birthday?'🎂 '+ctFmtD(c.birthday)+'<br>':''}${c.anniversary?'💍 '+ctFmtD(c.anniversary):''}</td>
+      <td style="white-space:nowrap;">${(isDir()||c.created_by===me.id)?`<button class="mini" onclick="ctForm('${c.id}')">✏️ Edit</button> <button class="mini" style="color:#b3261e;" onclick="ctDel('${c.id}')" title="Delete this contact">🗑</button>`:''}</td></tr>`).join('')
+      || `<tr><td colspan="7" style="color:#555">${ctAll.length?'No contacts match this search or filter.':'No contacts yet — add your first one'+(isDir()?', or press “⇩ Import from ERP”.':'.')}</td></tr>`}
+    </tbody></table></div>
+    <p style="font-size:11.5px;color:#666;margin-top:6px;">${shown.length} of ${ctAll.length} contact${ctAll.length===1?'':'s'} shown · 🔒 private contacts are visible only to whoever added them (and the Director).</p>`;
+}
+function ctForm(id){
+  const c = id ? ctAll.find(x=>x.id===id) : null;
+  const groups = [...new Set(ctAll.map(x=>x.group_name).filter(Boolean))].sort();
+  const F = $('ct-form');
+  F.innerHTML = `<div class="card" style="margin:10px 0;max-width:720px;">
+    <h3 style="font-size:15px;">${c?'Edit contact — '+esc(c.full_name):'New contact'}</h3>
+    <div class="row2c"><div><label>Full name *</label><input id="cf-name" maxlength="120" value="${esc(c?c.full_name:'')}"></div>
+    <div><label>Company / firm</label><input id="cf-company" maxlength="120" value="${esc(c?c.company||'':'')}"></div></div>
+    <div class="row2c"><div><label>Designation / role</label><input id="cf-desig" maxlength="80" value="${esc(c?c.designation||'':'')}"></div>
+    <div><label>Category</label><select id="cf-cat"><option value="BUSINESS" ${(!c||c.category==='BUSINESS')?'selected':''}>💼 Business</option><option value="PERSONAL" ${c&&c.category==='PERSONAL'?'selected':''}>🏠 Personal</option></select></div></div>
+    <div class="row2c"><div><label>Phone</label><input id="cf-phone" maxlength="30" value="${esc(c?c.phone||'':'')}"></div>
+    <div><label>Phone 2</label><input id="cf-phone2" maxlength="30" value="${esc(c?c.phone2||'':'')}"></div></div>
+    <div class="row2c"><div><label>Email</label><input id="cf-email" maxlength="120" value="${esc(c?c.email||'':'')}"></div>
+    <div><label>Email 2</label><input id="cf-email2" maxlength="120" value="${esc(c?c.email2||'':'')}"></div></div>
+    <label>Address</label><input id="cf-addr" maxlength="240" value="${esc(c?c.address||'':'')}">
+    <div class="row2c"><div><label>City</label><input id="cf-city" maxlength="60" value="${esc(c?c.city||'':'')}"></div>
+    <div><label>Group — type your own or pick (Vendors, Distributors, Employees, Family…)</label><input id="cf-group" maxlength="40" list="cf-groups" value="${esc(c?c.group_name||'':'')}"><datalist id="cf-groups">${groups.map(g=>`<option value="${esc(g)}">`).join('')}</datalist></div></div>
+    <div class="row2c"><div><label>🎂 Birthday — shows in the reminder panel</label><input type="date" id="cf-bday" value="${c&&c.birthday?c.birthday:''}"></div>
+    <div><label>💍 Anniversary</label><input type="date" id="cf-anniv" value="${c&&c.anniversary?c.anniversary:''}"></div></div>
+    <label>Notes</label><input id="cf-notes" maxlength="240" value="${esc(c?c.notes||'':'')}">
+    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;"><input type="checkbox" id="cf-priv" ${c&&c.is_private?'checked':''} style="width:auto;"> 🔒 Private — only I can see this contact</label>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="btn gold sm" onclick="ctSave('${id||''}')">${c?'Save changes':'Add to contact book'}</button>
+      <button class="btn ghost sm" onclick="$('ct-form').innerHTML=''">Cancel</button>
+    </div><div id="cf-msg"></div></div>`;
+  F.scrollIntoView({behavior:'smooth'});
+}
+async function ctSave(id){
+  const name = $('cf-name').value.trim();
+  if (!name){ say('cf-msg','The name is required.', false); return; }
+  const row = { full_name:name, company:$('cf-company').value.trim()||null, designation:$('cf-desig').value.trim()||null,
+    phone:$('cf-phone').value.trim()||null, phone2:$('cf-phone2').value.trim()||null,
+    email:$('cf-email').value.trim()||null, email2:$('cf-email2').value.trim()||null,
+    address:$('cf-addr').value.trim()||null, city:$('cf-city').value.trim()||null,
+    category:$('cf-cat').value, group_name:$('cf-group').value.trim()||null,
+    birthday:$('cf-bday').value||null, anniversary:$('cf-anniv').value||null,
+    notes:$('cf-notes').value.trim()||null, is_private:$('cf-priv').checked, updated_at:new Date().toISOString() };
+  const C = db.schema('app').from('contacts');
+  const r = id ? await C.update(row).eq('id', id) : await C.insert(row);
+  if (r.error){ say('cf-msg','Could not save: '+r.error.message, false); return; }
+  await ctList();
+}
+async function ctDel(id){
+  const c = ctAll.find(x=>x.id===id);
+  if (!confirm('Delete '+(c?c.full_name:'this contact')+' from the contact book?')) return;
+  const { error } = await db.schema('app').from('contacts').delete().eq('id', id);
+  if (error){ alert('Could not delete: '+error.message); return; }
+  ctList();
+}
+async function ctImport(){
+  if (!confirm('Import all vendors, distributors and employees from the ERP into the contact book?\n\nNames already in the book are skipped, so it is safe to run this again any time.')) return;
+  const [vR, pR, uR] = await Promise.all([
+    db.schema('sales').from('vendors').select('*'),
+    db.schema('sales').from('parties').select('*').eq('party_type','DISTRIBUTOR'),
+    db.schema('adm').from('users').select('*').eq('is_active', true)
+  ]);
+  const have = new Set(ctAll.map(c=>c.full_name.trim().toLowerCase()));
+  const rows = [];
+  const push = (name, extra) => { const k=(name||'').trim().toLowerCase(); if(!k||have.has(k)) return; have.add(k); rows.push(Object.assign({ full_name:name.trim(), category:'BUSINESS' }, extra)); };
+  (vR.data||[]).forEach(v=>push(v.name, { company:v.name, phone:v.phone||null, email:v.email||null, designation:v.contact||null, group_name:'Vendors', notes:v.gstin?('GSTIN '+v.gstin):null }));
+  (pR.data||[]).forEach(p=>push(p.name, { company:p.name, phone:p.phone||p.contact_phone||null, email:p.email||null, city:p.city||null, group_name:'Distributors' }));
+  (uR.data||[]).forEach(u=>push(u.full_name, { designation:u.designation||null, email:u.email||null, group_name:'Employees' }));
+  if (!rows.length){ alert('Nothing new to import — everyone is already in the contact book.'); return; }
+  const { error } = await db.schema('app').from('contacts').insert(rows);
+  if (error){ alert('Import failed: '+error.message); return; }
+  alert(rows.length+' contact(s) imported from the ERP (vendors, distributors and employees). Open any of them with Edit to add addresses, birthdays and more.');
+  ctList();
+}
+
 let notifItems=[];
 function notifBeep(){
   try {
