@@ -2886,6 +2886,7 @@ async function acctTab(t){
         <div class="row2c"><div><label>Tax type</label><select id="tx-type"><option value="">All taxes</option><option value="GST">GST</option><option value="VAT">VAT</option><option value="SALES_TAX">Sales tax</option><option value="TDS">TDS</option></select></div>
         <div><label>&nbsp;</label><button class="btn gold sm" style="display:block;" onclick="acTaxRun()">Show summary</button></div></div>
       </div>
+      <div class="switch" style="margin:10px 0 0;"><input type="checkbox" id="tx-mmc" checked onchange="acTaxRun()"><span>Include <b>bill-to-MMC</b> purchases — untick to leave MMC-billed POs out of this summary</span></div>
       <div id="tx-out" style="margin-top:12px;"></div>`;
     acTaxRun();
     return;
@@ -3346,7 +3347,8 @@ async function acTaxRun(){
   if (!from || !to){ out.innerHTML = '<div class="msg err">Pick both a From date and a To date.</div>'; return; }
   out.innerHTML = '<p style="color:#777">Loading…</p>';
   const ty = $('tx-type').value || null;
-  const { data, error } = await db.schema('acct').rpc('purchase_tax_report', { p_from: from, p_to: to, p_type: ty });
+  const incMmc = $('tx-mmc') ? $('tx-mmc').checked : true;
+  const { data, error } = await db.schema('acct').rpc('purchase_tax_report', { p_from: from, p_to: to, p_type: ty, p_include_mmc: incMmc });
   if (error){ out.innerHTML = `<div class="msg err">Could not load: ${esc(error.message)}</div>`; return; }
   const rows = data || [];
   const totTaxable = rows.reduce((s,r)=>s+Number(r.taxable),0);
@@ -3371,7 +3373,7 @@ async function acTaxRun(){
     </tbody></table></div>
     <h4 class="sec" style="margin-top:14px;">Detail — every taxed purchase line</h4>
     <div class="table-scroll"><table><thead><tr><th>PO date</th><th>PO</th><th>Vendor</th><th>Material</th><th class="amount">Taxable ₹</th><th>Tax</th><th class="amount">Rate %</th><th class="amount">Tax ₹</th><th>PO status</th></tr></thead><tbody>
-    ${rows.map(r=>`<tr><td>${r.order_date}</td><td><b>${esc(r.po_no)}</b></td><td>${esc(r.vendor)}</td><td>${esc(r.item)}</td>` +
+    ${rows.map(r=>`<tr><td>${r.order_date}</td><td><b>${esc(r.po_no)}</b>${r.is_mmc?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:600;" title="Vendor billed & delivered directly to MMC">→ MMC</span>':''}</td><td>${esc(r.vendor)}</td><td>${esc(r.item)}</td>` +
       `<td class="amount">${inr(r.taxable)}</td><td>${esc(TAX_LBL[r.tax_type]||r.tax_type)}</td><td class="amount">${Number(r.tax_rate)}</td>` +
       `<td class="amount" style="font-weight:600;color:#1a7f37">${inr(r.tax)}</td><td style="font-size:12px;">${esc(r.po_status)}</td></tr>`).join('')
       || '<tr><td colspan="9" style="color:#777">Nothing to show — place POs with a tax type &amp; rate and they will appear here.</td></tr>'}
