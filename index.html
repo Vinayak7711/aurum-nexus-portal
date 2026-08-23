@@ -2698,6 +2698,9 @@ async function acctTab(t){
     const sel = window.acLedSel;
     const matchLed = (e, key) => {
       const k = key.slice(0,2), name = key.slice(2);
+      if (key==='T:B:') return !!(e.bank_name_label || e.counter_bank_label);
+      if (key==='T:P:') return !!e.party_name;
+      if (key==='T:S:') return !!e.staff_name;
       if (k==='B:') return e.bank_name_label===name || e.counter_bank_label===name;
       if (k==='P:') return e.party_name===name;
       if (k==='V:') return e.payee===name;
@@ -2752,7 +2755,9 @@ async function acctTab(t){
         <div class="card" style="padding:14px;margin-top:8px;">
           <div><label>Select the ${LT[pfx][0].replace(/^[^ ]+ /,'')} account</label>
             <select id="led-acct">${names.length
-              ? `<option value="">— Choose from ${names.length} account${names.length===1?'':'s'} —</option>` + acctOpts
+              ? `<option value="">— Choose from ${names.length} account${names.length===1?'':'s'} —</option>`
+                + `<option value="ALLTYPE">✔ Select all — combined ledger of all ${names.length} account${names.length===1?'':'s'}</option>`
+                + acctOpts
               : '<option value="">No accounts of this type have entries yet</option>'}</select></div>
           <div class="row2c" style="margin-top:10px;">
             <div><label>From date (leave blank for beginning)</label><input type="date" id="led-from" value="${window.acLedFrom}" onchange="window.acLedFrom=this.value"></div>
@@ -2763,10 +2768,12 @@ async function acctTab(t){
       return;
     }
     const isAllLed = sel === 'ALL';
-    if (!isAllLed && sel.slice(0,2) === 'E:'){
-      const catL = sel.slice(2);
-      let qE = A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status), items:expense_items(*)').eq('category', catL)
+    if (!isAllLed && (sel.slice(0,2) === 'E:' || sel === 'T:E:')){
+      const allCats = sel === 'T:E:';
+      const catL = allCats ? null : sel.slice(2);
+      let qE = A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status), items:expense_items(*)')
         .order('exp_date',{ascending:false}).order('created_at',{ascending:false}).limit(1000);
+      if (!allCats) qE = qE.eq('category', catL);
       if (window.acLedFrom) qE = qE.gte('exp_date', window.acLedFrom);
       if (window.acLedTo) qE = qE.lte('exp_date', window.acLedTo);
       const { data: exl, error: exe } = await qE;
@@ -2779,7 +2786,7 @@ async function acctTab(t){
       window.__ledRows = exs.map(r=>({ entry_no:r.exp_no, entry_date:r.exp_date, kind:'EXPENSE', payee:r.payee||'',
         narration:(r.dept?'['+r.dept+'] ':'')+(r.description||''), bank_name_label:r.mode==='PETTY'?'Petty cash':(r.bank?r.bank.name:''),
         counter_bank_label:'', mode:r.mode, ref_no:r.hsn_code?'HSN '+r.hsn_code:'', amount:Number(r.amount), direction:'OUT', status:'PAID' }));
-      window.__ledLabel = 'Expense ledger — ' + catL;
+      window.__ledLabel = 'Expense ledger — ' + (allCats ? 'All categories (combined)' : catL);
       B.innerHTML = `
       <button class="btn ghost sm" onclick="acLedBack()">‹ Back to all ledgers</button>
       ${dateBar}
@@ -2794,7 +2801,7 @@ async function acctTab(t){
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${exs.length} entr${exs.length===1?'y':'ies'}</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Dept</th><th>Paid to / details</th><th class="amount">Bill ₹</th><th class="amount">GST ₹</th><th class="amount">TDS ₹</th><th class="amount">Paid ₹</th><th>Paid from</th><th></th></tr></thead><tbody>
       ${exs.map(r=>`<tr><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td style="font-size:12px;">${esc(r.dept||'—')}</td>` +
-        `<td>${esc(r.payee||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
+        `<td>${esc(r.payee||'—')}${allCats?'<br><span style="font-size:11px;color:#0b57d0;font-weight:600;">'+esc(r.category||'')+'</span>':''}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
         `<td class="amount">${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td>` +
         `<td class="amount" style="color:#1a7f37">${Number(r.gst_amount)>0?inr(r.gst_amount):''}</td>` +
         `<td class="amount" style="color:#b8860b">${Number(r.tds_amount)>0?inr(r.tds_amount):''}</td>` +
@@ -2805,6 +2812,43 @@ async function acctTab(t){
       ${exs.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${inr(tBill)}</td><td class="amount">${inr(tGst)}</td><td class="amount">${inr(tTds)}</td><td class="amount">${inr(tPaid)}</td><td colspan="2"></td></tr>`:''}
       </tbody></table></div>`;
       window.__expRows = exs;
+      return;
+    }
+    if (sel === 'T:V:'){
+      const { data: vlAll } = await db.schema('sales').from('vendors').select('id,name').order('name');
+      const vendorsAll = vlAll || [];
+      const perVen = await Promise.all(vendorsAll.map(v =>
+        A.rpc('vendor_ledger', { p_vendor: v.id, p_from: window.acLedFrom || null, p_to: window.acLedTo || null })
+          .then(r => ({ v, rows: r.error ? [] : (r.data || []) }))));
+      const docs = perVen.flatMap(x => x.rows.map(r => ({ ...r, vname: x.v.name })))
+        .sort((a,b)=> a.doc_date<b.doc_date?-1 : a.doc_date>b.doc_date?1 : String(a.doc_no).localeCompare(String(b.doc_no)));
+      const totBil = docs.reduce((s,r)=>s+Number(r.billed||0),0);
+      const totPaid = docs.reduce((s,r)=>s+Number(r.paid||0),0);
+      const outst = totBil - totPaid;
+      window.__ledRows = docs.map(r=>({ entry_no:r.doc_no, entry_date:r.doc_date, kind:r.kind, payee:r.vname, narration:r.detail,
+        bank_name_label:'', counter_bank_label:'', mode:'', ref_no:'', amount:Number(r.billed||0)+Number(r.paid||0),
+        direction:r.kind==='BILL'?'IN':'OUT', status:r.kind==='BILL'?'BILLED':'PAID' }));
+      window.__ledLabel = 'All vendors — combined ledger';
+      B.innerHTML = `
+      <button class="btn ghost sm" onclick="acLedBack()">‹ Back to all ledgers</button>
+      ${dateBar}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#555">Billed (all vendors)</div><div style="font-size:19px;font-weight:700;">₹ ${inr(totBil)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#555">Paid</div><div style="font-size:19px;font-weight:700;color:#1a7f37">₹ ${inr(totPaid)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#555">Outstanding</div><div style="font-size:19px;font-weight:700;color:${outst>0?'#b3261e':'#1a7f37'}">₹ ${inr(outst)}</div></div>
+      </div>
+      <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
+      <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
+      <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${docs.length} record${docs.length===1?'':'s'} across ${vendorsAll.length} vendors</h4>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Vendor</th><th>Doc no.</th><th>Type</th><th>Details</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th></tr></thead><tbody>
+      ${docs.map(r=>`<tr><td>${r.doc_date}</td><td><b>${esc(r.vname)}</b></td><td><b>${esc(r.doc_no)}</b></td>` +
+        `<td>${r.kind==='BILL'?'🧾 Purchase bill':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
+        `<td class="amount" style="color:#b3261e">${Number(r.billed)?inr(r.billed):''}</td>` +
+        `<td class="amount" style="color:#1a7f37">${Number(r.paid)?inr(r.paid):''}</td></tr>`).join('')
+        || '<tr><td colspan="7" style="color:#555">No purchase bills or payments in this date range.</td></tr>'}
+      ${docs.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(totBil)}</td><td class="amount">${inr(totPaid)}</td></tr>
+      <tr style="font-weight:700;"><td colspan="5">Outstanding (billed − paid)</td><td colspan="2" class="amount" style="color:${outst>0?'#b3261e':'#1a7f37'}">₹ ${inr(outst)}</td></tr>`:''}
+      </tbody></table></div>`;
       return;
     }
     if (!isAllLed && sel.slice(0,2) === 'V:'){
@@ -2846,7 +2890,11 @@ async function acctTab(t){
     const totIn = es.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
     const totOut = es.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
     window.__ledRows = es;
-    window.__ledLabel = isAllLed ? 'All entries' : (sel.slice(0,2)==='B:'?'Bank ledger — ':sel.slice(0,2)==='P:'?'Party ledger — ':sel.slice(0,2)==='V:'?'Vendor ledger — ':'Staff ledger — ') + sel.slice(2);
+    window.__ledLabel = isAllLed ? 'All entries'
+      : sel==='T:B:' ? 'All bank accounts — combined ledger'
+      : sel==='T:P:' ? 'All parties / distributors — combined ledger'
+      : sel==='T:S:' ? 'All staff — combined ledger'
+      : (sel.slice(0,2)==='B:'?'Bank ledger — ':sel.slice(0,2)==='P:'?'Party ledger — ':sel.slice(0,2)==='V:'?'Vendor ledger — ':'Staff ledger — ') + sel.slice(2);
     B.innerHTML = `
       <button class="btn ghost sm" onclick="acLedBack()">‹ Back to all ledgers</button>
       ${dateBar}
@@ -3184,7 +3232,9 @@ async function acctTab(t){
   }
 }
 function acLedOpen(i){ window.acLedSel = i < 0 ? 'ALL' : (window.__ledKeys||[])[i] || ''; acctTab('ledger'); }
-function acLedView(){ const s = document.getElementById('led-acct'); if (!s || s.value === ''){ alert('Choose the account from the list first.'); return; } acLedOpen(Number(s.value)); }
+function acLedView(){ const s = document.getElementById('led-acct'); if (!s || s.value === ''){ alert('Choose the account from the list first.'); return; }
+  if (s.value === 'ALLTYPE'){ window.acLedSel = 'T:' + window.acLedType; acctTab('ledger'); return; }
+  acLedOpen(Number(s.value)); }
 function acLedBack(){ window.acLedSel = ''; acctTab('ledger'); }
 async function acNewGo(kind){
   if (kind === 'ledger'){ await acctTab('ledger'); if (typeof acEntryForm === 'function'){ acEntryForm(); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); } }
