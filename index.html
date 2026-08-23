@@ -2597,7 +2597,7 @@ async function acctTab(t){
     if (!canFinApprove()){ B.innerHTML = '<div class="msg err">Pending approvals are visible only to the Director and the Accounts head (finance-approve permission).</div>'; return; }
     const [entR, pcR, slR, advR, poR, rqR, mkR] = await Promise.all([
       A.from('v_entries').select('*').eq('status','PENDING_APPROVAL').order('entry_date',{ascending:false}).limit(300),
-      A.from('petty_cash').select('*').eq('status','PENDING').order('expense_date',{ascending:false}).limit(300),
+      A.from('petty_cash').select('*').in('status',['PENDING','PENDING_APPROVAL']).order('expense_date',{ascending:false}).limit(300),
       A.from('salary_slips').select('*').eq('status','DRAFT').order('period',{ascending:false}).limit(300),
       A.from('v_advances').select('*').eq('status','PENDING_APPROVAL').order('given_on',{ascending:false}).limit(300),
       db.schema('mfg').from('v_po_tracking').select('*').eq('status','PENDING_APPROVAL').order('order_date',{ascending:false}).limit(300),
