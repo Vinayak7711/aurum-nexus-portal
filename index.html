@@ -3875,7 +3875,7 @@ async function openDocs(){
 }
 async function docsList(){
   const B = $('docs-body'); B.innerHTML = '<p style="color:#555">Loading…</p>';
-  const { data, error } = await db.schema('comp').from('documents')
+  const { data, error } = await db.schema('comp').from('doc_library')
     .select('id,title,filename,content_type,size_bytes,uploaded_by,created_at')
     .order('created_at',{ascending:false}).limit(500);
   if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
@@ -3908,7 +3908,7 @@ async function docsList(){
       <td><b>${esc(d.title)}</b></td><td style="font-size:12px;">${esc(d.filename)}</td><td>${kindOf(d.content_type)}</td>
       <td class="amount">${fmtBytes(d.size_bytes)}</td>
       <td style="font-size:12px;">${esc(userBy[d.uploaded_by]||'—')}<br><span style="color:#555;">${d.created_at? new Date(d.created_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):''}</span></td>
-      <td style="white-space:nowrap;"><button class="mini" onclick="docView('${d.id}')" title="Open and read here">👁 View</button> <button class="mini" onclick="docDownload('${d.id}')" title="Save to your device">⬇ Download</button> <button class="mini" onclick="docPrint('${d.id}')" title="Print / save PDF">🖨 Print</button> ${dirDelBtn('comp','documents', d.id, d.title, 'docsList()')}</td></tr>`).join('')
+      <td style="white-space:nowrap;"><button class="mini" onclick="docView('${d.id}')" title="Open and read here">👁 View</button> <button class="mini" onclick="docDownload('${d.id}')" title="Save to your device">⬇ Download</button> <button class="mini" onclick="docPrint('${d.id}')" title="Print / save PDF">🖨 Print</button> ${dirDelBtn('comp','doc_library', d.id, d.title, 'docsList()')}</td></tr>`).join('')
       || '<tr><td colspan="6" style="color:#555">No documents yet' + (canDocsEdit()?' — upload the first one above.':'.') + '</td></tr>'}
     </tbody></table></div>`;
 }
@@ -3925,7 +3925,7 @@ async function docUpload(fromScan){
   say('doc-msg','Uploading '+f.name+'…', true);
   try {
     const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]||''); r.onerror=()=>rej(new Error('Could not read the file.')); r.readAsDataURL(f); });
-    const { error } = await db.schema('comp').from('documents').insert({
+    const { error } = await db.schema('comp').from('doc_library').insert({
       title, filename: f.name, content_type: f.type || 'application/octet-stream', size_bytes: f.size, data_b64: b64 });
     if (error) throw new Error(error.message);
     inp.value=''; $('doc-title').value='';
@@ -3934,7 +3934,7 @@ async function docUpload(fromScan){
   } catch(e){ say('doc-msg','Could not upload: '+e.message, false); }
 }
 async function docFetch(id){
-  const { data, error } = await db.schema('comp').from('documents').select('*').eq('id', id).single();
+  const { data, error } = await db.schema('comp').from('doc_library').select('*').eq('id', id).single();
   if (error || !data){ alert('Could not load this document'+(error?': '+error.message:'.')); return null; }
   return data;
 }
