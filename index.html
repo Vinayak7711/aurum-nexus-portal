@@ -402,6 +402,12 @@
   </section>
 
   <!-- ============ MODULE 9: DEPARTMENT MAIL ============ -->
+  <section id="view-docs" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Documents</h2>
+      <p>The company's document library — agreements, licences, contracts and every important paper. Upload a file from your system or scan a copy with your camera, give it a title, and it is safely stored inside the ERP. Access is granted per person from the Control Panel.</p></div>
+    <div id="docs-body"></div>
+  </section>
   <section id="view-mail" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Department Mail</h2>
@@ -559,7 +565,7 @@ const MODULES = [
   {key:'mkt',     ico:'📣', name:'Marketing',        desc:'Budget month/week + utilisation',        live:true, mktOnly:true, open:()=>openMkt()},
   {key:'notif',   ico:'🔔', name:'Notification Centre', desc:'Tasks, emails, to-dos & approvals',  live:true,  open:()=>openNotifCentre()},
   {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
-  {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Company document library',               live:false},
+  {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
 ];
 const PERM_ACTIONS = ['view','add','edit','admin'];
@@ -573,7 +579,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','field','purchase','mail','acct'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','field','purchase','mail','acct','docs'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -651,6 +657,7 @@ function drawModules(){
     if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit)) continue;
     if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS())) continue;
     if (m.fieldOnly && !(isDir() || window.__hasReports)) continue;
+    if (m.docsOnly && !(isDir() || me?.permissions_json?.docs?.view || me?.permissions_json?.docs?.add || me?.permissions_json?.docs?.edit)) continue;
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
     el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
@@ -2640,7 +2647,7 @@ async function acctTab(t){
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('petty','${r.id}')" title="See full details">👁 View</button> <button class="mini" onclick="acPettyVoucher('${r.id}')" title="Print / save PDF voucher">🖨 Print</button> <button class="mini" onclick="apprAct('petty','${r.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('petty','${r.id}',true)">Reject</button> ${dirDelBtn('acct','petty_cash', r.id, r.pc_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('🧾 Salary slips', sls.length, T('<th>Slip</th><th>Staff</th><th>Month</th><th class="amount">Net ₹</th><th></th>',
         sls.map(s=>`<tr><td><b>${esc(s.slip_no)}</b></td><td>${esc(acStaffName(s.staff_id))}</td><td>${s.period}</td><td class="amount" style="font-weight:700">${inr(s.net_pay)}</td>`+
-          `<td style="white-space:nowrap"><button class="mini" onclick="acSlipView('${s.id}')" title="See the full slip">👁 View</button> <button class="mini" onclick="apprPrint('slip','${s.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('slip','${s.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('slip','${s.id}',true)">Reject</button> ${dirDelBtn('acct','salary_slips', s.id, s.slip_no, "acctTab('appr')")}</td></tr>`).join('')))}
+          `<td style="white-space:nowrap"><button class="mini" onclick="apprView('slip','${s.id}')" title="See the full slip">👁 View</button> <button class="mini" onclick="apprPrint('slip','${s.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('slip','${s.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('slip','${s.id}',true)">Reject</button> ${dirDelBtn('acct','salary_slips', s.id, s.slip_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('🤝 Staff advances', advs.length, T('<th>No.</th><th>Staff</th><th>Date</th><th class="amount">Amount ₹</th><th></th>',
         advs.map(a=>`<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td><td class="amount" style="font-weight:700">${inr(a.amount)}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('adv','${a.id}')" title="See full details">👁 View</button> <button class="mini" onclick="apprPrint('adv','${a.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('adv','${a.id}',false)">✔ Approve &amp; pay</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('adv','${a.id}',true)">Reject</button> ${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('appr')")}</td></tr>`).join('')))}
@@ -3734,12 +3741,25 @@ async function apprAct(kind, id, reject){
   acctTab('appr');
 }
 function apprRowsHtml(pairs){
-  return '<table style="margin-top:8px;">' + pairs.filter(p=>p[1]!==undefined && p[1]!==null && p[1]!=='')
-    .map(p=>`<tr><th style="width:34%;text-align:left;padding:4px 8px;background:#faf6ea;">${p[0]}</th><td style="padding:4px 8px;">${p[1]}</td></tr>`).join('') + '</table>';
+  return '<table style="margin-top:8px;width:100%;border-collapse:collapse;font-size:13px;">' + pairs.filter(p=>p[1]!==undefined && p[1]!==null && p[1]!=='')
+    .map(p=>`<tr><th style="width:34%;text-align:left;padding:6px 9px;background:#f0ead8;color:#333;border:1px solid #e2d9be;">${p[0]}</th><td style="padding:6px 9px;color:#1a1a2e;border:1px solid #e2d9be;">${p[1]}</td></tr>`).join('') + '</table>';
+}
+function apprModalClose(){ const m=document.getElementById('appr-modal'); if(m) m.remove(); }
+function apprModal(title, innerHtml){
+  apprModalClose();
+  const ov = document.createElement('div'); ov.id='appr-modal';
+  ov.style.cssText='position:fixed;inset:0;z-index:1000;background:rgba(20,20,40,.55);display:flex;align-items:center;justify-content:center;padding:18px;';
+  ov.innerHTML = `<div style="background:#fff;border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.35);max-width:580px;width:100%;max-height:82vh;overflow:auto;padding:18px 20px;position:relative;color:#1a1a2e;">
+    <button onclick="apprModalClose()" title="Close" style="position:absolute;top:10px;right:12px;border:none;background:#f0ead8;color:#1a1a2e;border-radius:50%;width:30px;height:30px;font-size:15px;font-weight:700;cursor:pointer;">✕</button>
+    <h3 style="font-size:15.5px;margin:0 36px 6px 0;color:#1a1a2e;">${esc(title)}</h3>
+    ${innerHtml}
+    <div style="margin-top:14px;text-align:right;"><button class="btn ghost sm" onclick="apprModalClose()">Close</button></div>
+  </div>`;
+  ov.addEventListener('click', e=>{ if (e.target===ov) apprModalClose(); });
+  document.body.appendChild(ov);
 }
 async function apprView(kind, id){
   const D = window.__apprData || {};
-  const V = $('appr-view'); if (!V) return;
   let title = '', rows = [];
   if (kind === 'entry'){
     const e = (D.ents||[]).find(x=>x.id===id); if (!e) return;
@@ -3791,12 +3811,18 @@ async function apprView(kind, id){
       ['Amount', '<b>₹ '+inr(r.amount)+'</b><br><span style="font-size:11px;color:#777">'+esc(inrWords(r.amount))+'</span>'],
       ['Purpose', esc(r.description||'—')], ['Utilisation', esc(r.utilization||'—')], ['For period', r.period||'—'], ['Needed by', r.needed_by||'—'],
       ['Requested by', esc(r.requested_by_name||'—')], ['Status', 'AWAITING APPROVAL']];
+  } else if (kind === 'slip'){
+    const { data: s } = await db.schema('acct').from('salary_slips').select('*').eq('id', id).single();
+    if (!s) return;
+    title = 'Salary slip ' + s.slip_no;
+    const money = v => '₹ ' + inr(v);
+    rows = [['Slip no.', '<b>'+esc(s.slip_no)+'</b>'], ['Staff', esc(acStaffName(s.staff_id))], ['Month', s.period],
+      ['Basic', money(s.basic)], ['HRA', money(s.hra)], ['Allowances', money(s.allowances)], ['Gross', '<b>'+money(s.gross)+'</b>'],
+      ['Total deductions', money(s.total_deductions)],
+      ['NET PAY', '<b>'+money(s.net_pay)+'</b><br><span style="font-size:11px;color:#555">'+esc(inrWords(s.net_pay))+'</span>'],
+      ['Status', 'DRAFT — awaiting approval']];
   } else return;
-  V.innerHTML = `<div class="card" style="margin-top:14px;max-width:640px;">
-    <h3 style="font-size:15px;">${esc(title)}</h3>
-    ${apprRowsHtml(rows.filter(r=>r[0]))}
-    <div style="margin-top:10px;"><button class="mini" onclick="$('appr-view').innerHTML=''">Close</button></div></div>`;
-  V.scrollIntoView({behavior:'smooth'});
+  apprModal(title, apprRowsHtml(rows.filter(r=>r[0])));
 }
 async function apprPrint(kind, id){
   const D = window.__apprData || {};
@@ -3836,6 +3862,122 @@ async function apprPrint(kind, id){
     doc('MARKETING BUDGET REQUEST', TR([['Code','<b>'+esc(r.req_code)+'</b>'],['Category',esc(r.category)],
       ['Amount','<b>₹ '+inr(r.amount)+'</b>'],['Amount in words',esc(inrWords(r.amount))],['Purpose',esc(r.description||'—')],
       ['Utilisation',esc(r.utilization||'—')],['For period',r.period||'—'],['Requested by',esc(r.requested_by_name||'—')],['Status','AWAITING APPROVAL']]), 'Request '+r.req_code);
+  }
+}
+
+/* ---------------- Documents library ---------------- */
+function canDocsView(){ return isDir() || !!(me?.permissions_json?.docs?.view || me?.permissions_json?.docs?.add || me?.permissions_json?.docs?.edit); }
+function canDocsEdit(){ return isDir() || !!(me?.permissions_json?.docs?.edit || me?.permissions_json?.docs?.add); }
+const DOC_MAX_MB = 5;
+async function openDocs(){
+  if (!canDocsView()){ alert('The Documents section has not been opened to you yet — the Director grants access from the Control Panel.'); return; }
+  await docsList(); show('docs');
+}
+async function docsList(){
+  const B = $('docs-body'); B.innerHTML = '<p style="color:#555">Loading…</p>';
+  const { data, error } = await db.schema('comp').from('documents')
+    .select('id,title,filename,content_type,size_bytes,uploaded_by,created_at')
+    .order('created_at',{ascending:false}).limit(500);
+  if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+  window.__docsAll = data || [];
+  let userBy = {};
+  try { const { data: us } = await db.schema('adm').from('users').select('id,full_name'); (us||[]).forEach(u=>userBy[u.id]=u.full_name); } catch(e){}
+  window.__docUserBy = userBy;
+  const kindOf = ct => (ct||'').startsWith('image/') ? '🖼 Image' : (ct==='application/pdf' ? '📄 PDF' : '📎 File');
+  B.innerHTML = `
+    ${canDocsEdit() ? `
+    <div class="card" style="max-width:680px;margin-bottom:14px;">
+      <h3 style="font-size:15px;">Add a document</h3>
+      <label>Title *</label><input type="text" id="doc-title" maxlength="120" placeholder="e.g. MMC bottling agreement 2026, GST registration, Office rent agreement">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+        <input type="file" id="doc-file" style="max-width:320px;">
+        <button class="btn gold sm" onclick="docUpload(false)">⬆ Upload this file</button>
+        <span style="color:#777;">or</span>
+        <input type="file" id="doc-scan" accept="image/*" capture="environment" style="display:none;" onchange="docUpload(true)">
+        <button class="btn ghost sm" onclick="$('doc-scan').click()" title="On a phone or tablet this opens the camera">📷 Scan a copy</button>
+      </div>
+      <p style="font-size:11.5px;color:#666;margin-top:6px;">Any file type up to ${DOC_MAX_MB} MB — PDFs and images can be viewed and printed right here; other types can be downloaded.</p>
+      <div id="doc-msg"></div>
+    </div>` : ''}
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 8px;">
+      <input id="doc-q" placeholder="🔍 Search by title or file name…" style="flex:1;min-width:220px;max-width:380px;" oninput="docsFilter()">
+      <span style="font-size:12px;color:#555;">${window.__docsAll.length} document${window.__docsAll.length===1?'':'s'}</span>
+    </div>
+    <div class="table-scroll"><table><thead><tr><th>Title</th><th>File</th><th>Type</th><th class="amount">Size</th><th>Uploaded</th><th></th></tr></thead><tbody id="doc-rows">
+    ${window.__docsAll.map(d=>`<tr data-doc="${esc((d.title+' '+d.filename).toLowerCase())}">
+      <td><b>${esc(d.title)}</b></td><td style="font-size:12px;">${esc(d.filename)}</td><td>${kindOf(d.content_type)}</td>
+      <td class="amount">${fmtBytes(d.size_bytes)}</td>
+      <td style="font-size:12px;">${esc(userBy[d.uploaded_by]||'—')}<br><span style="color:#555;">${d.created_at? new Date(d.created_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):''}</span></td>
+      <td style="white-space:nowrap;"><button class="mini" onclick="docView('${d.id}')" title="Open and read here">👁 View</button> <button class="mini" onclick="docDownload('${d.id}')" title="Save to your device">⬇ Download</button> <button class="mini" onclick="docPrint('${d.id}')" title="Print / save PDF">🖨 Print</button> ${dirDelBtn('comp','documents', d.id, d.title, 'docsList()')}</td></tr>`).join('')
+      || '<tr><td colspan="6" style="color:#555">No documents yet' + (canDocsEdit()?' — upload the first one above.':'.') + '</td></tr>'}
+    </tbody></table></div>`;
+}
+function docsFilter(){
+  const q = ($('doc-q').value||'').toLowerCase().trim();
+  document.querySelectorAll('#doc-rows tr[data-doc]').forEach(tr=>{ tr.style.display = !q || tr.dataset.doc.includes(q) ? '' : 'none'; });
+}
+async function docUpload(fromScan){
+  const inp = fromScan ? $('doc-scan') : $('doc-file');
+  const f = inp && inp.files && inp.files[0];
+  if (!f){ say('doc-msg','Choose a file first.', false); return; }
+  if (f.size > DOC_MAX_MB*1024*1024){ say('doc-msg','This file is '+fmtBytes(f.size)+' — please keep documents under '+DOC_MAX_MB+' MB (tip: scan as PDF or compress the image).', false); return; }
+  const title = ($('doc-title').value||'').trim() || f.name.replace(/\.[^.]+$/,'');
+  say('doc-msg','Uploading '+f.name+'…', true);
+  try {
+    const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]||''); r.onerror=()=>rej(new Error('Could not read the file.')); r.readAsDataURL(f); });
+    const { error } = await db.schema('comp').from('documents').insert({
+      title, filename: f.name, content_type: f.type || 'application/octet-stream', size_bytes: f.size, data_b64: b64 });
+    if (error) throw new Error(error.message);
+    inp.value=''; $('doc-title').value='';
+    await docsList();
+    say('doc-msg','“'+title+'” is saved in the library.', true);
+  } catch(e){ say('doc-msg','Could not upload: '+e.message, false); }
+}
+async function docFetch(id){
+  const { data, error } = await db.schema('comp').from('documents').select('*').eq('id', id).single();
+  if (error || !data){ alert('Could not load this document'+(error?': '+error.message:'.')); return null; }
+  return data;
+}
+function docBlobUrl(d){
+  const bin = atob(d.data_b64||''); const bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: d.content_type || 'application/octet-stream' }));
+}
+async function docView(id){
+  const d = await docFetch(id); if (!d) return;
+  const ct = d.content_type||'';
+  let inner;
+  if (ct.startsWith('image/')){
+    inner = `<img src="data:${ct};base64,${d.data_b64}" style="max-width:100%;max-height:62vh;display:block;margin:8px auto;border:1px solid #e2d9be;border-radius:8px;">`;
+  } else if (ct === 'application/pdf'){
+    inner = `<iframe src="${docBlobUrl(d)}" style="width:100%;height:62vh;border:1px solid #e2d9be;border-radius:8px;margin-top:8px;"></iframe>`;
+  } else {
+    inner = `<p style="color:#333;margin-top:10px;">This file type (${esc(ct||'unknown')}) cannot be previewed here — download it to open on your device.</p>`;
+  }
+  inner += `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="mini" onclick="docDownload('${d.id}')">⬇ Download</button>
+    <button class="mini" onclick="docPrint('${d.id}')">🖨 Print</button>
+  </div>`;
+  apprModal(d.title, inner);
+}
+async function docDownload(id){
+  const d = await docFetch(id); if (!d) return;
+  const a = document.createElement('a');
+  a.href = docBlobUrl(d); a.download = d.filename || 'document';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ a.remove(); }, 500);
+}
+async function docPrint(id){
+  const d = await docFetch(id); if (!d) return;
+  const ct = d.content_type||'';
+  if (ct.startsWith('image/')){
+    printHtml(d.title, `<h1 style="text-align:center;">${esc(d.title)}</h1><img src="data:${ct};base64,${d.data_b64}" style="max-width:100%;">`);
+  } else if (ct === 'application/pdf'){
+    const w = window.open(docBlobUrl(d), '_blank');
+    if (!w){ alert('The browser blocked the window — please allow pop-ups for this site and try again.'); return; }
+    setTimeout(()=>{ try { w.print(); } catch(e){} }, 900);
+  } else {
+    alert('This file type cannot be printed from here — download it and print from the app that opens it.');
   }
 }
 
@@ -4972,12 +5114,31 @@ async function fieldSaveCred(uid, name){
 
 /* ================= MODULE 17: NOTIFICATIONS ================= */
 let notifItems=[];
+function notifBeep(){
+  try {
+    const ctx = window.__actx || (window.__actx = new (window.AudioContext||window.webkitAudioContext)());
+    if (ctx.state === 'suspended'){ ctx.resume().catch(()=>{}); }
+    const t = ctx.currentTime;
+    const ding = (freq, start, dur) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = freq;
+      o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, t+start);
+      g.gain.exponentialRampToValueAtTime(0.16, t+start+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+start+dur);
+      o.start(t+start); o.stop(t+start+dur+0.05);
+    };
+    ding(987.77, 0, 0.30); ding(1318.5, 0.13, 0.34);   // gentle two-note bell
+  } catch(e){ /* sound is best-effort */ }
+}
 async function notifLoad(){
   if(!me) return;
   const {data,error}=await db.schema('tasks').from('v_notifications').select('*').order('when_ts',{ascending:false}).limit(100);
   if(error){ return; }
   notifItems=data||[];
   const unread=notifItems.filter(n=>!n.is_read).length;
+  if (window.__notifPrevUnread != null && unread > window.__notifPrevUnread) notifBeep();
+  window.__notifPrevUnread = unread;
   const b=$('notif-badge'); if(b){ if(unread>0){b.textContent=unread>99?'99+':unread; b.style.display='inline-block';} else b.style.display='none'; }
 }
 function notifRow(n){ return `<div style="display:flex;gap:8px;padding:9px 12px;border-top:1px solid #f0f0f0;background:${n.is_read?'#fff':'#f6faff'};">
