@@ -2648,8 +2648,8 @@ async function acctTab(t){
       ${SEC('🧾 Salary slips', sls.length, T('<th>Slip</th><th>Staff</th><th>Month</th><th class="amount">Net ₹</th><th></th>',
         sls.map(s=>`<tr><td><b>${esc(s.slip_no)}</b></td><td>${esc(acStaffName(s.staff_id))}</td><td>${s.period}</td><td class="amount" style="font-weight:700">${inr(s.net_pay)}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('slip','${s.id}')" title="See the full slip">👁 View</button> <button class="mini" onclick="apprPrint('slip','${s.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('slip','${s.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('slip','${s.id}',true)">Reject</button> ${dirDelBtn('acct','salary_slips', s.id, s.slip_no, "acctTab('appr')")}</td></tr>`).join('')))}
-      ${SEC('🤝 Staff advances', advs.length, T('<th>No.</th><th>Staff</th><th>Date</th><th class="amount">Amount ₹</th><th></th>',
-        advs.map(a=>`<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td><td class="amount" style="font-weight:700">${inr(a.amount)}</td>`+
+      ${SEC('🤝 Staff advances', advs.length, T('<th>No.</th><th>Staff</th><th>Type</th><th>Date</th><th class="amount">Amount ₹</th><th></th>',
+        advs.map(a=>`<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${(a.adv_type||'SALARY')==='EXPENSE'?'Against expenses':'Against salary'}</td><td>${a.given_on}</td><td class="amount" style="font-weight:700">${inr(a.amount)}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('adv','${a.id}')" title="See full details">👁 View</button> <button class="mini" onclick="apprPrint('adv','${a.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('adv','${a.id}',false)">✔ Approve &amp; pay</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('adv','${a.id}',true)">Reject</button> ${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('📦 Purchase orders', pos.length, T('<th>PO</th><th>Vendor</th><th>Date</th>'+(canFin()?'<th class="amount">Value ₹ (incl. tax)</th>':'')+'<th></th>',
         pos.map(p=>`<tr><td><b>${esc(p.po_no)}</b></td><td>${esc(p.vendor_name||'—')}</td><td>${p.order_date}</td>`+
@@ -3112,19 +3112,27 @@ async function acctTab(t){
   }
 
   if (t === 'adv'){
-    const { data: advs, error } = await A.from('v_advances').select('*').order('given_on', {ascending:false}).limit(100);
+    const { data: advs, error } = await A.from('v_advances').select('*').order('given_on', {ascending:false}).limit(200);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    const advRow = a => `<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td>` +
+        `<td class="amount">${inr(a.amount)}</td><td class="amount">${inr(a.recovered)}</td><td class="amount" style="font-weight:700">${inr(a.outstanding)}</td>` +
+        `<td><span style="color:${AC_ST[a.status]};font-weight:600;font-size:12px">${acLbl(a.status)}</span></td>` +
+        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`;
+    const advTable = (rows, empty) => `<div class="table-scroll"><table><thead><tr><th>No.</th><th>Staff</th><th>Given</th><th class="amount">Amount ₹</th><th class="amount">Recovered ₹</th><th class="amount">Outstanding ₹</th><th>Status</th><th></th></tr></thead><tbody>` +
+        (rows.map(advRow).join('') || `<tr><td colspan="8" style="color:#555">${empty}</td></tr>`) +
+        (rows.length ? `<tr style="background:#faf6ea;font-weight:700;"><td colspan="3">Total</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.amount||0),0))}</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.recovered||0),0))}</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.outstanding||0),0))}</td><td colspan="2"></td></tr>` : '') +
+        `</tbody></table></div>`;
+    const sal = (advs||[]).filter(a=>(a.adv_type||'SALARY')!=='EXPENSE');
+    const exp = (advs||[]).filter(a=>(a.adv_type||'SALARY')==='EXPENSE');
     B.innerHTML = `
       ${canFinEdit()?`<button class="btn gold sm" onclick="acAdvForm()">+ Record advance</button>`:''}
       <div id="ac-adv-form"></div>
-      <h4 class="sec" style="margin-top:12px;">Staff advances</h4>
-      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Staff</th><th>Given</th><th class="amount">Amount ₹</th><th class="amount">Recovered ₹</th><th class="amount">Outstanding ₹</th><th>Status</th><th></th></tr></thead><tbody>
-      ${(advs||[]).map(a=>`<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td>` +
-        `<td class="amount">${inr(a.amount)}</td><td class="amount">${inr(a.recovered)}</td><td class="amount" style="font-weight:700">${inr(a.outstanding)}</td>` +
-        `<td><span style="color:${AC_ST[a.status]};font-weight:600;font-size:12px">${acLbl(a.status)}</span></td>` +
-        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`).join('')
-        || '<tr><td colspan="8" style="color:#777">No advances yet.</td></tr>'}
-      </tbody></table></div>`;
+      <h4 class="sec" style="margin-top:12px;">💼 Advances against salary <span style="background:#1a1a2e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${sal.length}</span></h4>
+      <p style="font-size:12px;color:#555;margin:2px 0 8px;">Recovered from the staff member's monthly salary — these appear in the "Recover from advance" list when a salary slip is generated.</p>
+      ${advTable(sal, 'No salary advances yet.')}
+      <h4 class="sec" style="margin-top:18px;">🧾 Advances against expenses <span style="background:#1a1a2e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${exp.length}</span></h4>
+      <p style="font-size:12px;color:#555;margin:2px 0 8px;">Money given for company spending — settled by expense bills or a recovery entry, never from salary.</p>
+      ${advTable(exp, 'No expense advances yet.')}`;
     return;
   }
 
@@ -3596,7 +3604,7 @@ async function acStructSave(){
 async function acSlipForm(){
   const A = db.schema('acct');
   const { data: advs } = await A.from('v_advances').select('*').eq('status','APPROVED').gt('outstanding',0);
-  const advByStaff = {}; (advs||[]).forEach(a=>{ (advByStaff[a.staff_id] ??= []).push(a); });
+  const advByStaff = {}; (advs||[]).filter(a=>(a.adv_type||'SALARY')!=='EXPENSE').forEach(a=>{ (advByStaff[a.staff_id] ??= []).push(a); });
   window.__acAdvByStaff = advByStaff;
   $('ac-sal-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Generate salary slip</h3>
@@ -3666,6 +3674,10 @@ function acAdvForm(){
   $('ac-adv-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:560px;"><h3 style="font-size:15px;">Record staff advance</h3>
     <label>Staff *</label><select id="av-staff">${acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('')}</select>
+    <label>Advance type *</label><select id="av-type">
+      <option value="SALARY">Against salary — recovered from the monthly salary slip</option>
+      <option value="EXPENSE">Against expenses — settled by expense bills / recovery entry</option>
+    </select>
     <div class="row2c"><div><label>Amount ₹ *</label><input type="number" id="av-amt" min="0.01" step="any"></div>
     <div><label>Date</label><input type="date" id="av-date"></div></div>
     <label>Reason</label><input type="text" id="av-reason">
@@ -3678,7 +3690,8 @@ async function acAdvSave(){
   const amt = Number($('av-amt').value);
   if (!(amt>0)){ say('av-msg','Amount must be above zero.',false); return; }
   const { error } = await db.schema('acct').rpc('create_advance', {
-    p_staff: $('av-staff').value, p_amount: amt, p_reason: $('av-reason').value.trim()||null, p_date: $('av-date').value||null });
+    p_staff: $('av-staff').value, p_amount: amt, p_reason: $('av-reason').value.trim()||null, p_date: $('av-date').value||null,
+    p_type: $('av-type') ? $('av-type').value : 'SALARY' });
   if (error){ say('av-msg','Could not record: '+error.message,false); return; }
   acctTab('adv');
 }
@@ -3777,8 +3790,10 @@ async function apprView(kind, id){
   } else if (kind === 'adv'){
     const a = (D.advs||[]).find(x=>x.id===id); if (!a) return;
     title = 'Staff advance ' + a.adv_no;
-    rows = [['No.', '<b>'+esc(a.adv_no)+'</b>'], ['Staff', esc(a.staff_name)], ['Date', a.given_on],
-      ['Amount', '<b>₹ '+inr(a.amount)+'</b><br><span style="font-size:11px;color:#777">'+esc(inrWords(a.amount))+'</span>'],
+    rows = [['No.', '<b>'+esc(a.adv_no)+'</b>'], ['Staff', esc(a.staff_name)],
+      ['Type', (a.adv_type||'SALARY')==='EXPENSE' ? 'Against expenses — settled by expense bills' : 'Against salary — recovered from salary'],
+      ['Date', a.given_on],
+      ['Amount', '<b>₹ '+inr(a.amount)+'</b><br><span style="font-size:11px;color:#555">'+esc(inrWords(a.amount))+'</span>'],
       ['Reason', esc(a.reason||'—')], ['Status', acLbl(a.status)]];
   } else if (kind === 'po'){
     const p = (D.pos||[]).find(x=>x.id===id); if (!p) return;
@@ -3846,7 +3861,8 @@ async function apprPrint(kind, id){
       ['Total deductions','<b>'+money(s.total_deductions)+'</b>'],['NET PAY','<b>'+money(s.net_pay)+'</b>'],['Net pay in words',esc(inrWords(s.net_pay))]]), 'Salary slip '+s.slip_no);
   } else if (kind === 'adv'){
     const a = (D.advs||[]).find(x=>x.id===id); if (!a) return;
-    doc('STAFF ADVANCE VOUCHER', TR([['No.','<b>'+esc(a.adv_no)+'</b>'],['Staff',esc(a.staff_name)],['Date',a.given_on],
+    doc('STAFF ADVANCE VOUCHER', TR([['No.','<b>'+esc(a.adv_no)+'</b>'],['Staff',esc(a.staff_name)],
+      ['Advance type',(a.adv_type||'SALARY')==='EXPENSE'?'Against expenses':'Against salary'],['Date',a.given_on],
       ['Amount','<b>₹ '+inr(a.amount)+'</b>'],['Amount in words',esc(inrWords(a.amount))],['Reason',esc(a.reason||'—')],['Status','AWAITING APPROVAL']]), 'Advance '+a.adv_no);
   } else if (kind === 'rm'){
     const r = (D.rqs||[]).find(x=>x.id===id); if (!r) return;
