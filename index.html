@@ -3117,7 +3117,7 @@ async function acctTab(t){
     const advRow = a => `<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td>` +
         `<td class="amount">${inr(a.amount)}</td><td class="amount">${inr(a.recovered)}</td><td class="amount" style="font-weight:700">${inr(a.outstanding)}</td>` +
         `<td><span style="color:${AC_ST[a.status]};font-weight:600;font-size:12px">${acLbl(a.status)}</span></td>` +
-        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`;
+        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${isDir()?`<button class="mini" title="Move to the other list (salary ⇄ expenses)" onclick="acAdvType('${a.id}','${(a.adv_type||'SALARY')==='EXPENSE'?'SALARY':'EXPENSE'}')">⇄ ${(a.adv_type||'SALARY')==='EXPENSE'?'To salary':'To expenses'}</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`;
     const advTable = (rows, empty) => `<div class="table-scroll"><table><thead><tr><th>No.</th><th>Staff</th><th>Given</th><th class="amount">Amount ₹</th><th class="amount">Recovered ₹</th><th class="amount">Outstanding ₹</th><th>Status</th><th></th></tr></thead><tbody>` +
         (rows.map(advRow).join('') || `<tr><td colspan="8" style="color:#555">${empty}</td></tr>`) +
         (rows.length ? `<tr style="background:#faf6ea;font-weight:700;"><td colspan="3">Total</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.amount||0),0))}</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.recovered||0),0))}</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.outstanding||0),0))}</td><td colspan="2"></td></tr>` : '') +
@@ -3685,6 +3685,12 @@ function acAdvForm(){
     <button class="btn gold sm" style="margin-top:10px;" onclick="acAdvSave()">${canFinApprove()?'Record':'Submit for approval'}</button>
     <div id="av-msg"></div></div>`;
   $('ac-adv-form').scrollIntoView({behavior:'smooth'});
+}
+async function acAdvType(id, to){
+  if (!confirm('Move this advance to "'+(to==='EXPENSE'?'Advances against expenses':'Advances against salary')+'"?')) return;
+  const { error } = await db.schema('acct').from('advances').update({ adv_type: to }).eq('id', id);
+  if (error){ alert('Could not switch: '+error.message); return; }
+  acctTab('adv');
 }
 async function acAdvSave(){
   const amt = Number($('av-amt').value);
