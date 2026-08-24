@@ -643,7 +643,8 @@ async function init(){
   try { const { count } = await db.schema('adm').from('users').select('id',{count:'exact',head:true}).eq('reports_to', me.id); window.__hasReports = (count||0) > 0; } catch(e){}
   drawModules(); applyDirOnly(); show('home');
   notifLoad(); mailWatch();
-  if(!window.__notifTimer) window.__notifTimer=setInterval(()=>{try{notifLoad();}catch(e){}try{mailWatch();}catch(e){}},60000);
+  if(!window.__notifTimer) window.__notifTimer=setInterval(()=>{try{notifLoad();}catch(e){}},60000);
+  if(!window.__mailTimer) window.__mailTimer=setInterval(()=>{try{mailWatch();}catch(e){}},30000);
 }
 $('btn-magic').onclick = async () => {
   const email = $('login-email').value.trim();
