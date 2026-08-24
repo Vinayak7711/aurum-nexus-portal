@@ -642,7 +642,8 @@ async function init(){
   window.__hasReports = false;
   try { const { count } = await db.schema('adm').from('users').select('id',{count:'exact',head:true}).eq('reports_to', me.id); window.__hasReports = (count||0) > 0; } catch(e){}
   drawModules(); applyDirOnly(); show('home');
-  notifLoad(); if(!window.__notifTimer) window.__notifTimer=setInterval(()=>{try{notifLoad();}catch(e){}},60000);
+  notifLoad(); mailWatch();
+  if(!window.__notifTimer) window.__notifTimer=setInterval(()=>{try{notifLoad();}catch(e){}try{mailWatch();}catch(e){}},60000);
 }
 $('btn-magic').onclick = async () => {
   const email = $('login-email').value.trim();
@@ -5192,6 +5193,53 @@ async function fieldSaveCred(uid, name){
 }
 
 /* ================= MODULE 17: NOTIFICATIONS ================= */
+/* ---------------- New-mail watcher: pops up when fresh mail lands ---------------- */
+async function mailWatch(){
+  if (!me) return;
+  try {
+    const { data } = await db.schema('mail').from('messages')
+      .select('id, mailbox_id, subject, from_addr, created_at')
+      .eq('folder','IN').order('created_at',{ascending:false}).limit(10);
+    const rows = data || [];
+    if (!rows.length) return;
+    if (window.__mailWatchTs === undefined){ window.__mailWatchTs = rows[0].created_at; return; }  // baseline on login — no popup for old mail
+    const fresh = rows.filter(r => r.created_at > window.__mailWatchTs);
+    if (!fresh.length) return;
+    window.__mailWatchTs = rows[0].created_at;
+    if (!window.__mailBoxNames){
+      const { data: bx } = await db.schema('mail').from('mailboxes').select('id,key,display');
+      window.__mailBoxNames = {}; (bx||[]).forEach(b=>{ window.__mailBoxNames[b.id] = { key:b.key, name:b.display }; });
+    }
+    try { notifBeep(); } catch(e){}
+    mailToast(fresh);
+    // refresh the open mailbox list so the new mail appears without pressing anything
+    try { if (!$('view-mail').classList.contains('hidden') && mailFolder==='IN' && !mailOpen) mailList(); } catch(e){}
+  } catch(e){ /* watcher is best-effort */ }
+}
+function mailToast(fresh){
+  const first = fresh[0];
+  const bx = (window.__mailBoxNames||{})[first.mailbox_id] || {};
+  const more = fresh.length - 1;
+  const old = document.getElementById('mail-toast'); if (old) old.remove();
+  const d = document.createElement('div'); d.id = 'mail-toast';
+  d.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:1200;background:#1a1a2e;color:#fff;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.45);padding:14px 16px;max-width:340px;cursor:pointer;animation:mtIn .25s ease;';
+  d.innerHTML = `<style>@keyframes mtIn{from{transform:translateY(18px);opacity:0}to{transform:none;opacity:1}}</style>
+    <div style="display:flex;gap:10px;align-items:flex-start;">
+    <span style="font-size:22px;">📬</span>
+    <div style="flex:1;min-width:0;">
+      <div style="font-weight:700;font-size:13.5px;">New email — ${esc(bx.name||'Mailbox')}</div>
+      <div style="font-size:12.5px;margin-top:3px;color:#fff;">${esc(((first.from_addr||'').replace(/<.*>/,'').trim()||'—').slice(0,38))}</div>
+      <div style="font-size:12.5px;color:#e6d9b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc((first.subject||'(no subject)').slice(0,70))}</div>
+      ${more>0?`<div style="font-size:11.5px;color:#bbb;margin-top:3px;">+ ${more} more new email${more>1?'s':''}</div>`:''}
+      <div style="font-size:11px;color:#999;margin-top:5px;">Click to open the mailbox</div>
+    </div>
+    <span onclick="event.stopPropagation();this.closest('#mail-toast').remove();" title="Dismiss" style="cursor:pointer;font-weight:700;color:#ccc;padding:0 2px;">✕</span>
+  </div>`;
+  d.onclick = async () => { d.remove(); await openMail(); if (bx.key){ mailBox = bx.key; mailFolder='IN'; mailPage=0; mailQ=''; drawMailTabs(); mailList(); } };
+  document.body.appendChild(d);
+  setTimeout(()=>{ const tt=document.getElementById('mail-toast'); if (tt===d) d.remove(); }, 20000);
+}
+
 /* ---------------- Contact Book ---------------- */
 let ctAll = [], ctQ = '', ctCat = 'ALL', ctGrp = 'ALL';
 async function openContacts(){ ctQ=''; ctCat='ALL'; ctGrp='ALL'; await ctList(); show('contacts'); }
