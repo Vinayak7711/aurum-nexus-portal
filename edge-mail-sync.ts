@@ -135,12 +135,43 @@ export default {
       if (!mailbox) return J({ error: "Which mailbox?" }, 400);
       const url = Deno.env.get("SUPABASE_URL")!;
       const anon = Deno.env.get("SUPABASE_ANON_KEY")!;
-      const { data: claims } = await createClient(url, anon).auth.getClaims(auth.replace(/^Bearer /i, ""));
-      const uid = claims?.claims?.sub;
-      if (!uid) return J({ error: "Sign in first." }, 401);
-      const userClient = createClient(url, anon, { global: { headers: { authorization: auth } } });
-      // RLS answers the access question: the row is only visible if this user may open the box.
-      const { data: box } = await userClient.schema("mail").from("mailboxes").select("*").eq("key", mailbox).maybeSingle();
+      // ---- cron mode: a scheduled job (pg_cron) authenticates with the shared CRON_SECRET
+      const cronSecret = (Deno.env.get("CRON_SECRET") || "").trim();
+      const gotSecret = (req.headers.get("x-cron-secret") || "").trim();
+      const isCron = !!cronSecret && gotSecret === cronSecret;
+      if (isCron && mailbox === "ALL") {
+        // fan out: one sub-invocation per active mailbox, in parallel (each has its own time budget)
+        const svc0 = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        const { data: boxes } = await svc0.schema("mail").from("mailboxes").select("key").eq("is_active", true).order("key");
+        const settled = await Promise.all((boxes || []).map(async (b: { key: string }) => {
+          try {
+            const r = await fetch(url + "/functions/v1/mail-sync", {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-cron-secret": cronSecret, "apikey": anon },
+              body: JSON.stringify({ mailbox: b.key }),
+            });
+            return [b.key, await r.json()];
+          } catch (e) { return [b.key, { error: String(e).slice(0, 120) }]; }
+        }));
+        const results: Record<string, unknown> = {};
+        let totalNew = 0;
+        for (const [k, v] of settled as [string, { new_messages?: number }][]) { results[k] = v; totalNew += Number(v?.new_messages || 0); }
+        return J({ ok: true, cron: true, total_new: totalNew, results });
+      }
+      let box: any = null;
+      if (isCron) {
+        const svcB = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        const r = await svcB.schema("mail").from("mailboxes").select("*").eq("key", mailbox).maybeSingle();
+        box = r.data;
+      } else {
+        const { data: claims } = await createClient(url, anon).auth.getClaims(auth.replace(/^Bearer /i, ""));
+        const uid = claims?.claims?.sub;
+        if (!uid) return J({ error: "Sign in first." }, 401);
+        const userClient = createClient(url, anon, { global: { headers: { authorization: auth } } });
+        // RLS answers the access question: the row is only visible if this user may open the box.
+        const r = await userClient.schema("mail").from("mailboxes").select("*").eq("key", mailbox).maybeSingle();
+        box = r.data;
+      }
       if (!box) return J({ error: "You do not have access to this mailbox." }, 403);
 
       // Vault secret MAIL_PASS_<KEY> — normalise punctuation, match case-insensitively.
