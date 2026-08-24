@@ -5238,7 +5238,7 @@ function mailToast(fresh){
   </div>`;
   d.onclick = async () => { d.remove(); await openMail(); if (bx.key){ mailBox = bx.key; mailFolder='IN'; mailPage=0; mailQ=''; drawMailTabs(); mailList(); } };
   document.body.appendChild(d);
-  setTimeout(()=>{ const tt=document.getElementById('mail-toast'); if (tt===d) d.remove(); }, 20000);
+  // stays on screen until clicked or dismissed — so it is never missed
 }
 
 /* ---------------- Contact Book ---------------- */
