@@ -4440,7 +4440,9 @@ function mailRead(id){
       <div id="mail-atts" style="margin-top:10px;"></div>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
         ${mailFolder==='IN' ? `<button class="btn gold sm" onclick="mailCompose('${m.id}')">Reply</button>
+        <button class="btn ghost sm" onclick="mailForward('${m.id}')" title="Send this email on to someone else — original text and attachments included">↪ Forward</button>
         <button class="btn ghost sm" onclick="mailHandled('${m.id}', ${m.is_handled})">${m.is_handled?'Mark unhandled':'Mark handled'}</button>` : ''}
+        ${mailFolder==='SENT' ? `<button class="btn ghost sm" onclick="mailForward('${m.id}')" title="Send this email on to someone else">↪ Forward</button>` : ''}
         ${mailFolder==='TRASH'
           ? `<button class="btn ghost sm" onclick="mailRestore('${m.id}')">↩ Restore</button>`
           : `<button class="btn ghost sm" onclick="mailTrash('${m.id}')" style="color:#c0392b;">🗑 Delete</button>`}
@@ -4505,16 +4507,25 @@ async function mailEmptyTrash(){
   mailOpen = null; say('mail-sync-msg',(data||0)+' email(s) permanently deleted.',true); mailList();
 }
 let mailAttFiles = [];   // attachments accumulate here — adding more never removes the earlier ones
-function mailCompose(replyTo){
+function mailForward(id){ mailCompose(id, true); }
+function mailCompose(replyTo, isFwd){
   mailAttFiles = [];
+  window.__fwdAtts = [];
   const m = replyTo ? mailMsgs.find(x=>x.id===replyTo) : null;
   const box = mailBoxes.find(b=>b.key===mailBox);
-  const toAddr = m ? ((m.from_addr||'').match(/<([^>]+)>/)?.[1] || m.from_addr || '') : '';
-  const sub = m ? ('Re: ' + (m.subject||'').replace(/^Re:\s*/i,'')) : '';
-  const quoted = m ? ('\n\n----- On ' + (m.sent_at? new Date(m.sent_at).toLocaleString('en-IN') : '') + ', ' + (m.from_addr||'') + ' wrote:\n' + (m.body_text||'').split('\n').slice(0,20).map(l=>'> '+l).join('\n')) : '';
+  const toAddr = (m && !isFwd) ? ((m.from_addr||'').match(/<([^>]+)>/)?.[1] || m.from_addr || '') : '';
+  const sub = m ? (isFwd
+    ? ('Fwd: ' + (m.subject||'').replace(/^(Re|Fwd):\s*/i,''))
+    : ('Re: ' + (m.subject||'').replace(/^Re:\s*/i,''))) : '';
+  const quoted = m ? (isFwd
+    ? ('\n\n---------- Forwarded message ----------\nFrom: ' + (m.from_addr||'') +
+       '\nDate: ' + (m.sent_at? new Date(m.sent_at).toLocaleString('en-IN') : '—') +
+       '\nSubject: ' + (m.subject||'(no subject)') +
+       '\nTo: ' + (m.to_addr||'') + '\n\n' + (m.body_text||''))
+    : ('\n\n----- On ' + (m.sent_at? new Date(m.sent_at).toLocaleString('en-IN') : '') + ', ' + (m.from_addr||'') + ' wrote:\n' + (m.body_text||'').split('\n').slice(0,20).map(l=>'> '+l).join('\n'))) : '';
   $('mail-read').innerHTML = `
     <div class="card" style="margin-top:14px;">
-      <h3 style="font-size:15px;">${m?'Reply':'New mail'} from ${esc(box.address)}</h3>
+      <h3 style="font-size:15px;">${m?(isFwd?'↪ Forward':'Reply'):'New mail'} from ${esc(box.address)}</h3>
       <label>To *</label><input type="text" id="mc-to" value="${esc(toAddr)}" placeholder="someone@example.com (comma for more)">
       <label>Cc <span style="color:#999;font-weight:normal;">(optional, comma for more)</span></label><input type="text" id="mc-cc" placeholder="cc@example.com">
       <label>Bcc <span style="color:#999;font-weight:normal;">(optional, hidden from other recipients)</span></label><input type="text" id="mc-bcc" placeholder="bcc@example.com">
@@ -4523,13 +4534,28 @@ function mailCompose(replyTo){
       <label>Attachments <span style="color:#999;font-weight:normal;">(any file type, up to 10 files / 10 MB total — pick several at once, or keep adding one by one; they all stay attached)</span></label>
       <input type="file" id="mc-files" multiple onchange="mailAttAdd()" style="font-size:13px;">
       <div id="mc-files-list" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
+      <div id="mc-fwd-atts" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
       <div style="display:flex;gap:8px;margin-top:10px;">
         <button class="btn gold sm" id="btn-mail-send" onclick="mailSendNow()">Send</button>
         <button class="btn ghost sm" onclick="$('mail-read').innerHTML=''">Discard</button>
       </div>
       <div id="mail-send-msg"></div>
     </div>`;
+  if (isFwd && m && m.has_attachments){
+    db.schema('mail').from('attachments').select('id,filename,content_type,size_bytes').eq('message_id', m.id).order('filename')
+      .then(({ data })=>{ window.__fwdAtts = (data||[]).map(a=>({ ...a, keep:true })); mailFwdAttsRender(); });
+  }
   $('mail-read').scrollIntoView({behavior:'smooth'});
+}
+function mailFwdAttToggle(i){ if (window.__fwdAtts && window.__fwdAtts[i]){ window.__fwdAtts[i].keep = !window.__fwdAtts[i].keep; mailFwdAttsRender(); } }
+function mailFwdAttsRender(){
+  const out = $('mc-fwd-atts'); if (!out) return;
+  const atts = window.__fwdAtts || [];
+  out.innerHTML = atts.length
+    ? '<b style="font-size:12px;color:#7a6a4a;">Original attachments (forwarded along):</b><br>' +
+      atts.map((a,i)=>`<label style="display:inline-flex;align-items:center;gap:5px;margin:2px 12px 2px 0;cursor:pointer;${a.keep?'':'opacity:.5;text-decoration:line-through;'}">
+        <input type="checkbox" ${a.keep?'checked':''} onchange="mailFwdAttToggle(${i})" style="width:auto;">📎 ${esc(a.filename||'file')} <span style="color:#999">(${fmtBytes(a.size_bytes)})</span></label>`).join('')
+    : '';
 }
 function mailAttAdd(){
   const inp = $('mc-files'); if (!inp) return;
@@ -4564,19 +4590,27 @@ async function mailSendNow(){
   const cc = ($('mc-cc')?$('mc-cc').value:'').trim(), bcc = ($('mc-bcc')?$('mc-bcc').value:'').trim();
   if (!to || !sub || !body){ say('mail-send-msg','To, subject and message are all needed.',false); return; }
   const files = mailAttFiles.slice(0, 10);
-  if (mailAttFiles.length > 10){ say('mail-send-msg','Maximum 10 attachments per email.',false); return; }
-  if (files.reduce((s,f)=>s+f.size,0) > 10*1048576){ say('mail-send-msg','Attachments are too large — keep the total under 10 MB.',false); return; }
-  const btn = $('btn-mail-send'); btn.disabled = true; btn.textContent = files.length ? 'Attaching…' : 'Sending…';
+  const fwd = (window.__fwdAtts||[]).filter(a=>a.keep);
+  if (mailAttFiles.length + fwd.length > 10){ say('mail-send-msg','Maximum 10 attachments per email (including forwarded ones).',false); return; }
+  if (files.reduce((s,f)=>s+f.size,0) + fwd.reduce((s,a)=>s+Number(a.size_bytes||0),0) > 10*1048576){ say('mail-send-msg','Attachments are too large — keep the total under 10 MB.',false); return; }
+  const btn = $('btn-mail-send'); btn.disabled = true; btn.textContent = (files.length || fwd.length) ? 'Attaching…' : 'Sending…';
   try {
     const attachments = [];
     for (const f of files){
       attachments.push({ name: f.name, type: f.type || 'application/octet-stream', b64: await mailFileB64(f) });
     }
+    for (const a of fwd){
+      const { data: full, error: fe } = await db.schema('mail').from('attachments').select('filename,content_type,data_b64').eq('id', a.id).single();
+      if (fe || !full || !full.data_b64){ say('mail-send-msg','Could not load the original attachment "'+(a.filename||'file')+'" — untick it or try again.', false); btn.disabled=false; btn.textContent='Send'; return; }
+      attachments.push({ name: full.filename || 'file', type: full.content_type || 'application/octet-stream', b64: full.data_b64 });
+    }
     btn.textContent = 'Sending…';
     const t = await mailToken();
+    // the read-only Google archive cannot send — its mail goes out through the real Info/Office box instead
+    const sendBox = mailBox === 'info_old' ? 'info' : mailBox;
     const r = await fetch(FN_BASE + '/mail-send', { method:'POST',
       headers: { 'content-type':'application/json', authorization: 'Bearer ' + t },
-      body: JSON.stringify({ mailbox: mailBox, to, cc, bcc, subject: sub, body, attachments }) });
+      body: JSON.stringify({ mailbox: sendBox, to, cc, bcc, subject: sub, body, attachments }) });
     const j = await r.json();
     if (!r.ok){ say('mail-send-msg', j.error || 'Send failed.', false); btn.disabled = false; btn.textContent = 'Send'; return; }
     mailFolder = 'SENT'; mailOpen = null; mailPage = 0; mailList();
