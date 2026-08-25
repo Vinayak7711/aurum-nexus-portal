@@ -186,15 +186,23 @@ export default {
         try { await smtp.cmd("QUIT"); } catch (_) { /* sent already */ }
       } finally { smtp.close(); }
 
-      // Log to the Sent folder (note attachment names in the body).
-      const attNote = atts.length ? "\n\n\u{1F4CE} Attachments: " + atts.map((a) => a.filename).join(", ") : "";
-      await svc.schema("mail").from("messages").insert({
+      // Log to the Sent folder — and store the actual attachment files with it,
+      // so Sent mail can be re-opened, downloaded and forwarded with its files intact.
+      const { data: sentIns } = await svc.schema("mail").from("messages").insert({
         mailbox_id: box.id, folder: "SENT",
         from_addr: box.address, to_addr: recipients.join(", "),
         cc_addr: ccList.join(", ") || null, bcc_addr: bccList.join(", ") || null,
-        subject: String(subject), body_text: String(body) + attNote,
+        subject: String(subject), body_text: String(body),
         sent_at: new Date().toISOString(), is_handled: true, created_by: uid,
-      });
+        has_attachments: atts.length > 0, att_scanned: true,
+      }).select("id").single();
+      if (sentIns && atts.length) {
+        await svc.schema("mail").from("attachments").insert(atts.map((a) => ({
+          message_id: sentIns.id, mailbox_id: box.id,
+          filename: a.filename, content_type: a.contentType,
+          size_bytes: Math.floor(a.b64.length * 3 / 4), data_b64: a.b64,
+        })));
+      }
 
       return J({ ok: true, sent_to: allEnvelope.length, attachments: atts.length });
     } catch (e) {
