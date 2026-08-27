@@ -2147,6 +2147,18 @@ async function purchaseTab(t){
         <div class="row2c"><div><label>Qty *</label><input type="number" id="pol-qty" min="0.01" step="any"></div>
         <div><label>Rate ₹/unit *</label><input type="number" id="pol-rate" min="0" step="any"></div></div>
       </div>
+      <div class="switch" style="margin:10px 0 0;"><input type="checkbox" id="pol-exempt" onchange="poExemptTog()"><span><b>Exemption of tax</b> — goods are tax-exempt; the vendor charges GST only on his <b>margin</b> (margin scheme)</span></div>
+      <div id="pol-exempt-wrap" style="display:none;margin-top:8px;background:#faf6ea;border:1px solid #e2d9be;border-radius:10px;padding:10px 12px;">
+        <div class="row2c">
+          <div><label>Margin ₹ / unit * <span style="color:#999;font-weight:normal;font-size:10.5px;">— tax is calculated on this margin only, not on the rate</span></label><input type="number" id="pol-margin" min="0" step="any" placeholder="e.g. 0.50"></div>
+          <div class="row2c"><div><label>CGST %</label><input type="number" id="pol-cgst" min="0" max="100" step="any" placeholder="e.g. 9"></div>
+          <div><label>SGST %</label><input type="number" id="pol-sgst" min="0" max="100" step="any" placeholder="e.g. 9"></div></div>
+        </div>
+        <div class="row2c" style="margin-top:6px;">
+          <div><label>IGST % <span style="color:#999;font-weight:normal;font-size:10.5px;">— inter-state; use this <b>instead of</b> CGST + SGST</span></label><input type="number" id="pol-igst" min="0" max="100" step="any" placeholder="e.g. 18"></div>
+          <div style="align-self:end;font-size:11.5px;color:#7a6a4a;">Fill CGST + SGST together (within Maharashtra), or IGST alone (other state) — not both.</div>
+        </div>
+      </div>
       <div class="row2c" style="margin-top:8px;">
         <div><label>Tax charged by vendor</label><select id="pol-taxtype"><option value="NONE">No tax</option><option value="GST">GST</option><option value="VAT">VAT</option><option value="SALES_TAX">Sales tax</option></select></div>
         <div><label>Tax rate % <span style="color:#999;font-weight:normal;font-size:11px;">— as on the vendor's bill; you get this back as input credit</span></label><input type="number" id="pol-taxrate" min="0" max="100" step="any" placeholder="e.g. 18"></div>
@@ -2159,12 +2171,14 @@ async function purchaseTab(t){
         `<td class="amount"><input type="number" value="${Number(l.qty)||''}" min="0.01" step="any" style="width:80px;" oninput="poLineUpd(${i},'qty',this.value)"></td>` +
         `<td class="amount"><input type="number" value="${Number(l.rate)||''}" min="0" step="any" placeholder="rate" style="width:95px;" oninput="poLineUpd(${i},'rate',this.value)"></td>` +
         `<td class="amount" id="pol-amt-${i}">${inr(l.qty*l.rate)}</td>` +
-        `<td><select style="width:100px;" onchange="poLineUpd(${i},'tax_type',this.value)">` +
-          `<option value="NONE" ${(!l.tax_type||l.tax_type==='NONE')?'selected':''}>No tax</option>` +
-          `<option value="GST" ${l.tax_type==='GST'?'selected':''}>GST</option>` +
-          `<option value="VAT" ${l.tax_type==='VAT'?'selected':''}>VAT</option>` +
-          `<option value="SALES_TAX" ${l.tax_type==='SALES_TAX'?'selected':''}>Sales tax</option></select></td>` +
-        `<td><input type="number" id="pol-taxr-${i}" value="${Number(l.tax_rate)||''}" min="0" max="100" step="any" placeholder="%" style="width:65px;" oninput="poLineUpd(${i},'tax_rate',this.value)"></td>` +
+        (l.exempt
+          ? `<td colspan="2" style="font-size:11px;color:#555;">Tax-exempt · GST on margin ₹ ${inr(l.margin)}/unit<br>${l.igst?('IGST '+Number(l.igst)+'%'):('CGST '+Number(l.cgst)+'% + SGST '+Number(l.sgst)+'%')}</td>`
+          : `<td><select style="width:100px;" onchange="poLineUpd(${i},'tax_type',this.value)">` +
+            `<option value="NONE" ${(!l.tax_type||l.tax_type==='NONE')?'selected':''}>No tax</option>` +
+            `<option value="GST" ${l.tax_type==='GST'?'selected':''}>GST</option>` +
+            `<option value="VAT" ${l.tax_type==='VAT'?'selected':''}>VAT</option>` +
+            `<option value="SALES_TAX" ${l.tax_type==='SALES_TAX'?'selected':''}>Sales tax</option></select></td>` +
+          `<td><input type="number" id="pol-taxr-${i}" value="${Number(l.tax_rate)||''}" min="0" max="100" step="any" placeholder="%" style="width:65px;" oninput="poLineUpd(${i},'tax_rate',this.value)"></td>`) +
         `<td class="amount" id="pol-tax-${i}">${poLineTax(l)>0?inr(poLineTax(l)):'—'}</td>` +
         `<td><button class="mini" onclick="poLines.splice(${i},1);purchaseTab('new')">✖</button></td></tr>`).join('')}
       </tbody></table></div>
@@ -2400,9 +2414,12 @@ async function poView(id){
     let s = esc((i.code||'?')+' — '+(i.name||''))+' × '+Number(l.qty)+' '+(i.unit||'');
     if (v){
       const amt = Number(v.amount)+Number(v.tax_amount||0); tot += amt;
-      s += '<br><span style="font-size:11.5px;color:#555">@ ₹ '+inr(v.rate_per_unit)+'/unit'
-        + (v.tax_type && v.tax_type!=='NONE' ? ' + '+esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate)+'% (₹ '+inr(v.tax_amount||0)+')' : '')
-        + ' = <b>₹ '+inr(amt)+'</b></span>';
+      const taxBit = v.tax_type && v.tax_type!=='NONE'
+        ? (v.margin_per_unit
+            ? ' + tax-exempt goods — GST on margin ₹ '+inr(v.margin_per_unit)+'/unit ('+(v.igst_rate?'IGST '+Number(v.igst_rate)+'%':'CGST '+Number(v.cgst_rate||0)+'% + SGST '+Number(v.sgst_rate||0)+'%')+') = ₹ '+inr(v.tax_amount||0)
+            : ' + '+esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate)+'% (₹ '+inr(v.tax_amount||0)+')')
+        : '';
+      s += '<br><span style="font-size:11.5px;color:#555">@ ₹ '+inr(v.rate_per_unit)+'/unit' + taxBit + ' = <b>₹ '+inr(amt)+'</b></span>';
     }
     return s; }).join('<div style="height:6px"></div>') || '—';
   const CATL = { RM:'Raw material (production)', OFFICE:'Office & admin', SERVICES:'Services', OTHER:'Other' };
@@ -2449,7 +2466,7 @@ async function poPrint(id){
     const v = vals[l.id]||{};
     const amt = Number(v.amount||0), tax = Number(v.tax_amount||0); tot += amt; totTax += tax;
     return `<tr><td>${i+1}</td><td>${esc(l.item?.code||'')} — ${esc(l.item?.name||'')}</td><td class="amount">${Number(l.qty)}</td><td>${esc(l.item?.unit||'')}</td>` +
-      (showMoney?`<td class="amount">${inr(v.rate_per_unit||0)}</td><td class="amount">${inr(amt)}</td><td>${v.tax_type&&v.tax_type!=='NONE'?esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate||0)+'%':'—'}</td><td class="amount">${inr(tax)}</td><td class="amount">${inr(amt+tax)}</td>`:'') + '</tr>';
+      (showMoney?`<td class="amount">${inr(v.rate_per_unit||0)}</td><td class="amount">${inr(amt)}</td><td>${v.tax_type&&v.tax_type!=='NONE'?(v.margin_per_unit?'Exempt — GST on margin ₹'+inr(v.margin_per_unit)+'/unit<br>'+(v.igst_rate?'IGST '+Number(v.igst_rate)+'%':'CGST '+Number(v.cgst_rate||0)+'% + SGST '+Number(v.sgst_rate||0)+'%'):esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate||0)+'%'):'—'}</td><td class="amount">${inr(tax)}</td><td class="amount">${inr(amt+tax)}</td>`:'') + '</tr>';
   }).join('');
   const ven = po.vendor || {};
   const body = `
@@ -2482,9 +2499,35 @@ async function poPrint(id){
     <p style="font-size:10.5px;color:#666;margin-top:26px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
   printHtml('Purchase order '+po.po_no, body);
 }
+function poExemptTog(){
+  const on = $('pol-exempt') && $('pol-exempt').checked;
+  const w = $('pol-exempt-wrap'); if (w) w.style.display = on ? '' : 'none';
+  ['pol-taxtype','pol-taxrate'].forEach(i=>{ const el=$(i); if (el){ el.disabled = !!on; el.style.opacity = on ? .45 : 1; } });
+}
+function poReadTaxEntry(){
+  // Reads the tax part of the line-entry boxes (normal tax OR margin-scheme exemption).
+  // Returns {err} on a problem, else the tax fields for the line.
+  const exempt = !!($('pol-exempt') && $('pol-exempt').checked);
+  if (!exempt){
+    const taxType = $('pol-taxtype') ? $('pol-taxtype').value : 'NONE';
+    const taxRate = taxType === 'NONE' ? 0 : Number($('pol-taxrate').value || 0);
+    if (taxType !== 'NONE' && !(taxRate > 0)) return { err: 'Enter the tax rate % for '+(TAX_LBL[taxType]||taxType)+' (above zero), or pick "No tax".' };
+    return { exempt:false, taxType, taxRate, margin:null, cgst:null, sgst:null, igst:null };
+  }
+  const margin = Number($('pol-margin').value);
+  if (!(margin > 0)) return { err: 'Exemption is ticked — enter the margin ₹/unit (above zero). The tax is calculated on this margin only.' };
+  const cgst = Number($('pol-cgst').value || 0), sgst = Number($('pol-sgst').value || 0), igst = Number($('pol-igst').value || 0);
+  if (igst > 0 && (cgst > 0 || sgst > 0)) return { err: 'Use either CGST + SGST (within the state) or IGST (inter-state) — not both together.' };
+  if (!(igst > 0) && (!(cgst > 0) || !(sgst > 0))) return { err: 'Enter both CGST % and SGST % — or IGST % alone for an inter-state vendor.' };
+  const total = igst > 0 ? igst : cgst + sgst;
+  return { exempt:true, taxType:'GST', taxRate: total, margin,
+           cgst: igst > 0 ? null : cgst, sgst: igst > 0 ? null : sgst, igst: igst > 0 ? igst : null };
+}
 function poLineTax(l){
   const tr = Number(l.tax_rate||0);
-  return (l.tax_type && l.tax_type!=='NONE' && tr>0) ? (Number(l.qty)||0)*(Number(l.rate)||0)*tr/100 : 0;
+  if (!(l.tax_type && l.tax_type!=='NONE' && tr>0)) return 0;
+  const base = l.exempt ? (Number(l.margin)||0)*(Number(l.qty)||0) : (Number(l.qty)||0)*(Number(l.rate)||0);
+  return base*tr/100;
 }
 function poLineUpd(i, k, v){
   const l = poLines[i]; if (!l) return;
@@ -2513,12 +2556,11 @@ function poAddLine(){
   if (!(qty > 0)){ say('pon-msg','Quantity must be above zero.',false); return; }
   if (!(rate >= 0) || $('pol-rate').value === ''){ say('pon-msg','Enter the rate (0 or more).',false); return; }
   const id = $('pol-item').value;
-  const taxType = $('pol-taxtype') ? $('pol-taxtype').value : 'NONE';
-  const taxRate = taxType === 'NONE' ? 0 : Number($('pol-taxrate').value || 0);
-  if (taxType !== 'NONE' && !(taxRate > 0)){ say('pon-msg','Enter the tax rate % for '+(TAX_LBL[taxType]||taxType)+' (above zero), or pick "No tax".',false); return; }
+  const tx = poReadTaxEntry();
+  if (tx.err){ say('pon-msg', tx.err, false); return; }
   const ex = poLines.find(l=>l.rm_item_id===id);
-  if (ex){ ex.qty += qty; ex.rate = rate; ex.tax_type = taxType; ex.tax_rate = taxRate; }
-  else poLines.push({ rm_item_id: id, qty, rate, tax_type: taxType, tax_rate: taxRate });
+  if (ex){ ex.qty += qty; ex.rate = rate; ex.tax_type = tx.taxType; ex.tax_rate = tx.taxRate; ex.exempt = tx.exempt; ex.margin = tx.margin; ex.cgst = tx.cgst; ex.sgst = tx.sgst; ex.igst = tx.igst; }
+  else poLines.push({ rm_item_id: id, qty, rate, tax_type: tx.taxType, tax_rate: tx.taxRate, exempt: tx.exempt, margin: tx.margin, cgst: tx.cgst, sgst: tx.sgst, igst: tx.igst });
   purchaseTab('new');
 }
 function poGrabPending(){
@@ -2533,13 +2575,13 @@ function poGrabPending(){
   if (!(qty > 0)) return 'The line you typed above is not added yet — its quantity must be above zero (or clear the boxes).';
   if (rv === '' || !(rate >= 0)) return 'The line you typed above is not added yet — enter its rate ₹/unit (0 or more), or clear the boxes.';
   const id = $('pol-item').value;
-  const taxType = $('pol-taxtype') ? $('pol-taxtype').value : 'NONE';
-  const taxRate = taxType === 'NONE' ? 0 : Number($('pol-taxrate').value || 0);
-  if (taxType !== 'NONE' && !(taxRate > 0)) return 'The line you typed above has '+(TAX_LBL[taxType]||taxType)+' selected but no tax rate % — enter the rate or pick "No tax".';
+  const tx = poReadTaxEntry();
+  if (tx.err) return tx.err;
   const ex = poLines.find(l=>l.rm_item_id===id);
-  if (ex){ ex.qty += qty; ex.rate = rate; ex.tax_type = taxType; ex.tax_rate = taxRate; }
-  else poLines.push({ rm_item_id: id, qty, rate, tax_type: taxType, tax_rate: taxRate });
+  if (ex){ ex.qty += qty; ex.rate = rate; ex.tax_type = tx.taxType; ex.tax_rate = tx.taxRate; ex.exempt = tx.exempt; ex.margin = tx.margin; ex.cgst = tx.cgst; ex.sgst = tx.sgst; ex.igst = tx.igst; }
+  else poLines.push({ rm_item_id: id, qty, rate, tax_type: tx.taxType, tax_rate: tx.taxRate, exempt: tx.exempt, margin: tx.margin, cgst: tx.cgst, sgst: tx.sgst, igst: tx.igst });
   qEl.value=''; rEl.value=''; if ($('pol-taxrate')) $('pol-taxrate').value='';
+  ['pol-margin','pol-cgst','pol-sgst','pol-igst'].forEach(i=>{ const el=$(i); if (el) el.value=''; });
   return null;
 }
 async function poPlace(){
@@ -2560,7 +2602,9 @@ async function poPlace(){
     if (mErr){ say('pon-msg','PO created, but the direct-to-MMC flag could not be set: '+mErr.message,false); return; }
   }
   const taxes = poLines.filter(l=>l.tax_type && l.tax_type!=='NONE' && Number(l.tax_rate)>0)
-                       .map(l=>({ rm_item_id: l.rm_item_id, tax_type: l.tax_type, tax_rate: Number(l.tax_rate) }));
+                       .map(l=>({ rm_item_id: l.rm_item_id, tax_type: l.tax_type, tax_rate: Number(l.tax_rate),
+                                  margin_per_unit: l.exempt ? Number(l.margin)||null : null,
+                                  cgst_rate: l.cgst||null, sgst_rate: l.sgst||null, igst_rate: l.igst||null }));
   if (taxes.length && data){
     const { error: tErr } = await db.schema('mfg').rpc('po_set_line_tax', { p_po: data, p_taxes: taxes });
     if (tErr){ say('pon-msg','PO created, but the tax details could not be saved: '+tErr.message,false); return; }
