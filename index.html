@@ -250,7 +250,7 @@
     <div id="brands-panel"></div>
     <h4 class="sec" style="margin-top:16px;">SKUs &amp; prices</h4>
     <div class="table-scroll"><table>
-      <thead><tr><th>SKU Code</th><th>Brand</th><th>Size</th><th>Units/Case</th><th>Pack</th><th>Mfr</th><th class="amount">MRP ₹</th><th class="amount">Excise ₹</th><th class="amount">VAT %</th><th class="amount">Rate/case ₹</th><th>Active</th><th class="dir-only"></th></tr></thead>
+      <thead><tr><th>SKU Code</th><th>Brand</th><th>Size</th><th>Units/Case</th><th>Pack</th><th>Mfr</th><th class="amount">Price/btl ₹<br><span style="font-weight:normal;font-size:10px;">before VAT</span></th><th class="amount">Excise ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">VAT ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">MRP ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">Rate/case ₹</th><th>Active</th><th class="dir-only"></th></tr></thead>
       <tbody id="sku-rows"></tbody>
     </table></div>
     <div id="sku-price-panel"></div>
@@ -542,10 +542,13 @@
     <select id="sa-material"><option value="PET">PET</option><option value="GLASS">GLASS</option></select>
     <label>Manufacturer</label><select id="sa-mfr"></select>
     <div class="row2c" style="margin-top:6px;">
-      <div><label>MRP ₹ / bottle</label><input type="number" id="sa-mrp" min="0" step="any" placeholder="e.g. 250"></div>
-      <div><label>Excise duty ₹ / bottle</label><input type="number" id="sa-excise" min="0" step="any" placeholder="e.g. 80"></div>
+      <div><label>Price of bottle (before VAT) ₹</label><input type="number" id="sa-base" min="0" step="any" placeholder="e.g. 150" oninput="skuMrpAuto('sa')"></div>
+      <div><label>Excise duty ₹ / bottle</label><input type="number" id="sa-excise" min="0" step="any" placeholder="e.g. 80" oninput="skuMrpAuto('sa')"></div>
     </div>
-    <label>VAT %</label><input type="number" id="sa-vat" min="0" max="100" step="any" placeholder="e.g. 20">
+    <div class="row2c">
+      <div><label>VAT ₹ / bottle</label><input type="number" id="sa-vatamt" min="0" step="any" placeholder="e.g. 20" oninput="skuMrpAuto('sa')"></div>
+      <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto-added, adjustable)</span></label><input type="number" id="sa-mrp" min="0" step="any"></div>
+    </div>
     <div class="row2" style="margin-top:16px;">
       <button class="btn ghost" onclick="closeSheet('sku-overlay')">Cancel</button>
       <button class="btn gold" id="btn-save-sku">Save</button>
@@ -1038,12 +1041,13 @@ async function openBrands(){
     if (!s.is_active) tr.className='inactive';
     tr.innerHTML = `<td><b>${esc(s.sku_code)}</b></td><td>${esc(s.brand?.name)}</td>` +
       `<td>${s.size_ml} ml</td><td>${s.units_per_case}</td><td>${s.material}</td><td>${mfrName(s.manufacturer_id)}</td>` +
-      `<td class="amount">${s.mrp!=null?inr(s.mrp):'—'}</td>` +
+      `<td class="amount">${s.base_price!=null?inr(s.base_price):'—'}</td>` +
       `<td class="amount">${s.excise_duty!=null?inr(s.excise_duty):'—'}</td>` +
-      `<td class="amount">${s.vat_rate!=null?Number(s.vat_rate)+'%':'—'}</td>` +
+      `<td class="amount">${s.vat_amount!=null?inr(s.vat_amount):'—'}</td>` +
+      `<td class="amount" style="font-weight:700;">${s.mrp!=null?inr(s.mrp):'—'}</td>` +
       `<td class="amount">${r?inr(r.rate_per_case):'<span style="color:#b3382c">not set</span>'}</td>` +
       `<td>${s.is_active?'✔':'✖'}</td>` +
-      (isDir()?`<td style="white-space:nowrap"><button class="mini" onclick="skuDetailEdit('${s.id}')">Edit</button> <button class="mini" onclick="skuPriceEdit('${s.id}')">Edit price</button> <button class="mini" data-act="toggle">${s.is_active?'Deactivate':'Reactivate'}</button></td>`:'');
+      (isDir()?`<td style="white-space:nowrap"><button class="mini" onclick="skuPriceEdit('${s.id}')">Edit price</button> <button class="mini" data-act="toggle">${s.is_active?'Deactivate':'Reactivate'}</button></td>`:'');
     if (isDir()) tr.querySelector('button[data-act="toggle"]').onclick = async ()=>{
       const { error } = await db.schema('sales').from('skus').update({is_active: !s.is_active}).eq('id', s.id);
       if (!error) openBrands();
@@ -1070,43 +1074,43 @@ async function brandSave(id){
   if(error){ say('be-msg','Save failed: '+error.message,false); return; }
   openBrands();
 }
-function skuDetailEdit(id){
-  const s = M.skus.find(x=>x.id===id); if (!s) return;
-  $('sku-price-panel').innerHTML = `<div class="card" style="margin-top:12px;max-width:560px;"><h3 style="font-size:15px;">Edit SKU — ${esc(s.sku_code)}</h3>
-    <div class="row2c"><div><label>Size (ml)</label><input type="number" id="sd-size" min="1" value="${s.size_ml}"></div>
-    <div><label>Units per case (pack size)</label><input type="number" id="sd-upc" min="1" value="${s.units_per_case}"></div></div>
-    <div class="row2c"><div><label>MRP ₹ / bottle</label><input type="number" id="sd-mrp" min="0" step="any" value="${s.mrp!=null?s.mrp:''}"></div>
-    <div><label>Excise duty ₹ / bottle</label><input type="number" id="sd-excise" min="0" step="any" value="${s.excise_duty!=null?s.excise_duty:''}"></div></div>
-    <label>VAT %</label><input type="number" id="sd-vat" min="0" max="100" step="any" value="${s.vat_rate!=null?s.vat_rate:''}">
-    <div class="row2c" style="margin-top:10px;"><button class="btn gold sm" onclick="skuDetailSave('${id}')">Save changes</button>
-    <button class="btn ghost sm" onclick="$('sku-price-panel').innerHTML=''">Cancel</button></div><div id="sd-msg"></div></div>`;
-  $('sku-price-panel').scrollIntoView({behavior:'smooth'});
-}
-async function skuDetailSave(id){
-  const size = Number($('sd-size').value), upc = Number($('sd-upc').value);
-  if (!(size>0 && upc>0)){ say('sd-msg','Size and units per case must be above zero.',false); return; }
-  const { error } = await db.schema('sales').from('skus').update({
-    size_ml: size, units_per_case: upc,
-    mrp: $('sd-mrp').value!=='' ? Number($('sd-mrp').value) : null,
-    excise_duty: $('sd-excise').value!=='' ? Number($('sd-excise').value) : null,
-    vat_rate: $('sd-vat').value!=='' ? Number($('sd-vat').value) : null }).eq('id', id);
-  if (error){ say('sd-msg','Save failed: '+error.message,false); return; }
-  openBrands();
+function skuMrpAuto(pfx){
+  const n = id => { const el = $(id); return el && el.value!=='' ? Number(el.value)||0 : 0; };
+  const el = $(pfx+'-mrp'); if (!el) return;
+  const total = n(pfx+'-base') + n(pfx+'-excise') + n(pfx+'-vatamt');
+  el.value = total ? total.toFixed(2) : '';
 }
 function skuPriceEdit(id){
   const s = M.skus.find(x=>x.id===id); const r=(window.__latestRate||{})[id];
-  $('sku-price-panel').innerHTML = `<div class="card" style="margin-top:12px;max-width:560px;"><h3 style="font-size:15px;">Set price — ${esc(s.sku_code)}</h3>
-    <p style="font-size:12px;color:#777">Current: ${r?('₹'+inr(r.rate_per_case)+', effective '+r.effective_from):'not set'}. A new price adds a dated rate — the old one stays in history.</p>
-    <div class="row2c"><div><label>New rate ₹/case *</label><input type="number" id="sp-rate" min="0" value="${r?r.rate_per_case:''}"></div>
-    <div><label>Effective from</label><input type="date" id="sp-eff" value="${calFmt(new Date())}"></div></div>
-    <div class="row2c" style="margin-top:10px;"><button class="btn gold sm" onclick="skuPriceSave('${id}')">Save price</button>
+  $('sku-price-panel').innerHTML = `<div class="card" style="margin-top:12px;max-width:620px;"><h3 style="font-size:15px;">Edit SKU price — ${esc(s.sku_code)}</h3>
+    <div class="row2c"><div><label>Size (ml)</label><input type="number" id="sp-size" min="1" value="${s.size_ml}"></div>
+    <div><label>Units per case</label><input type="number" id="sp-upc" min="1" value="${s.units_per_case}"></div></div>
+    <div class="row2c"><div><label>Price of bottle (before VAT) ₹</label><input type="number" id="sp-base" min="0" step="any" value="${s.base_price!=null?s.base_price:''}" oninput="skuMrpAuto('sp')"></div>
+    <div><label>Excise duty ₹ / bottle</label><input type="number" id="sp-excise" min="0" step="any" value="${s.excise_duty!=null?s.excise_duty:''}" oninput="skuMrpAuto('sp')"></div></div>
+    <div class="row2c"><div><label>VAT ₹ / bottle</label><input type="number" id="sp-vatamt" min="0" step="any" value="${s.vat_amount!=null?s.vat_amount:''}" oninput="skuMrpAuto('sp')"></div>
+    <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto = price + excise + VAT, adjustable)</span></label><input type="number" id="sp-mrp" min="0" step="any" value="${s.mrp!=null?s.mrp:''}"></div></div>
+    <div class="row2c"><div><label>Rate ₹ / case</label><input type="number" id="sp-rate" min="0" step="any" value="${r?r.rate_per_case:''}"></div>
+    <div><label>Rate effective from</label><input type="date" id="sp-eff" value="${calFmt(new Date())}"></div></div>
+    <p style="font-size:11.5px;color:#777;margin-top:6px;">Current rate: ${r?('₹'+inr(r.rate_per_case)+', effective '+r.effective_from):'not set'}. Changing the rate adds a new dated entry — the old one stays in history.</p>
+    <div class="row2c" style="margin-top:10px;"><button class="btn gold sm" onclick="skuPriceSave('${id}')">Save</button>
     <button class="btn ghost sm" onclick="$('sku-price-panel').innerHTML=''">Cancel</button></div><div id="sp-msg"></div></div>`;
   $('sku-price-panel').scrollIntoView({behavior:'smooth'});
 }
 async function skuPriceSave(id){
-  const rate = Number($('sp-rate').value); if(!(rate>0)){ say('sp-msg','Enter a valid rate.',false); return; }
-  const { error } = await db.schema('sales').from('rate_cards').insert({ sku_id:id, state_id:'MH', party_id:null, rate_per_case:rate, effective_from:$('sp-eff').value||calFmt(new Date()), created_by:me.id });
-  if(error){ say('sp-msg','Save failed: '+error.message,false); return; }
+  const size = Number($('sp-size').value), upc = Number($('sp-upc').value);
+  if (!(size>0 && upc>0)){ say('sp-msg','Size and units per case must be above zero.',false); return; }
+  const num = fid => { const el=$(fid); return el && el.value!=='' ? Number(el.value) : null; };
+  const { error } = await db.schema('sales').from('skus').update({
+    size_ml: size, units_per_case: upc,
+    base_price: num('sp-base'), excise_duty: num('sp-excise'),
+    vat_amount: num('sp-vatamt'), mrp: num('sp-mrp') }).eq('id', id);
+  if (error){ say('sp-msg','Save failed: '+error.message,false); return; }
+  const rate = Number($('sp-rate').value);
+  const prev = (window.__latestRate||{})[id];
+  if (rate > 0 && (!prev || Number(prev.rate_per_case) !== rate)){
+    const { error: re } = await db.schema('sales').from('rate_cards').insert({ sku_id:id, state_id:'MH', party_id:null, rate_per_case:rate, effective_from:$('sp-eff').value||calFmt(new Date()), created_by:me.id });
+    if (re){ say('sp-msg','Details saved, but the case rate failed: '+re.message,false); return; }
+  }
   openBrands();
 }
 function openBrandAdd(){
@@ -1126,6 +1130,7 @@ function openSkuAdd(){
   $('sa-brand').innerHTML = M.brands.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   $('sa-mfr').innerHTML = M.mfrs.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('');
   $('sa-size').value=''; $('sa-upc').value='';
+  $('sa-base').value=''; $('sa-excise').value=''; $('sa-vatamt').value=''; $('sa-mrp').value='';
   $('sku-overlay').classList.remove('hidden');
 }
 $('btn-save-sku').onclick = async () => {
@@ -1136,9 +1141,10 @@ $('btn-save-sku').onclick = async () => {
   const { error } = await db.schema('sales').from('skus').insert({
     sku_code: code, brand_id: brand.id, size_ml: size, units_per_case: upc,
     material: $('sa-material').value, manufacturer_id: $('sa-mfr').value,
-    mrp: Number($('sa-mrp').value) || null,
-    excise_duty: Number($('sa-excise').value) || null,
-    vat_rate: Number($('sa-vat').value) || null });
+    base_price: $('sa-base').value!=='' ? Number($('sa-base').value) : null,
+    excise_duty: $('sa-excise').value!=='' ? Number($('sa-excise').value) : null,
+    vat_amount: $('sa-vatamt').value!=='' ? Number($('sa-vatamt').value) : null,
+    mrp: $('sa-mrp').value!=='' ? Number($('sa-mrp').value) : null });
   if (error){ say('sa-msg', error.message, false); return; }
   closeSheet('sku-overlay'); openBrands();
 };
