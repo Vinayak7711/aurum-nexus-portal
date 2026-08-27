@@ -2172,7 +2172,7 @@ async function purchaseTab(t){
         `<td class="amount"><input type="number" value="${Number(l.rate)||''}" min="0" step="any" placeholder="rate" style="width:95px;" oninput="poLineUpd(${i},'rate',this.value)"></td>` +
         `<td class="amount" id="pol-amt-${i}">${inr(l.qty*l.rate)}</td>` +
         (l.exempt
-          ? `<td colspan="2" style="font-size:11px;color:#555;">Tax-exempt · GST on margin ₹ ${inr(l.margin)}/unit<br>${l.igst?('IGST '+Number(l.igst)+'%'):('CGST '+Number(l.cgst)+'% + SGST '+Number(l.sgst)+'%')}</td>`
+          ? `<td colspan="2" style="font-size:11px;color:#555;">Margin scheme · taxable ₹ ${inr((Number(l.margin)||0)*(Number(l.qty)||0))}<br>(${Number(l.qty)} × margin ₹ ${inr(l.margin)}) · ${l.igst?('IGST '+Number(l.igst)+'%'):('CGST '+Number(l.cgst)+'% + SGST '+Number(l.sgst)+'%')}</td>`
           : `<td><select style="width:100px;" onchange="poLineUpd(${i},'tax_type',this.value)">` +
             `<option value="NONE" ${(!l.tax_type||l.tax_type==='NONE')?'selected':''}>No tax</option>` +
             `<option value="GST" ${l.tax_type==='GST'?'selected':''}>GST</option>` +
@@ -2408,17 +2408,29 @@ async function poView(id){
   if (canFin() && lines && lines.length){ const vr = await G.from('po_values').select('*').in('line_id', lines.map(l=>l.id)); vals = vr.data||[]; }
   const iBy = {}; (items||[]).forEach(i=>iBy[i.id]=i);
   const vBy = {}; vals.forEach(v=>vBy[v.line_id]=v);
-  let tot = 0;
+  let tot = 0, mTaxable = 0, mNonTax = 0, mCgstAmt = 0, mSgstAmt = 0, mIgstAmt = 0, anyMargin = false;
   const lineHtml = (lines||[]).map(l=>{
     const i = iBy[l.rm_item_id]||{}; const v = vBy[l.id];
     let s = esc((i.code||'?')+' — '+(i.name||''))+' × '+Number(l.qty)+' '+(i.unit||'');
     if (v){
       const amt = Number(v.amount)+Number(v.tax_amount||0); tot += amt;
-      const taxBit = v.tax_type && v.tax_type!=='NONE'
-        ? (v.margin_per_unit
-            ? ' + tax-exempt goods — GST on margin ₹ '+inr(v.margin_per_unit)+'/unit ('+(v.igst_rate?'IGST '+Number(v.igst_rate)+'%':'CGST '+Number(v.cgst_rate||0)+'% + SGST '+Number(v.sgst_rate||0)+'%')+') = ₹ '+inr(v.tax_amount||0)
-            : ' + '+esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate)+'% (₹ '+inr(v.tax_amount||0)+')')
-        : '';
+      let taxBit = '';
+      if (v.tax_type && v.tax_type!=='NONE'){
+        if (v.margin_per_unit){
+          anyMargin = true;
+          const taxable = Number(v.margin_per_unit)*Number(l.qty);
+          mTaxable += taxable; mNonTax += Number(v.amount) - taxable;
+          const cA = taxable*Number(v.cgst_rate||0)/100, sA = taxable*Number(v.sgst_rate||0)/100, iA = taxable*Number(v.igst_rate||0)/100;
+          mCgstAmt += cA; mSgstAmt += sA; mIgstAmt += iA;
+          taxBit = '<br>Margin scheme — taxable value ₹ '+inr(taxable)+' ('+Number(l.qty)+' × margin ₹ '+inr(v.margin_per_unit)+')'
+            + '<br>'+(v.igst_rate
+                ? 'IGST '+Number(v.igst_rate)+'% = ₹ '+inr(iA)
+                : 'CGST '+Number(v.cgst_rate||0)+'% = ₹ '+inr(cA)+' + SGST '+Number(v.sgst_rate||0)+'% = ₹ '+inr(sA))
+            + ' · non-taxable ₹ '+inr(Number(v.amount)-taxable);
+        } else {
+          taxBit = ' + '+esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate)+'% (₹ '+inr(v.tax_amount||0)+')';
+        }
+      }
       s += '<br><span style="font-size:11.5px;color:#555">@ ₹ '+inr(v.rate_per_unit)+'/unit' + taxBit + ' = <b>₹ '+inr(amt)+'</b></span>';
     }
     return s; }).join('<div style="height:6px"></div>') || '—';
@@ -2435,6 +2447,9 @@ async function poView(id){
     (po && po.bill_to_mmc) ? ['Delivery', 'Vendor bills &amp; delivers directly to MMC — stock still enters the company store'] : null,
     ['Qty ordered / received', Number(p.ordered_qty||0)+' / '+Number(p.received_qty||0)],
     ['Items', lineHtml],
+    (canFin() && anyMargin) ? ['Margin scheme summary',
+      'Taxable value: <b>₹ '+inr(mTaxable)+'</b> · Non-taxable sale: <b>₹ '+inr(mNonTax)+'</b><br>'
+      + (mIgstAmt>0 ? 'IGST: <b>₹ '+inr(mIgstAmt)+'</b>' : 'CGST: <b>₹ '+inr(mCgstAmt)+'</b> · SGST: <b>₹ '+inr(mSgstAmt)+'</b>')] : null,
     canFin() ? ['Total value (incl. tax)', '<b>₹ '+inr(tot)+'</b>'] : null,
     (po && po.payment_terms) ? ['Payment terms', esc(po.payment_terms)] : null,
     (po && po.remarks) ? ['Remarks', esc(po.remarks)] : null,
@@ -2461,12 +2476,27 @@ async function poPrint(id){
     (v||[]).forEach(x=>vals[x.line_id]=x);
   }
   const showMoney = canFin() && Object.keys(vals).length > 0;
-  let tot = 0, totTax = 0;
+  let tot = 0, totTax = 0, pmTaxable = 0, pmNonTax = 0, pmCgst = 0, pmSgst = 0, pmIgst = 0, pmAny = false;
   const lineRows = lines.map((l,i)=>{
     const v = vals[l.id]||{};
     const amt = Number(v.amount||0), tax = Number(v.tax_amount||0); tot += amt; totTax += tax;
+    let taxCell = '—';
+    if (v.tax_type && v.tax_type!=='NONE'){
+      if (v.margin_per_unit){
+        pmAny = true;
+        const taxable = Number(v.margin_per_unit)*Number(l.qty);
+        pmTaxable += taxable; pmNonTax += amt - taxable;
+        const cA = taxable*Number(v.cgst_rate||0)/100, sA = taxable*Number(v.sgst_rate||0)/100, iA = taxable*Number(v.igst_rate||0)/100;
+        pmCgst += cA; pmSgst += sA; pmIgst += iA;
+        taxCell = 'Margin ₹'+inr(v.margin_per_unit)+' · taxable ₹'+inr(taxable)+'<br>'
+          + (v.igst_rate ? 'IGST '+Number(v.igst_rate)+'% = ₹'+inr(iA)
+                         : 'CGST '+Number(v.cgst_rate||0)+'% = ₹'+inr(cA)+'<br>SGST '+Number(v.sgst_rate||0)+'% = ₹'+inr(sA));
+      } else {
+        taxCell = esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate||0)+'%';
+      }
+    }
     return `<tr><td>${i+1}</td><td>${esc(l.item?.code||'')} — ${esc(l.item?.name||'')}</td><td class="amount">${Number(l.qty)}</td><td>${esc(l.item?.unit||'')}</td>` +
-      (showMoney?`<td class="amount">${inr(v.rate_per_unit||0)}</td><td class="amount">${inr(amt)}</td><td>${v.tax_type&&v.tax_type!=='NONE'?(v.margin_per_unit?'Exempt — GST on margin ₹'+inr(v.margin_per_unit)+'/unit<br>'+(v.igst_rate?'IGST '+Number(v.igst_rate)+'%':'CGST '+Number(v.cgst_rate||0)+'% + SGST '+Number(v.sgst_rate||0)+'%'):esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate||0)+'%'):'—'}</td><td class="amount">${inr(tax)}</td><td class="amount">${inr(amt+tax)}</td>`:'') + '</tr>';
+      (showMoney?`<td class="amount">${inr(v.rate_per_unit||0)}</td><td class="amount">${inr(amt)}</td><td>${taxCell}</td><td class="amount">${inr(tax)}</td><td class="amount">${inr(amt+tax)}</td>`:'') + '</tr>';
   }).join('');
   const ven = po.vendor || {};
   const body = `
@@ -2492,6 +2522,8 @@ async function poPrint(id){
       ${lineRows || `<tr><td colspan="${showMoney?9:4}">No lines.</td></tr>`}
       ${showMoney&&lineRows?`<tr class="tot"><td colspan="5">Total</td><td class="amount">${inr(tot)}</td><td></td><td class="amount">${inr(totTax)}</td><td class="amount">${inr(tot+totTax)}</td></tr>`:''}
     </tbody></table>
+    ${showMoney&&pmAny?`<table style="margin-top:8px;"><tr><th style="width:28%;">Taxable value (margin)</th><td>₹ ${inr(pmTaxable)}</td></tr>${pmIgst>0?`<tr><th>IGST</th><td>₹ ${inr(pmIgst)}</td></tr>`:`<tr><th>CGST</th><td>₹ ${inr(pmCgst)}</td></tr><tr><th>SGST</th><td>₹ ${inr(pmSgst)}</td></tr>`}<tr><th>Non-taxable sale</th><td>₹ ${inr(pmNonTax)}</td></tr></table>
+    <p style="font-size:11px;color:#444;">Second-hand goods — tax applied under the Margin Scheme (Notification No. 10/2017 dated 20-06-2017, sub-rule 32(5)): GST is charged on the margin only; the balance value is a non-taxable sale.</p>`:''}
     ${showMoney&&(tot+totTax)>0?`<p style="font-size:12px;"><b>Order value (incl. tax): ₹ ${inr(tot+totTax)}</b> · ${esc(inrWords(tot+totTax))}</p>`:''}
     ${po.payment_terms?`<p style="font-size:12px;"><b>Payment terms:</b> ${esc(po.payment_terms)}</p>`:''}
     ${po.remarks?`<p style="font-size:12px;"><b>Remarks:</b> ${esc(po.remarks)}</p>`:''}
