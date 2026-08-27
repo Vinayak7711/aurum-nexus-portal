@@ -2099,7 +2099,7 @@ async function purchaseTab(t){
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
         `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${PO_LABEL[p.status]||p.status}</span></td>` +
-        `<td>${(p.status!=='PENDING_APPROVAL' ? `<button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ` : '') +
+        `<td><button class="mini" onclick="poView('${p.id}')" title="See the full order — before or after approval">👁 View</button> ${(p.status!=='PENDING_APPROVAL' ? `<button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ` : '') +
               (p.status==='PENDING_APPROVAL' && canFinApprove() ? `<button class="mini" onclick="poApprove('${p.id}')">Approve</button> ` : '') +
               (canFinEdit() ? (p.status==='PENDING_APPROVAL' ? `<button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
               (p.status==='PLACED' ? `<button class="mini" onclick="poDispatch('${p.id}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
@@ -2375,9 +2375,57 @@ async function poHistRun(){
         `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
         (canFin()?`<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>`:'') +
         `<td><span style="color:${p.status==='RECEIVED'?'#1a7f37':'#777'};font-weight:600">${p.status}</span></td>` +
-        `<td><button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "poHistRun()")}</td></tr>`;}).join('')
+        `<td><button class="mini" onclick="poView('${p.id}')" title="See the full order">👁 View</button> <button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "poHistRun()")}</td></tr>`;}).join('')
       || `<tr><td colspan="${canFin()?8:7}" style="color:#777">No received or closed orders ${m==='all'?'yet':'in this period'}${ven?' for this party':''}.</td></tr>`}
     </tbody></table></div>`;
+}
+async function poView(id){
+  // Standalone PO viewer — works for any status (awaiting approval, placed, dispatched, received, cancelled)
+  const G = db.schema('mfg');
+  const [tr, pr] = await Promise.all([
+    G.from('v_po_tracking').select('*').eq('id', id).maybeSingle(),
+    G.from('purchase_orders').select('*').eq('id', id).maybeSingle(),
+  ]);
+  const p = tr.data || {}; const po = pr.data || null;
+  if (!p.id && !po){ alert('Purchase order not found.'); return; }
+  const { data: lines } = await G.from('po_lines').select('*').eq('po_id', id);
+  const { data: items } = await G.from('rm_items').select('id,code,name,unit');
+  let vals = [];
+  if (canFin() && lines && lines.length){ const vr = await G.from('po_values').select('*').in('line_id', lines.map(l=>l.id)); vals = vr.data||[]; }
+  const iBy = {}; (items||[]).forEach(i=>iBy[i.id]=i);
+  const vBy = {}; vals.forEach(v=>vBy[v.line_id]=v);
+  let tot = 0;
+  const lineHtml = (lines||[]).map(l=>{
+    const i = iBy[l.rm_item_id]||{}; const v = vBy[l.id];
+    let s = esc((i.code||'?')+' — '+(i.name||''))+' × '+Number(l.qty)+' '+(i.unit||'');
+    if (v){
+      const amt = Number(v.amount)+Number(v.tax_amount||0); tot += amt;
+      s += '<br><span style="font-size:11.5px;color:#555">@ ₹ '+inr(v.rate_per_unit)+'/unit'
+        + (v.tax_type && v.tax_type!=='NONE' ? ' + '+esc(TAX_LBL[v.tax_type]||v.tax_type)+' '+Number(v.tax_rate)+'% (₹ '+inr(v.tax_amount||0)+')' : '')
+        + ' = <b>₹ '+inr(amt)+'</b></span>';
+    }
+    return s; }).join('<div style="height:6px"></div>') || '—';
+  const CATL = { RM:'Raw material (production)', OFFICE:'Office & admin', SERVICES:'Services', OTHER:'Other' };
+  const status = (p.status || (po&&po.status) || '—');
+  const rows = [
+    ['PO no.', '<b>'+esc(p.po_no||(po&&po.po_no)||'—')+'</b>'],
+    ['Status', '<span style="color:'+(PO_COL[status]||'#333')+';font-weight:700">'+(PO_LABEL[status]||status)+'</span>'],
+    ['Vendor', esc(p.vendor_name||'—')],
+    ['Order date', p.order_date||'—'],
+    ['Expected delivery', p.expected_date||'—'],
+    (po && po.received_at) ? ['Received on', String(po.received_at).slice(0,10)] : null,
+    ['Purchase for', CATL[(po&&po.category)||'RM']||esc((po&&po.category)||'RM')],
+    (po && po.bill_to_mmc) ? ['Delivery', 'Vendor bills &amp; delivers directly to MMC — stock still enters the company store'] : null,
+    ['Qty ordered / received', Number(p.ordered_qty||0)+' / '+Number(p.received_qty||0)],
+    ['Items', lineHtml],
+    canFin() ? ['Total value (incl. tax)', '<b>₹ '+inr(tot)+'</b>'] : null,
+    (po && po.payment_terms) ? ['Payment terms', esc(po.payment_terms)] : null,
+    (po && po.remarks) ? ['Remarks', esc(po.remarks)] : null,
+  ].filter(Boolean);
+  apprModal('Purchase order '+(p.po_no||(po&&po.po_no)||''), apprRowsHtml(rows)
+    + (status!=='PENDING_APPROVAL'
+        ? '<div style="margin-top:10px;"><button class="mini" onclick="poPrint(\''+id+'\')" title="Print or save as PDF">🖨 Print / save PDF</button></div>'
+        : '<p style="font-size:12px;color:#b3261e;margin-top:8px;">This order is awaiting approval — it can be printed once approved.</p>'));
 }
 async function poPrint(id){
   const G = db.schema('mfg');
