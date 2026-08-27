@@ -2473,8 +2473,31 @@ function poAddLine(){
   else poLines.push({ rm_item_id: id, qty, rate, tax_type: taxType, tax_rate: taxRate });
   purchaseTab('new');
 }
+function poGrabPending(){
+  // If the line-entry boxes are filled but "+ Add line" was never clicked,
+  // take that line in automatically so nothing typed is lost.
+  // Returns an error message string, or null when all is well.
+  const qEl = $('pol-qty'), rEl = $('pol-rate');
+  if (!qEl || !rEl) return null;
+  const qv = qEl.value, rv = rEl.value;
+  if (qv === '' && rv === '') return null; // nothing pending
+  const qty = Number(qv), rate = Number(rv);
+  if (!(qty > 0)) return 'The line you typed above is not added yet — its quantity must be above zero (or clear the boxes).';
+  if (rv === '' || !(rate >= 0)) return 'The line you typed above is not added yet — enter its rate ₹/unit (0 or more), or clear the boxes.';
+  const id = $('pol-item').value;
+  const taxType = $('pol-taxtype') ? $('pol-taxtype').value : 'NONE';
+  const taxRate = taxType === 'NONE' ? 0 : Number($('pol-taxrate').value || 0);
+  if (taxType !== 'NONE' && !(taxRate > 0)) return 'The line you typed above has '+(TAX_LBL[taxType]||taxType)+' selected but no tax rate % — enter the rate or pick "No tax".';
+  const ex = poLines.find(l=>l.rm_item_id===id);
+  if (ex){ ex.qty += qty; ex.rate = rate; ex.tax_type = taxType; ex.tax_rate = taxRate; }
+  else poLines.push({ rm_item_id: id, qty, rate, tax_type: taxType, tax_rate: taxRate });
+  qEl.value=''; rEl.value=''; if ($('pol-taxrate')) $('pol-taxrate').value='';
+  return null;
+}
 async function poPlace(){
-  if (!poLines.length){ say('pon-msg','Add at least one line.',false); return; }
+  const pendErr = poGrabPending();
+  if (pendErr){ say('pon-msg', pendErr, false); return; }
+  if (!poLines.length){ say('pon-msg','Add at least one line — fill the Material, Qty and Rate boxes above (they are taken in automatically when you place the order).',false); return; }
   if (poLines.some(l => !(Number(l.qty) > 0))){ say('pon-msg','Every line needs a quantity above zero.',false); return; }
   if (poLines.some(l => l.tax_type && l.tax_type !== 'NONE' && !(Number(l.tax_rate) > 0))){ say('pon-msg','A line has a tax type selected but no tax rate % — enter the rate or set it to "No tax".',false); return; }
   if (poLines.some(l => !(Number(l.rate) > 0)) && !confirm('Some lines still have rate ₹0. Place the order anyway?')) return;
