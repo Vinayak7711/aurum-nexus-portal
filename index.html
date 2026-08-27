@@ -249,6 +249,10 @@
     </div>
     <div id="brands-panel"></div>
     <h4 class="sec" style="margin-top:16px;">SKUs &amp; prices</h4>
+    <div style="margin:6px 0 10px;max-width:440px;">
+      <label>Show SKUs of brand</label>
+      <select id="sku-brand-filter" onchange="skuBrandPick(this.value)" title="Pick a brand to see only its SKUs and prices"></select>
+    </div>
     <div class="table-scroll"><table>
       <thead><tr><th>SKU Code</th><th>Brand</th><th>Size</th><th>Units/Case</th><th>Pack</th><th>Mfr</th><th class="amount">Price/btl ₹<br><span style="font-weight:normal;font-size:10px;">before VAT</span></th><th class="amount">Excise ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">VAT ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">MRP ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">Rate/case ₹</th><th>Active</th><th class="dir-only"></th></tr></thead>
       <tbody id="sku-rows"></tbody>
@@ -1029,13 +1033,38 @@ async function openBrands(){
   // ---- Brands panel (editable by Director) ----
   const skuCount = {}; M.skus.forEach(s=>{ skuCount[s.brand_id]=(skuCount[s.brand_id]||0)+1; });
   let bp = `<h4 class="sec">Brands</h4><div class="table-scroll"><table><thead><tr><th>Brand</th><th>Category</th><th>Type</th><th class="amount">SKUs</th><th>Active</th>${isDir()?'<th></th>':''}</tr></thead><tbody>`;
-  bp += M.brands.map(b=>`<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(b.name)}</b></td><td>${esc(b.category_id)}</td><td>${esc(b.brand_type||'—')}</td><td class="amount">${skuCount[b.id]||0}</td><td>${b.is_active?'✔':'✖'}</td>${isDir()?`<td><button class="mini" onclick="brandEdit('${b.id}')">Edit</button></td>`:''}</tr>`).join('') || '<tr><td colspan="6" style="color:#777">No brands yet.</td></tr>';
+  bp += M.brands.map(b=>`<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(b.name)}</b></td><td>${esc(b.category_id)}</td><td>${esc(b.brand_type||'—')}</td><td class="amount">${skuCount[b.id]||0}</td><td>${b.is_active?'✔':'✖'}</td>${isDir()?`<td style="white-space:nowrap"><button class="mini" onclick="brandEdit('${b.id}')">Edit</button> <button class="mini" onclick="brandTog('${b.id}',${b.is_active?'false':'true'})" title="${b.is_active?'Hide this brand from new entries (history stays)':'Bring this brand back into use'}">${b.is_active?'Deactivate':'Reactivate'}</button> ${dirDelBtn('sales','brands', b.id, 'brand '+b.name, "openBrands()")}</td>`:''}</tr>`).join('') || '<tr><td colspan="6" style="color:#777">No brands yet.</td></tr>';
   bp += '</tbody></table></div><div id="brand-edit-panel"></div>';
   $('brands-panel').innerHTML = bp;
-  // ---- SKU + price table ----
-  const tb = $('sku-rows'); tb.innerHTML = '';
+  // ---- Brand filter for the SKU list (nothing shows until a brand is picked) ----
+  const sel = $('sku-brand-filter');
+  if (sel){
+    const cur = window.__skuBrandFilter || '';
+    sel.innerHTML = `<option value="">— Choose a brand to see its SKUs —</option>` +
+      `<option value="ALL">All brands — full list</option>` +
+      M.brands.map(b=>`<option value="${b.id}">${esc(b.name)}${b.is_active?'':' (inactive)'}</option>`).join('');
+    sel.value = (cur==='ALL' || M.brands.some(b=>b.id===cur)) ? cur : '';
+    window.__skuBrandFilter = sel.value;
+  }
+  skuRowsRender();
+  applyDirOnly(); show('brands');
+}
+function skuBrandPick(v){ window.__skuBrandFilter = v || ''; skuRowsRender(); }
+function skuRowsRender(){
+  const tb = $('sku-rows'); if (!tb) return; tb.innerHTML = '';
+  const latestRate = window.__latestRate || {};
   const mfrName = id => (M.mfrs.find(m=>m.id===id)||{}).code || '—';
-  for (const s of M.skus){
+  const f = window.__skuBrandFilter || '';
+  if (!f){
+    tb.innerHTML = `<tr><td colspan="13" style="color:#777;padding:14px;">Pick a brand from the list above to see its SKUs and prices — or choose “All brands — full list”.</td></tr>`;
+    return;
+  }
+  const list = f==='ALL' ? M.skus : M.skus.filter(s=>s.brand_id===f);
+  if (!list.length){
+    tb.innerHTML = `<tr><td colspan="13" style="color:#777;padding:14px;">No SKUs under this brand yet.</td></tr>`;
+    return;
+  }
+  for (const s of list){
     const r = latestRate[s.id];
     const tr = document.createElement('tr');
     if (!s.is_active) tr.className='inactive';
@@ -1047,14 +1076,18 @@ async function openBrands(){
       `<td class="amount" style="font-weight:700;">${s.mrp!=null?inr(s.mrp):'—'}</td>` +
       `<td class="amount">${r?inr(r.rate_per_case):'<span style="color:#b3382c">not set</span>'}</td>` +
       `<td>${s.is_active?'✔':'✖'}</td>` +
-      (isDir()?`<td style="white-space:nowrap"><button class="mini" onclick="skuPriceEdit('${s.id}')">Edit price</button> <button class="mini" data-act="toggle">${s.is_active?'Deactivate':'Reactivate'}</button></td>`:'');
+      (isDir()?`<td style="white-space:nowrap"><button class="mini" onclick="skuPriceEdit('${s.id}')">Edit price</button> <button class="mini" data-act="toggle">${s.is_active?'Deactivate':'Reactivate'}</button> ${dirDelBtn('sales','skus', s.id, 'SKU '+s.sku_code, "openBrands()")}</td>`:'');
     if (isDir()) tr.querySelector('button[data-act="toggle"]').onclick = async ()=>{
       const { error } = await db.schema('sales').from('skus').update({is_active: !s.is_active}).eq('id', s.id);
       if (!error) openBrands();
     };
     tb.appendChild(tr);
   }
-  applyDirOnly(); show('brands');
+}
+async function brandTog(id, on){
+  const { error } = await db.schema('sales').from('brands').update({ is_active: on===true || on==='true' }).eq('id', id);
+  if (error){ alert('Could not update the brand: ' + error.message); return; }
+  openBrands();
 }
 function brandEdit(id){
   const b = M.brands.find(x=>x.id===id); if(!b) return;
