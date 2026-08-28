@@ -224,8 +224,6 @@
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Party Master</h2>
       <p>Distributors and vendors — kept in separate lists. One row each, forever. Deactivate, never delete.</p></div>
-    <div class="toolbar"><button class="btn gold sm" onclick="openPartyEdit(null,'DISTRIBUTOR')">+ Add distributor</button>
-      <button class="btn ghost sm" onclick="openPartyEdit(null,'VENDOR')">+ Add vendor</button></div>
     <h4 class="sec">🤝 Distributors (<span id="party-count-d">0</span>)</h4>
     <div class="table-scroll"><table>
       <thead><tr><th>Code</th><th>Name</th><th>City</th><th>Territory</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
@@ -979,8 +977,8 @@ async function openParties(){
     }
   }
   $('party-count-d').textContent = nD; $('party-count-v').textContent = nV;
-  if (!nD) tbD.innerHTML = '<tr><td colspan="7" style="color:#777">No distributors yet — use “+ Add distributor”.</td></tr>';
-  if (!nV) tbV.innerHTML = '<tr><td colspan="7" style="color:#777">No vendors yet — use “+ Add vendor”.</td></tr>';
+  if (!nD) tbD.innerHTML = '<tr><td colspan="7" style="color:#777">No distributors yet — new distributors come in through Onboarding &amp; Vendors.</td></tr>';
+  if (!nV) tbV.innerHTML = '<tr><td colspan="7" style="color:#777">No vendors yet — register vendors through Onboarding &amp; Vendors.</td></tr>';
   show('parties');
 }
 function openPartyEdit(p, kind){
