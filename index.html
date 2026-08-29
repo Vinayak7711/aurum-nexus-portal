@@ -4483,6 +4483,7 @@ async function mailList(){
       <b style="font-size:14px;">${esc(box.address)}</b>
       <button class="chip ${mailFolder==='IN'?'on':''}" onclick="mailFolder='IN';mailOpen=null;mailPage=0;mailList()">Inbox</button>
       <button class="chip ${mailFolder==='SENT'?'on':''}" onclick="mailFolder='SENT';mailOpen=null;mailPage=0;mailList()">Sent</button>
+      <button class="chip ${mailFolder==='ARCHIVE'?'on':''}" onclick="mailFolder='ARCHIVE';mailOpen=null;mailPage=0;mailList()" title="Archived emails are kept forever — never auto-deleted">🗂 Archive</button>
       <button class="chip ${mailFolder==='TRASH'?'on':''}" onclick="mailFolder='TRASH';mailOpen=null;mailPage=0;mailList()">🗑 Trash</button>
       ${mailFolder==='TRASH'
         ? `<button class="btn ghost sm" onclick="mailEmptyTrash()" style="color:#c0392b;border-color:#c0392b;">Empty trash</button>`
@@ -4500,7 +4501,8 @@ async function mailList(){
     <div id="mail-lblpanel" style="display:none;"></div>
     <div id="mail-bulk" style="display:none;gap:8px;align-items:center;margin:6px 0;padding:8px 10px;background:#faf6ea;border:1px solid #e2d9be;border-radius:8px;flex-wrap:wrap;">
       <b style="font-size:12.5px;"><span id="mail-selcount">0</span> selected</b>
-      ${mailFolder==='IN'?`<button class="mini" onclick="mailBulk('read')">Mark read</button><button class="mini" onclick="mailBulk('unread')">Mark unread</button><button class="mini" onclick="mailBulk('handled')">✔ Mark handled</button>`:''}
+      ${mailFolder==='IN'?`<button class="mini" onclick="mailBulk('read')">Mark read</button><button class="mini" onclick="mailBulk('unread')">Mark unread</button><button class="mini" onclick="mailBulk('handled')">✔ Mark handled</button><button class="mini" onclick="mailBulk('archive')">🗂 Archive</button>`:''}
+      ${mailFolder==='ARCHIVE'?`<button class="mini" onclick="mailBulk('unarchive')">↩ Move to inbox</button>`:''}
       ${mailFolder!=='TRASH'?`<button class="mini" onclick="mailBulk('trash')" style="color:#c0392b;">🗑 Move to Trash</button>`:''}
       ${mailFolder==='TRASH'?`<button class="mini" onclick="mailBulk('restore')">↩ Restore</button>`:''}
       <button class="mini" onclick="mailSelAll(false)">Clear selection</button>
@@ -4513,13 +4515,13 @@ async function mailList(){
       `<td>${unread?'<b>':''}${esc((m.subject||'(no subject)').slice(0,80))}${unread?'</b>':''}${m.has_attachments?' <span title="Has attachments">📎</span>':''}<span id="lblcell-${m.id}">${(m.mlabels||[]).map(x=>{const l=lblById[x.label_id]; return l?`<span style="background:${l.color};color:#fff;border-radius:8px;padding:1px 7px;font-size:10.5px;margin-left:5px;white-space:nowrap;">${esc(l.name)}</span>`:'';}).join('')}</span></td>` +
       `<td style="font-size:12px;">${m.sent_at? new Date(m.sent_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—'}</td>` +
       `<td>${mailFolder==='IN'?(m.is_handled?'✔':'—'):''}</td>` +
-      `<td style="white-space:nowrap;"><button class="btn ghost sm" onclick="event.stopPropagation();mailLblMenu(event,'${m.id}')" title="Add or remove labels">🏷</button> ${mailFolder==='TRASH'
+      `<td style="white-space:nowrap;"><button class="btn ghost sm" onclick="event.stopPropagation();mailLblMenu(event,'${m.id}')" title="Add or remove labels">🏷</button> ${mailFolder==='IN'?`<button class="btn ghost sm" onclick="event.stopPropagation();mailArchive('${m.id}')" title="Archive — keep forever, never auto-deleted">🗂</button> `:''}${mailFolder==='ARCHIVE'?`<button class="btn ghost sm" onclick="event.stopPropagation();mailUnarchive('${m.id}')" title="Move back to inbox">↩</button> `:''}${mailFolder==='TRASH'
         ? `<button class="btn ghost sm" onclick="event.stopPropagation();mailRestore('${m.id}')" title="Put back">↩ Restore</button>`
         : `<button class="btn ghost sm" onclick="event.stopPropagation();mailTrash('${m.id}')" title="Move to Trash" style="color:#c0392b;">🗑</button>`}</td></tr>`;}).join('')
-      || `<tr><td colspan="7" style="color:#777">${term||mailStarOnly||mailLabelFilter?'No emails match this search or filter.':(mailFolder==='TRASH'?'Trash is empty.':'Nothing here yet — press “Check for new mail”.')}</td></tr>`}
+      || `<tr><td colspan="7" style="color:#777">${term||mailStarOnly||mailLabelFilter?'No emails match this search or filter.':(mailFolder==='TRASH'?'Trash is empty.':(mailFolder==='ARCHIVE'?'Archive is empty — open an inbox email and press 🗂 Archive to keep it here forever.':'Nothing here yet — press “Check for new mail”.'))}</td></tr>`}
     </tbody></table></div>
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;">
-      <span style="font-size:12px;color:#888;">${mailCount} email${mailCount===1?'':'s'}${pages>1?` · page ${mailPage+1} of ${pages}`:''}</span>
+      <span style="font-size:12px;color:#888;">${mailCount} email${mailCount===1?'':'s'}${pages>1?` · page ${mailPage+1} of ${pages}`:''}${mailFolder==='IN'?' · Inbox mail is cleared after 90 days — ★ star or 🗂 archive what you want to keep forever':''}${mailFolder==='ARCHIVE'?' · Archived mail is kept forever':''}</span>
       ${mailPager(pages)}
     </div>
     <div id="mail-read"></div>`;
@@ -4632,9 +4634,11 @@ async function mailBulk(action){
     else if (action==='restore') r = await M2.rpc('restore_message', { p_msg: id });
     else if (action==='read') r = await M2.rpc('mark_read', { p_msg: id, p_undo: false });
     else if (action==='unread') r = await M2.rpc('mark_read', { p_msg: id, p_undo: true });
+    else if (action==='archive') r = await M2.rpc('archive_message', { p_msg: id });
+    else if (action==='unarchive') r = await M2.rpc('unarchive_message', { p_msg: id });
     if (r && r.error) failed++;
   }
-  const verb = {handled:'marked handled', trash:'moved to Trash', restore:'restored', read:'marked read', unread:'marked unread'}[action] || 'updated';
+  const verb = {handled:'marked handled', trash:'moved to Trash', restore:'restored', read:'marked read', unread:'marked unread', archive:'archived — kept forever', unarchive:'moved back to the inbox'}[action] || 'updated';
   say('mail-sync-msg', (ids.length-failed)+' email(s) '+verb+(failed?' · '+failed+' failed':''), !failed);
   mailOpen = null; mailList();
 }
@@ -4670,8 +4674,12 @@ function mailRead(id){
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
         ${mailFolder==='IN' ? `<button class="btn gold sm" onclick="mailCompose('${m.id}')">Reply</button>
         <button class="btn ghost sm" onclick="mailForward('${m.id}')" title="Send this email on to someone else — original text and attachments included">↪ Forward</button>
-        <button class="btn ghost sm" onclick="mailHandled('${m.id}', ${m.is_handled})">${m.is_handled?'Mark unhandled':'Mark handled'}</button>` : ''}
+        <button class="btn ghost sm" onclick="mailHandled('${m.id}', ${m.is_handled})">${m.is_handled?'Mark unhandled':'Mark handled'}</button>
+        <button class="btn ghost sm" onclick="mailArchive('${m.id}')" title="Keep this email forever — archived mail is never auto-deleted">🗂 Archive</button>` : ''}
         ${mailFolder==='SENT' ? `<button class="btn ghost sm" onclick="mailForward('${m.id}')" title="Send this email on to someone else">↪ Forward</button>` : ''}
+        ${mailFolder==='ARCHIVE' ? `<button class="btn gold sm" onclick="mailCompose('${m.id}')">Reply</button>
+        <button class="btn ghost sm" onclick="mailForward('${m.id}')" title="Send this email on to someone else">↪ Forward</button>
+        <button class="btn ghost sm" onclick="mailUnarchive('${m.id}')" title="Move back to the inbox">↩ Move to inbox</button>` : ''}
         ${mailFolder==='TRASH'
           ? `<button class="btn ghost sm" onclick="mailRestore('${m.id}')">↩ Restore</button>`
           : `<button class="btn ghost sm" onclick="mailTrash('${m.id}')" style="color:#c0392b;">🗑 Delete</button>`}
@@ -4783,6 +4791,16 @@ async function mailRestore(id){
   const { error } = await db.schema('mail').rpc('restore_message', { p_msg: id });
   if (error){ say('mail-sync-msg','Could not restore: '+error.message,false); return; }
   mailOpen = null; say('mail-sync-msg','Restored.',true); mailList();
+}
+async function mailArchive(id){
+  const { error } = await db.schema('mail').rpc('archive_message', { p_msg: id });
+  if (error){ say('mail-sync-msg','Could not archive: '+error.message,false); return; }
+  mailOpen = null; say('mail-sync-msg','Archived — this email is kept forever and never auto-deleted.',true); mailList();
+}
+async function mailUnarchive(id){
+  const { error } = await db.schema('mail').rpc('unarchive_message', { p_msg: id });
+  if (error){ say('mail-sync-msg','Could not move it: '+error.message,false); return; }
+  mailOpen = null; say('mail-sync-msg','Moved back to the inbox.',true); mailList();
 }
 async function mailEmptyTrash(){
   const box = mailBoxes.find(b=>b.key===mailBox); if (!box) return;
