@@ -4684,10 +4684,35 @@ async function mailLoadHtml(msgId){
     const { data } = await db.schema('mail').from('message_html').select('html').eq('message_id', msgId).maybeSingle();
     if (!data || !data.html) return;
     if (!mailOpen || mailOpen.id !== msgId) return;   // user opened a different mail meanwhile
+    let html = data.html;
+    // Inline images: emails embed pictures (logos, signatures) as cid: references that
+    // point at their own attachments — swap each one for the stored image so it shows.
+    if (/cid:/i.test(html)){
+      try {
+        const { data: atts } = await db.schema('mail').from('attachments')
+          .select('id, filename, content_id, content_type').eq('message_id', msgId);
+        const refs = [...new Set((html.match(/["'(]\s*cid:([^"')\s>]+)/gi)||[]).map(s=>s.replace(/^["'(]\s*cid:/i,'')))];
+        for (const cid of refs.slice(0, 20)){
+          const norm = String(cid).toLowerCase();
+          const stem = norm.split('@')[0];
+          const a = (atts||[]).find(x => (x.content_id||'').toLowerCase() === norm)
+            || (atts||[]).find(x => (x.content_id||'').toLowerCase() === stem)
+            || (atts||[]).find(x => String(x.filename||'').toLowerCase() === stem)
+            || (atts||[]).find(x => stem && String(x.filename||'').toLowerCase().indexOf(stem) >= 0)
+            || (atts||[]).find(x => { const fn = String(x.filename||'').toLowerCase().replace(/\.[a-z0-9]+$/,''); return fn && norm.indexOf(fn) >= 0; });
+          if (!a) continue;
+          const { data: full } = await db.schema('mail').from('attachments').select('data_b64, content_type').eq('id', a.id).single();
+          if (!full || !full.data_b64) continue;
+          const dataUrl = 'data:' + (full.content_type||'image/png') + ';base64,' + String(full.data_b64).replace(/\s/g,'');
+          html = html.split('cid:' + cid).join(dataUrl);
+        }
+      } catch(e){ /* images stay as placeholders; text still shows */ }
+    }
+    if (!mailOpen || mailOpen.id !== msgId) return;
     const ifr = document.createElement('iframe');
     ifr.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
     ifr.style.cssText = 'width:100%;height:62vh;border:1px solid #eadfce;border-radius:8px;background:#fff;';
-    ifr.srcdoc = '<base target="_blank"><meta charset="utf-8">' + data.html;
+    ifr.srcdoc = '<base target="_blank"><meta charset="utf-8">' + html;
     host.innerHTML = '';
     host.appendChild(ifr);
     const note = document.createElement('div');
