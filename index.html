@@ -711,9 +711,10 @@ async function loadMasters(){
 async function openAdmin(){
   const { data, error } = await db.schema('adm').from('users').select('*').order('full_name');
   if (error){ say('od-msg','Could not load users: '+error.message,false); return; }
-  allUsers = data || [];
+  // Deleted people never appear in the list — only current (and deactivated-but-kept) staff show.
+  allUsers = (data || []).filter(u => !u.deleted_at);
   const tb = $('user-rows'); tb.innerHTML = '';
-  for (const u of data){
+  for (const u of allUsers){
     const tr = document.createElement('tr');
     if (!u.is_active) tr.className = 'inactive';
     tr.innerHTML =
@@ -733,7 +734,12 @@ async function delUser(u){
   if (!confirm('Delete ' + u.full_name + ' (' + u.email + ') from the ERP?\n\nThey immediately lose all access. If they have past records (orders, entries, mail), they are deactivated instead so your books stay intact.')) return;
   const { data, error } = await db.schema('adm').rpc('delete_user', { p_user: u.id });
   if (error){ alert('Could not delete: ' + error.message); return; }
-  if (data === 'deactivated') alert(u.full_name + ' has past records in the ERP, so the account was deactivated (all access removed) rather than erased — their history stays intact.');
+  if (data === 'deactivated'){
+    // Their history stays intact in the books, but the name is stamped deleted
+    // so it disappears from this list (and every other people list) for good.
+    await db.schema('adm').from('users').update({ deleted_at: new Date().toISOString() }).eq('id', u.id);
+    alert(u.full_name + ' has been removed. Their past records stay intact in the books, but the name will no longer appear in any list.');
+  }
   openAdmin();
 }
 function openEdit(u){
