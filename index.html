@@ -4658,7 +4658,8 @@ function mailRead(id){
     <div class="card" style="margin-top:14px;">
       <h3 style="font-size:15px;">${esc(m.subject||'(no subject)')}</h3>
       <p style="font-size:12px;color:#555;margin:6px 0;">${esc(m.from_addr||'')} → ${esc(m.to_addr||'')} · ${m.sent_at? new Date(m.sent_at).toLocaleString('en-IN') : ''}</p>
-      <pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;background:#faf8f4;padding:12px;border-radius:8px;max-height:420px;overflow:auto;">${esc(m.body_text||'(empty)')}</pre>
+      <pre id="mail-pre" style="white-space:pre-wrap;font-family:inherit;font-size:13px;background:#faf8f4;padding:12px;border-radius:8px;max-height:420px;overflow:auto;">${esc(m.body_text||'(empty)')}</pre>
+      <div id="mail-html"></div>
       <div id="mail-atts" style="margin-top:10px;"></div>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
         ${mailFolder==='IN' ? `<button class="btn gold sm" onclick="mailCompose('${m.id}')">Reply</button>
@@ -4672,7 +4673,38 @@ function mailRead(id){
       <div id="mail-read-msg"></div>
     </div>`;
   mailLoadAtts(m.id);
+  mailLoadHtml(m.id);
   $('mail-read').scrollIntoView({behavior:'smooth'});
+}
+// Rich (HTML) email view — the original formatted email, shown inside a locked
+// frame: no scripts can run, links open in a new tab. Falls back to plain text.
+async function mailLoadHtml(msgId){
+  const host = $('mail-html'); if (!host) return;
+  try {
+    const { data } = await db.schema('mail').from('message_html').select('html').eq('message_id', msgId).maybeSingle();
+    if (!data || !data.html) return;
+    if (!mailOpen || mailOpen.id !== msgId) return;   // user opened a different mail meanwhile
+    const ifr = document.createElement('iframe');
+    ifr.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+    ifr.style.cssText = 'width:100%;height:62vh;border:1px solid #eadfce;border-radius:8px;background:#fff;';
+    ifr.srcdoc = '<base target="_blank"><meta charset="utf-8">' + data.html;
+    host.innerHTML = '';
+    host.appendChild(ifr);
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:11px;color:#999;margin-top:4px;';
+    note.innerHTML = 'Showing the original formatted email · <a href="#" onclick="mailPlainTog(this);return false;" style="color:#7a6a4a;">show plain text instead</a>';
+    host.appendChild(note);
+    const pre = $('mail-pre'); if (pre) pre.style.display = 'none';
+  } catch(e){ /* plain text stays visible */ }
+}
+function mailPlainTog(a){
+  const pre = $('mail-pre'); const host = $('mail-html');
+  const ifr = host ? host.querySelector('iframe') : null;
+  if (!pre || !ifr) return;
+  const showPlain = pre.style.display === 'none';
+  pre.style.display = showPlain ? '' : 'none';
+  ifr.style.display = showPlain ? 'none' : '';
+  a.textContent = showPlain ? 'show formatted email instead' : 'show plain text instead';
 }
 function fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
 async function mailLoadAtts(msgId){
