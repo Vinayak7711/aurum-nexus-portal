@@ -128,9 +128,13 @@
 <div class="screen" id="scr-parties">
   <header><button class="back" onclick="go('scr-home')">‹</button><h1>Select Party</h1></header>
   <div class="content">
-    <input type="text" id="partySearch" placeholder="🔍  Search party…" oninput="renderParties(this.value)">
-    <div id="partyList" style="display:flex;flex-direction:column;gap:10px;"></div>
-    <div class="muted" style="text-align:center;" id="partyHint"></div>
+    <div class="card">
+      <label>Party</label>
+      <select id="partyPick" onchange="pickParty()"></select>
+      <div style="height:6px"></div>
+      <div class="muted" id="partyHint"></div>
+    </div>
+    <button class="btn btn-primary" id="partyGoBtn" disabled onclick="goParty()">Start visit →</button>
     <button class="btn btn-ghost" onclick="openRetailers()">🏪 Party not in this list? Choose from the vendor list →</button>
   </div>
 </div>
@@ -321,18 +325,20 @@ async function refreshStats(){
   $('statOrders').textContent = (data||[]).filter(v=>v.order_id).length;
 }
 
-/* ================= parties ================= */
-function openParties(){ renderParties(''); $('partySearch').value=''; go('scr-parties'); }
-function renderParties(q){
-  const list = $('partyList'); list.innerHTML = '';
-  parties.filter(p => (p.name+' '+(p.city||'')+' '+p.code).toLowerCase().includes(q.toLowerCase()))
-    .forEach(p => {
-      const el = document.createElement('div'); el.className = 'vendor';
-      el.innerHTML = `<div class="avatar">${esc(p.name[0])}</div>
-        <div class="info"><b>${esc(p.name)}</b><span>${esc(p.code)} · ${esc(p.city||'')}</span></div><span style="color:#b8c4d0;font-size:20px;">›</span>`;
-      el.onclick = () => startVisit({ ...p, kind:'party' });
-      list.appendChild(el);
-    });
+/* ================= parties (compact dropdown, not a long list) ================= */
+function openParties(){
+  $('partyPick').innerHTML = '<option value="">— Choose the party —</option>' +
+    parties.map(p => `<option value="${p.id}">${esc(p.name)}${p.city?' · '+esc(p.city):''} (${esc(p.code)})</option>`).join('');
+  $('partyGoBtn').disabled = true;
+  $('partyHint').textContent = parties.length
+    ? `${parties.length} part${parties.length===1?'y':'ies'} assigned to you`
+    : 'No parties assigned to you yet — ask the Director to set you as owner in Nexus.';
+  go('scr-parties');
+}
+function pickParty(){ $('partyGoBtn').disabled = !$('partyPick').value; }
+function goParty(){
+  const p = parties.find(x => x.id === $('partyPick').value);
+  if (p) startVisit({ ...p, kind:'party' });
 }
 
 /* ================= vendor (retailer) list ================= */

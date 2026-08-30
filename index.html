@@ -6553,14 +6553,26 @@ async function fieldLoadVisits(){
         ${gps}<br>
         ${v.so_no?`🛒 <b>Order ${esc(v.so_no)}</b><br>`:''}
         ${v.notes?`📝 ${esc(v.notes)}`:'<span style="color:#aaa">No notes</span>'}
-      </div></div>`;
+      </div>
+      ${isDir()?`<button class="mini" style="align-self:flex-start;color:#c0392b;border-color:#c0392b;flex-shrink:0;" onclick="fvDelete('${v.id}','${esc(v.party).replace(/'/g,'')}','${esc(v.salesman).replace(/'/g,'')}')">🗑 Delete</button>`:''}
+    </div>`;
   }).join('');
-  html+='</div>';
+  html+='</div><p style="font-size:11.5px;color:#777;margin-top:10px;">Visit records clean themselves up: anything older than <b>45 days</b> is removed automatically every night. Orders taken during a visit and the daily activity history are never touched by this.</p>';
   B.innerHTML=html;
   for(const img of B.querySelectorAll('img[data-path]')){
     try{ const {data:s}=await db.storage.from(FBUCKET).createSignedUrl(img.dataset.path,3600);
       if(s&&s.signedUrl){ img.src=s.signedUrl; img.onclick=()=>window.open(s.signedUrl,'_blank','noopener'); } }catch(e){}
   }
+}
+
+// Director removes one check-in: the record goes, the day's activity count steps
+// back, the linked order (if any) stays, and the selfie file is cleared too.
+async function fvDelete(id, party, salesman){
+  if (!confirm(`Delete this visit?\n\n${salesman} → ${party}\n\nThe visit record and its selfie are removed. Any order taken during it stays in Sales & Orders.`)) return;
+  const { data: selfiePath, error } = await db.schema('sales').rpc('delete_field_visit', { p_visit: id });
+  if (error){ alert('Could not delete: ' + error.message); return; }
+  if (selfiePath) await db.storage.from(FBUCKET).remove([selfiePath]).catch(()=>{});
+  fieldLoadVisits();
 }
 
 async function fieldLoadCreds(){
