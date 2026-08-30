@@ -493,6 +493,9 @@
     </select>
     <label style="margin-top:14px;">Module permissions (ignored for Directors, who get all)</label>
     <div class="permgrid" id="permgrid"></div>
+    <label style="margin-top:16px;">Sections visible inside each module (ignored for Directors)</label>
+    <p style="font-size:11.5px;color:#666;margin:2px 0 6px;">Untick a section and this person will not see that tab at all. Untick every section of a module and the module disappears from their home screen.</p>
+    <div id="secgrid"></div>
     <div class="switch"><input type="checkbox" id="edit-active"><span>Account active</span></div>
     <div class="row2" style="margin-top:16px;">
       <button class="btn ghost" onclick="closeSheet('edit-overlay')">Cancel</button>
@@ -605,6 +608,62 @@ const MODULES = [
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
 ];
 const PERM_ACTIONS = ['view','add','edit','admin'];
+
+/* ---- SECTION-LEVEL ACCESS ----------------------------------------------
+   Beyond "can this person open the module", the Director can allow or deny
+   each individual TAB inside it. Keys are the tab buttons' own element ids.
+   Rule: if a user has no "sec" map for a module, every tab is visible (that
+   is how everyone worked before this existed); once the Director unticks
+   anything, only the ticked tabs show — the rest disappear for that person. */
+const SECTIONS = {
+  party:    [['pm-d','Distributors list'],['pm-v','Vendors list'],['pm-r','Retailers list'],
+             ['ot-apps','Distributor applications'],['ot-vendors','Register vendor'],['ot-retailers','Register retailer']],
+  reports:  [['rp-today','Today'],['rp-mine','My month'],['rp-team','Team'],['rp-targets','Targets'],
+             ['fld-visits','Field visits'],['fld-salesmen','Salesmen'],['fld-creds','App credentials']],
+  salesrep: [['sr-dist','Distributor-wise (primary)'],['sr-ret','Retailer-wise (secondary)']],
+  brand:    [],
+  mfg:      [['mt-fg','FG stock'],['mt-batches','Batches & QC'],['mt-report','Production report'],['mt-rm','Raw material']],
+  prod:     [['pd-targets','Targets & completion'],['pd-log','Update log']],
+  tasks:    [['kt-my','My tasks'],['kt-all','All tasks'],['kt-duties','Duties']],
+  mkt:      [['mk-budget','Budget & utilisation'],['mk-spend','Spends'],['mk-requests','Budget requests'],['mk-schemes','Scheme master']],
+  purchase: [['pu-pos','Purchase orders'],['pu-new','New PO'],['pu-req','Material requests'],
+             ['pu-grn','Receipts & QC'],['pu-store','RM store'],['pu-hist','PO history']],
+  acct:     [['ac-banks','Banks'],['ac-newe','New entry'],['ac-ledger','Ledger'],['ac-petty','Petty cash'],
+             ['ac-tax','Purchase tax'],['ac-vdues','Vendor dues'],['ac-exp','Expenses'],['ac-salary','Salary'],
+             ['ac-adv','Advances'],['ac-assets','Assets']],
+  rates:    [['rt-rates','Billing rates'],['rt-struct','Duty structure'],['rt-out','Outstanding'],['rt-cm','MMC payable']],
+};
+// view id -> module key, so sections can be applied whenever a screen opens
+const VIEW_MOD = { parties:'party', reports:'reports', salesrep:'salesrep', mfg:'mfg', prod:'prod',
+                   tasks:'tasks', mkt:'mkt', purchase:'purchase', acct:'acct', rates:'rates' };
+function secAllowed(modKey, tabId){
+  if (isDir()) return true;
+  const sec = ((me && me.permissions_json || {})[modKey] || {}).sec;
+  if (!sec || typeof sec !== 'object') return true;      // nothing restricted for this person
+  return sec[tabId] !== false;                            // unknown/new tabs stay visible
+}
+function secAnyAllowed(modKey){
+  const list = SECTIONS[modKey];
+  if (!list || !list.length) return true;
+  return list.some(([id]) => secAllowed(modKey, id));
+}
+let __secBusy = false;
+function applySections(modKey){
+  const list = SECTIONS[modKey];
+  if (!list || !list.length || __secBusy) return;
+  let active = null, firstVisible = null;
+  for (const [id] of list){
+    const el = $(id); if (!el) continue;
+    const ok = secAllowed(modKey, id);
+    if (!ok){ el.classList.add('hidden'); continue; }   // denied here; other rules may hide it too
+    if (!el.classList.contains('hidden')){ firstVisible = firstVisible || el; if (el.classList.contains('on')) active = el; }
+  }
+  // if the tab they are standing on is not theirs to see, move them to the first one that is
+  if (!active && firstVisible){
+    __secBusy = true;
+    try { firstVisible.click(); } finally { setTimeout(()=>{ __secBusy = false; }, 0); }
+  }
+}
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let me = null, editing = null, editingParty = null, allUsers = [];
 let M = { brands:[], skus:[], mfrs:[], cats:[], users:[], parties:[] };  // master cache
@@ -617,6 +676,7 @@ function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':
 function show(view){
   for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
     $('view-'+v).classList.toggle('hidden', v!==view);
+  if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
   window.scrollTo(0,0);
 }
 function closeSheet(id){ $(id).classList.add('hidden'); }
@@ -696,6 +756,7 @@ function drawModules(){
     if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS())) continue;
     if (m.fieldOnly && !(isDir() || window.__hasReports)) continue;
     if (m.docsOnly && !(isDir() || me?.permissions_json?.docs?.view || me?.permissions_json?.docs?.add || me?.permissions_json?.docs?.edit)) continue;
+    if (!secAnyAllowed(m.key)) continue;   // every tab inside was taken away — hide the module itself
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
     el.innerHTML = `<div class="ico">${m.ico}</div><h3>${m.name}</h3><p>${m.desc}</p>` +
@@ -758,6 +819,9 @@ async function delUser(u){
   }
   openAdmin();
 }
+function secAll(modKey, on){
+  document.querySelectorAll('.secbox-'+modKey).forEach(cb => { cb.checked = on; });
+}
 function openEdit(u){
   editing = u;
   $('edit-name').textContent  = u.full_name;
@@ -791,6 +855,22 @@ function openEdit(u){
       `<div><input type="checkbox" data-mod="finance" data-act="approve" ${p.approve?'checked':''}></div>` +
       '</div>');
   }
+  // ---- per-section (tab) visibility ----
+  const sg = $('secgrid'); sg.innerHTML = '';
+  for (const m of MODULES){
+    const list = SECTIONS[m.key];
+    if (!list || !list.length) continue;
+    const sec = ((u.permissions_json||{})[m.key]||{}).sec || {};
+    sg.insertAdjacentHTML('beforeend',
+      `<div style="border:1px solid #e6e0d2;border-radius:8px;padding:8px 10px;margin-bottom:8px;">
+         <div style="font-size:12.5px;font-weight:700;margin-bottom:4px;">${m.ico} ${esc(m.name)}
+           <a href="#" onclick="secAll('${m.key}',true);return false;" style="font-weight:normal;font-size:11px;color:#1c2455;margin-left:8px;">all</a>
+           <a href="#" onclick="secAll('${m.key}',false);return false;" style="font-weight:normal;font-size:11px;color:#b3261e;margin-left:6px;">none</a></div>
+         <div style="display:flex;gap:12px;flex-wrap:wrap;">` +
+      list.map(([id,label])=>`<label style="font-weight:normal;font-size:12px;display:flex;gap:4px;align-items:center;">
+           <input type="checkbox" class="secbox-${m.key}" data-secmod="${m.key}" data-sec="${id}" ${sec[id]===false?'':'checked'}>${esc(label)}</label>`).join('') +
+      '</div></div>');
+  }
   say('edit-msg','');
   $('edit-overlay').classList.remove('hidden');
 }
@@ -800,6 +880,16 @@ $('btn-save-user').onclick = async () => {
   document.querySelectorAll('#permgrid input[type=checkbox]').forEach(cb=>{
     if (cb.checked){ (perms[cb.dataset.mod] ??= {})[cb.dataset.act] = true; }
   });
+  // section (tab) visibility — stored per module as sec:{tabId:true/false}
+  const secOf = {};
+  document.querySelectorAll('#secgrid input[type=checkbox]').forEach(cb=>{
+    (secOf[cb.dataset.secmod] ??= {})[cb.dataset.sec] = cb.checked;
+  });
+  for (const [mod, sec] of Object.entries(secOf)){
+    const allOn = Object.values(sec).every(Boolean);
+    if (allOn){ if (perms[mod]) delete perms[mod].sec; }          // nothing restricted — keep it clean
+    else (perms[mod] ??= {}).sec = sec;
+  }
   const patch = {
     full_name: $('edit-fullname').value.trim() || editing.full_name,
     designation: $('edit-designation').value.trim() || null,
@@ -2040,8 +2130,8 @@ function srShell(B){
   window.__srB = B;
   B.innerHTML = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
-      <button class="chip ${srMode==='dist'?'on':''}" onclick="srMode='dist';srReload()">🤝 Distributor-wise (primary sale)</button>
-      <button class="chip ${srMode==='ret'?'on':''}" onclick="srMode='ret';srReload()">🏪 Retailer-wise (secondary sale)</button>
+      <button class="chip ${srMode==='dist'?'on':''}" id="sr-dist" onclick="srMode='dist';srReload()">🤝 Distributor-wise (primary sale)</button>
+      <button class="chip ${srMode==='ret'?'on':''}" id="sr-ret" onclick="srMode='ret';srReload()">🏪 Retailer-wise (secondary sale)</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
       <button class="chip ${srPeriod==='day'?'on':''}" onclick="srPeriod='day';srReload()">Daily (today)</button>
@@ -2051,6 +2141,7 @@ function srShell(B){
       ${srPeriod==='range'?`<input type="date" id="sr-from" value="${window.__srFrom||todayISO()}" style="width:auto;"> <span style="color:#777;">to</span> <input type="date" id="sr-to" value="${window.__srTo||todayISO()}" style="width:auto;"> <button class="mini" onclick="window.__srFrom=$('sr-from').value;window.__srTo=$('sr-to').value;srReload()">Apply</button>`:''}
     </div>
     <div id="sr-body"><p style="color:#777">Loading…</p></div>`;
+  applySections('salesrep');
   srRender();
 }
 function srDates(){
