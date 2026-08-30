@@ -902,7 +902,7 @@ $('btn-create-order').onclick = async () => {
 async function openOrderDetail(id){
   const S = db.schema('sales');
   const { data: o, error } = await S.from('orders')
-    .select('*, party:parties(code,name,city), approver:approved_by(full_name)').eq('id', id).single();
+    .select('*, party:parties(code,name,city)').eq('id', id).single();
   if (error){ say('od-msg','Load failed: '+error.message,false); return; }
   const { data: lines } = await S.from('order_lines')
     .select('*, sku:skus(sku_code, units_per_case)').eq('order_id', id).order('id');
