@@ -436,10 +436,11 @@
   <section id="view-onboard" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Onboarding &amp; Vendors</h2>
-      <p>Distributor applications (AS/SALES/DO-01) and vendor registrations. Approval creates the party — no re-typing.</p></div>
+      <p>Distributor applications (AS/SALES/DO-01), vendor registrations and the retailer register. Approval creates the party — no re-typing.</p></div>
     <div class="subtabs">
       <button class="chip on" id="ot-apps" onclick="onbTab('apps')">Distributor applications</button>
       <button class="chip" id="ot-vendors" onclick="onbTab('vendors')">Vendors</button>
+      <button class="chip" id="ot-retailers" onclick="onbTab('retailers')">🏪 Retailers</button>
     </div>
     <div id="onb-body"></div>
   </section>
@@ -1530,7 +1531,7 @@ async function rmReceive(id){
 /* ================= MODULE 2: ONBOARDING & VENDORS ================= */
 async function openOnboard(){ await loadMasters(); onbTab('apps'); show('onboard'); }
 async function onbTab(which){
-  ['apps','vendors'].forEach(k => $('ot-'+k).classList.toggle('on', k===which));
+  ['apps','vendors','retailers'].forEach(k => $('ot-'+k).classList.toggle('on', k===which));
   const B = $('onb-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
   const S = db.schema('sales');
   if (which === 'apps'){
@@ -1581,6 +1582,86 @@ async function onbTab(which){
     }
     B.innerHTML = html + '</tbody></table></div>';
   }
+  if (which === 'retailers'){
+    const { data, error } = await S.from('retailers').select('*').order('created_at',{ascending:false});
+    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    window.__rtRows = data || [];
+    const catOpts = '<option value="">— Category —</option>' + RETAILER_CATS.map(c=>`<option value="${c}">${c}</option>`).join('');
+    let html = `<div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Add retailer</h2>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-name" placeholder="Retailer / shop name *">
+      <select id="rt-cat">${catOpts}</select></div>
+      <div style="margin-top:8px;"><input type="text" id="rt-address" placeholder="Address" style="width:100%;"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-phone" placeholder="Contact number">
+      <input type="text" id="rt-license" placeholder="License number"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-contact" placeholder="Contact person">
+      <input type="text" id="rt-district" placeholder="District"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-area" placeholder="Area / locality">
+      <button class="btn gold sm" style="padding:11px;" onclick="rtAdd()">Add retailer</button></div>
+      <div id="rt-msg"></div></div>
+      <div id="rt-editbox"></div>`;
+    html += '<div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>District</th><th>Area</th><th>Contact</th><th>Status</th><th></th></tr></thead><tbody>';
+    for (const v of (data||[])){
+      const pill = v.status==='ACTIVE'?'DELIVERED':'CANCELLED';
+      html += `<tr><td><b>${esc(v.code)}</b></td><td>${esc(v.name)}${v.license_no?'<br><span style="font-size:11px;color:#777">Lic: '+esc(v.license_no)+'</span>':''}</td>
+        <td>${esc(v.category||'—')}</td><td>${esc(v.district||'—')}</td><td>${esc(v.area||'—')}</td>
+        <td>${esc(v.contact_person||'—')}${v.phone?'<br><span style="font-size:11px;color:#777">'+esc(v.phone)+'</span>':''}</td>
+        <td><span class="pill ${pill}">${v.status}</span></td>
+        <td style="white-space:nowrap">${isDir()?`<button class="mini" onclick="rtEdit('${v.id}')">Edit</button> `:''}<button class="mini" onclick="rtStatus('${v.id}','${v.status==='ACTIVE'?'INACTIVE':'ACTIVE'}')">${v.status==='ACTIVE'?'Deactivate':'Activate'}</button> ${dirDelBtn('sales','retailers', v.id, v.name, "onbTab('retailers')")}</td></tr>`;
+    }
+    html += (data||[]).length ? '' : '<tr><td colspan="8" style="color:#777">No retailers yet — add the first one above.</td></tr>';
+    B.innerHTML = html + '</tbody></table></div>';
+  }
+}
+const RETAILER_CATS = ['Wine Shop (FL-2)','Permit Room / Bar (FL-3)','Beer Shoppe (FL/BR-2)','Country Liquor (CL-2)','Club (E)','Supermarket / Mall','Other'];
+async function rtAdd(){
+  const name = $('rt-name').value.trim();
+  if (!name){ say('rt-msg','Retailer name is required.',false); return; }
+  const { data: code, error: e1 } = await db.schema('app').rpc('next_code', { p_series: 'RET' });
+  if (e1){ say('rt-msg', e1.message, false); return; }
+  const { error } = await db.schema('sales').from('retailers').insert({
+    code, name, category: $('rt-cat').value||null, address: $('rt-address').value.trim()||null,
+    phone: $('rt-phone').value.trim()||null, license_no: $('rt-license').value.trim()||null,
+    contact_person: $('rt-contact').value.trim()||null, district: $('rt-district').value.trim()||null,
+    area: $('rt-area').value.trim()||null, status: 'ACTIVE', created_by: me.id });
+  if (error){ say('rt-msg', error.message, false); return; }
+  onbTab('retailers');
+}
+async function rtStatus(id, status){
+  const { error } = await db.schema('sales').from('retailers').update({ status }).eq('id', id);
+  if (error){ alert('Could not update: ' + error.message); return; }
+  onbTab('retailers');
+}
+function rtEdit(id){
+  const v = (window.__rtRows||[]).find(x=>x.id===id);
+  if (!v){ alert('Open the Retailers tab again and retry.'); return; }
+  const box = $('rt-editbox'); if (!box) return;
+  const catOpts = RETAILER_CATS.map(c=>`<option value="${c}" ${v.category===c?'selected':''}>${c}</option>`).join('');
+  box.innerHTML = `
+    <div class="card" style="margin-bottom:14px;max-width:680px;border:1px solid #b8860b;"><h2 style="font-size:15px;">Edit ${esc(v.code)} — ${esc(v.name)}</h2>
+      <div class="row2c" style="margin-top:8px;"><div><label>Name *</label><input type="text" id="re-name" value="${esc(v.name)}"></div>
+        <div><label>Category</label><select id="re-cat"><option value="">— Category —</option>${catOpts}</select></div></div>
+      <div style="margin-top:8px;"><label>Address</label><input type="text" id="re-address" value="${esc(v.address||'')}" style="width:100%;"></div>
+      <div class="row2c" style="margin-top:8px;"><div><label>Contact number</label><input type="text" id="re-phone" value="${esc(v.phone||'')}"></div>
+        <div><label>License number</label><input type="text" id="re-license" value="${esc(v.license_no||'')}"></div></div>
+      <div class="row2c" style="margin-top:8px;"><div><label>Contact person</label><input type="text" id="re-contact" value="${esc(v.contact_person||'')}"></div>
+        <div><label>District</label><input type="text" id="re-district" value="${esc(v.district||'')}"></div></div>
+      <div style="margin-top:8px;"><label>Area / locality</label><input type="text" id="re-area" value="${esc(v.area||'')}"></div>
+      <div class="row2" style="margin-top:12px;">
+        <button class="btn ghost sm" onclick="$('rt-editbox').innerHTML=''">Cancel</button>
+        <button class="btn gold sm" onclick="rtEditSave('${v.id}')">Save changes</button></div>
+      <div id="re-msg"></div></div>`;
+  box.scrollIntoView({behavior:'smooth', block:'center'});
+}
+async function rtEditSave(id){
+  const name = $('re-name').value.trim();
+  if (!name){ say('re-msg','Name is required.',false); return; }
+  const { error } = await db.schema('sales').from('retailers').update({
+    name, category: $('re-cat').value||null, address: $('re-address').value.trim()||null,
+    phone: $('re-phone').value.trim()||null, license_no: $('re-license').value.trim()||null,
+    contact_person: $('re-contact').value.trim()||null, district: $('re-district').value.trim()||null,
+    area: $('re-area').value.trim()||null }).eq('id', id);
+  if (error){ say('re-msg','Save failed: '+error.message,false); return; }
+  onbTab('retailers');
 }
 function vnEdit(id){
   const v = (window.__vnRows||[]).find(x=>x.id===id);
