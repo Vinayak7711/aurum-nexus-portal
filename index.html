@@ -194,9 +194,16 @@
       <p class="sub">Cases only — billing values appear after Director approval.</p>
       <label>Distributor</label>
       <select id="no-party"></select>
-      <label>Lines</label>
-      <div class="linegrid" id="no-lines"></div>
-      <button class="btn ghost sm" style="margin-top:8px;" onclick="addLineRow()">+ Add line</button>
+      <label style="margin-top:14px;">Add items — brand first, then its pack, then cases</label>
+      <div class="row2c" style="margin-top:4px;">
+        <select id="nol-brand" onchange="noBrandPick(this.value)"></select>
+        <select id="nol-sku" disabled><option value="">— choose a brand first —</option></select>
+      </div>
+      <div class="row2c" style="margin-top:8px;">
+        <input type="number" id="nol-cases" min="1" placeholder="Number of cases">
+        <button class="btn ghost sm" style="padding:11px;" onclick="noAddLine()">➕ Add line</button>
+      </div>
+      <div id="no-lines-list" style="margin-top:8px;"></div>
       <label>Remarks (optional)</label>
       <input type="text" id="no-remarks" placeholder="e.g. urgent — festival stock">
       <button class="btn gold" id="btn-create-order">Create order</button>
@@ -834,32 +841,56 @@ async function openOrders(){
   applyDirOnly(); show('orders');
 }
 
-let lineCounter = 0;
-function addLineRow(){
-  const opts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
-  $('no-lines').insertAdjacentHTML('beforeend',
-    `<div class="linerow" id="lr-${++lineCounter}">
-       <select data-k="sku">${opts}</select>
-       <input type="number" data-k="cases" placeholder="cases" min="1">
-       <button onclick="document.getElementById('lr-${lineCounter}').remove()">✕</button>
-     </div>`);
+/* New-order lines — systematic entry: Brand → SKU (that brand only) → cases → Add line. */
+let noLines = [];
+function noBrandPick(brandId){
+  const sel = $('nol-sku');
+  if (!brandId){ sel.innerHTML = '<option value="">— choose a brand first —</option>'; sel.disabled = true; return; }
+  const skus = M.skus.filter(s => s.is_active && s.brand_id === brandId);
+  sel.innerHTML = skus.length
+    ? '<option value="">— choose the pack —</option>' + skus.map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('')
+    : '<option value="">— no active SKUs for this brand —</option>';
+  sel.disabled = false;
+}
+function noAddLine(quiet){
+  const brandId = $('nol-brand').value, skuId = $('nol-sku').value, cases = Number($('nol-cases').value);
+  if (!brandId){ if(!quiet) say('no-msg','Choose the brand first.',false); return false; }
+  if (!skuId){ if(!quiet) say('no-msg','Choose the SKU (pack) for that brand.',false); return false; }
+  if (!(cases > 0)){ if(!quiet) say('no-msg','Enter the number of cases.',false); return false; }
+  const sku = M.skus.find(s=>s.id===skuId), brand = M.brands.find(b=>b.id===brandId);
+  const dup = noLines.find(l=>l.sku_id===skuId);
+  if (dup) dup.cases += cases;                              // same SKU twice — just add the cases up
+  else noLines.push({ sku_id: skuId, sku_code: sku?sku.sku_code:'', brand_name: brand?brand.name:'', cases });
+  $('nol-cases').value = ''; $('nol-sku').value = '';
+  say('no-msg',''); noRenderLines();
+  return true;
+}
+function noDelLine(i){ noLines.splice(i,1); noRenderLines(); }
+function noRenderLines(){
+  const box = $('no-lines-list');
+  if (!noLines.length){ box.innerHTML = '<p style="font-size:12.5px;color:#999;margin:4px 0;">No items added yet.</p>'; return; }
+  const tot = noLines.reduce((s,l)=>s+l.cases,0);
+  box.innerHTML = '<div class="table-scroll"><table><thead><tr><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th></th></tr></thead><tbody>' +
+    noLines.map((l,i)=>`<tr><td>${esc(l.brand_name)}</td><td>${esc(l.sku_code)}</td><td class="amount">${l.cases}</td>
+      <td><button class="mini" onclick="noDelLine(${i})" style="color:#b3261e;">✕</button></td></tr>`).join('') +
+    `<tr><td><b>Total</b></td><td></td><td class="amount"><b>${tot}</b></td><td></td></tr></tbody></table></div>`;
 }
 async function openNewOrder(){
   await loadMasters();
   const mine = M.parties.filter(p=>p.is_active && (p.party_type||'DISTRIBUTOR')==='DISTRIBUTOR');
   $('no-party').innerHTML = mine.map(p=>`<option value="${p.id}">${esc(p.code)} — ${esc(p.name)}</option>`).join('');
-  $('no-lines').innerHTML = ''; lineCounter = 0; addLineRow();
+  $('nol-brand').innerHTML = '<option value="">— choose the brand —</option>' +
+    M.brands.filter(b=>b.is_active !== false).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('nol-sku').innerHTML = '<option value="">— choose a brand first —</option>'; $('nol-sku').disabled = true;
+  $('nol-cases').value = ''; noLines = []; noRenderLines();
   $('no-remarks').value = ''; say('no-msg','');
   show('order-new');
 }
 $('btn-create-order').onclick = async () => {
-  const lines = [];
-  document.querySelectorAll('#no-lines .linerow').forEach(r=>{
-    const sku = r.querySelector('[data-k=sku]').value;
-    const cases = Number(r.querySelector('[data-k=cases]').value);
-    if (sku && cases > 0) lines.push({sku_id: sku, cases});
-  });
-  if (!lines.length){ say('no-msg','Add at least one line with cases.',false); return; }
+  // If the entry boxes are filled but "Add line" wasn't pressed, take that line too.
+  if ($('nol-brand').value && $('nol-sku').value && Number($('nol-cases').value) > 0) noAddLine(true);
+  const lines = noLines.map(l => ({ sku_id: l.sku_id, cases: l.cases }));
+  if (!lines.length){ say('no-msg','Add at least one item — choose the brand, then the SKU, enter cases and press ➕ Add line.',false); return; }
   $('btn-create-order').disabled = true;
   const { data, error } = await db.schema('sales').rpc('create_order',
     { p_party: $('no-party').value, p_lines: lines, p_remarks: $('no-remarks').value.trim() || null });
