@@ -456,8 +456,8 @@
   <!-- ============ MODULE 4: EXCISE & RENEWALS ============ -->
   <section id="view-comp" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Excise &amp; Renewals</h2>
-      <p>Licenses, label registrations, agreements, insurance — with the expiring-soon lens (120-day warning for label regns).</p></div>
+    <div class="welcome"><h2>License &amp; Renewal</h2>
+      <p>Every licence, permit, registration, agreement and policy that has to be renewed — with the expiring-soon lens (120-day warning for label regns).</p></div>
     <div id="comp-body"></div>
   </section>
 
@@ -634,7 +634,7 @@ const MODULES = [
   {key:'meetings',ico:'📝', name:'Meetings',         desc:'Agendas, minutes, participants, views',  live:true,  open:()=>openMeetings()},
   {key:'mkt',     ico:'📣', name:'Marketing',        desc:'Budget month/week + utilisation',        live:true, mktOnly:true, open:()=>openMkt()},
   {key:'notif',   ico:'🔔', name:'Notification Centre', desc:'Tasks, emails, to-dos & approvals',  live:true,  open:()=>openNotifCentre()},
-  {key:'excise',  ico:'📜', name:'Excise & Renewals',desc:'Licenses, label regns, expiries',        live:true,  open:()=>openComp()},
+  {key:'excise',  ico:'📜', name:'License & Renewal',desc:'Licences, permits, registrations, expiries', live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
   {key:'contacts',ico:'📇', name:'Contact Book',     desc:'Vendors, distributors, staff & personal contacts — with birthday reminders', live:true, open:()=>openContacts()},
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
@@ -5527,9 +5527,54 @@ async function mailSendNow(){
   } catch(e){ say('mail-send-msg','Could not reach the mail service: '+e.message,false); btn.disabled = false; btn.textContent = 'Send'; }
 }
 
-/* ================= MODULE 4: EXCISE & RENEWALS ================= */
-const CATS = { EXCISE_LICENSE:'Excise license/permit', LABEL_REGN:'Label registration',
-               AGREEMENT:'Agreement/contract', INSURANCE_VEHICLE:'Insurance/vehicle' };
+/* ================= MODULE 4: LICENSE & RENEWAL ================= */
+const CATS = { EXCISE_LICENSE:'Excise licence / permit', LABEL_REGN:'Label registration',
+               STATUTORY:'Statutory licence', AGREEMENT:'Agreement / contract',
+               INSURANCE_VEHICLE:'Insurance / vehicle', OTHER:'Other' };
+// The documents this business actually renews, grouped the way they are filed.
+// Picking one fills in the name and sets the category — the name stays editable,
+// so a year or a state can be added to it. Anything not on this list is typed in.
+const LIC_TYPES = [
+  ['Excise licences & permits', 'EXCISE_LICENSE', [
+    'PLL — Potable liquor manufacturing licence', 'FL-1 — Wholesale licence',
+    'FL-2 — Retail wine shop licence', 'FL-3 — Hotel / permit room licence',
+    'FL/BR-2 — Beer shoppe licence', 'CL-2 — Country liquor shop licence',
+    'BRL — Brewery licence', 'Bottling licence',
+    'Excise establishment / supervision charges',
+    'Import permit (IP)', 'Export permit (XP)', 'Transport permit']],
+  ['Labels & brands', 'LABEL_REGN', [
+    'Label registration — Maharashtra', 'Label registration — other state',
+    'Label renewal', 'Trademark renewal']],
+  ['Statutory licences', 'STATUTORY', [
+    'FSSAI licence', 'Factory licence', 'Shops & Establishment registration',
+    'Municipal trade licence', 'Fire NOC', 'MPCB consent to operate',
+    'Legal Metrology packer registration', 'Boiler certificate',
+    'Contract labour licence', 'Professional tax registration', 'GST registration']],
+  ['Agreements', 'AGREEMENT', [
+    'Rent / lease agreement', 'Bottling / tie-up agreement', 'Distribution agreement',
+    'Warehouse agreement', 'Service / AMC contract']],
+  ['Insurance & vehicles', 'INSURANCE_VEHICLE', [
+    'Vehicle insurance', 'Vehicle fitness certificate', 'Vehicle permit',
+    'PUC certificate', 'Fire & stock insurance', 'Plant & machinery insurance']],
+];
+function licPickHtml(){
+  return '<option value="">— Choose the document —</option>' +
+    LIC_TYPES.map(([grp, cat, names]) =>
+      `<optgroup label="${esc(grp)}">` +
+      names.map(n => `<option value="${esc(cat)}">${esc(n)}</option>`).join('') +
+      '</optgroup>').join('') +
+    '<option value="__other__">➕ Not in this list — I\'ll type the name</option>';
+}
+// Choosing from the list writes the name into the box and sets the category.
+// "Not in this list" simply empties the box and puts the cursor in it.
+function compPick(){
+  const sel = $('cd-pick'), box = $('cd-title');
+  const opt = sel.options[sel.selectedIndex];
+  if (!sel.value){ return; }
+  if (sel.value === '__other__'){ box.value = ''; box.focus(); return; }
+  box.value = opt.textContent;
+  $('cd-cat').value = sel.value;
+}
 async function openComp(){
   await loadMasters();
   const B = $('comp-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
@@ -5545,8 +5590,10 @@ async function openComp(){
     <div class="stat"><div class="n">${(data||[]).length}</div><div class="l">Active documents</div></div>
     <div class="stat"><div class="n" style="color:${alerts?'#b3382c':'#1f7a4d'}">${alerts}</div><div class="l">Expiring / expired (act now)</div></div></div>`;
   if (isDir() || false){
-    html += `<div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Add document</h2>
-      <input type="text" id="cd-title" placeholder="Title (e.g. MH Wholesale Licence FY26-27) *" style="margin-top:8px;">
+    html += `<div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Add licence / renewal</h2>
+      <select id="cd-pick" onchange="compPick()" style="margin-top:8px;">${licPickHtml()}</select>
+      <input type="text" id="cd-title" placeholder="Document name *" style="margin-top:8px;">
+      <div style="font-size:11.5px;color:#666;margin-top:4px;">Pick from the list, then add the year or state if you want — or choose <b>Not in this list</b> and type the name yourself.</div>
       <div class="row2c" style="margin-top:8px;">
         <select id="cd-cat">${Object.entries(CATS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select>
         <input type="text" id="cd-ref" placeholder="Reference no."></div>
@@ -5576,7 +5623,8 @@ async function openComp(){
 }
 async function compAdd(){
   const title = $('cd-title').value.trim(), to = $('cd-to').value;
-  if (!title || !to){ say('cd-msg','Title and valid-till date are required.',false); return; }
+  if (!title){ say('cd-msg','Pick a document from the list, or type its name.',false); return; }
+  if (!to){ say('cd-msg','The valid-till date is needed — that is what the renewal alert counts down to.',false); return; }
   const { error } = await db.schema('comp').from('documents').insert({
     title, category: $('cd-cat').value, ref_no: $('cd-ref').value.trim()||null,
     brand_id: $('cd-brand').value||null, linked_party: $('cd-party').value.trim()||null,
