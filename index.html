@@ -229,13 +229,18 @@
   <!-- ============ MODULE 1: PARTIES ============ -->
   <section id="view-parties" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Party Master</h2>
-      <p>Distributors, vendors and retailers — kept in separate lists. One row each, forever. Deactivate, never delete.</p></div>
+    <div class="welcome"><h2>Party Master &amp; Onboarding</h2>
+      <p>Every trade partner in one place — the live lists of distributors, vendors and retailers, and the onboarding desk where new ones are registered. One row each, forever. Deactivate, never delete.</p></div>
     <div class="subtabs">
       <button class="chip on" id="pm-d" onclick="pmShow('d')">🤝 Distributors (<span id="party-count-d">0</span>)</button>
       <button class="chip" id="pm-v" onclick="pmShow('v')">💳 Vendors (<span id="party-count-v">0</span>)</button>
       <button class="chip" id="pm-r" onclick="pmShow('r')">🏪 Retailers (<span id="party-count-r">0</span>)</button>
+      <span class="onb-tab" style="width:1px;background:#ddd;align-self:stretch;margin:0 4px;"></span>
+      <button class="chip onb-tab" id="ot-apps" onclick="onbTab('apps')">📋 Distributor applications</button>
+      <button class="chip onb-tab" id="ot-vendors" onclick="onbTab('vendors')">➕ Register vendor</button>
+      <button class="chip onb-tab" id="ot-retailers" onclick="onbTab('retailers')">➕ Register retailer</button>
     </div>
+    <div id="onb-body" class="hidden"></div>
     <div id="pm-sec-d">
     <div class="table-scroll"><table>
       <thead><tr><th>Code</th><th>Name</th><th>City</th><th>Territory</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
@@ -253,7 +258,7 @@
       <thead><tr><th>Code</th><th>Name</th><th>Category</th><th>District</th><th>Area</th><th>Contact</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows-r"></tbody>
     </table></div>
-    <p style="font-size:12px;color:#777;margin-top:6px;">Retailers are added and edited in <b>Onboarding &amp; Vendors → 🏪 Retailers</b>; the category shown here comes from that register.</p>
+    <p style="font-size:12px;color:#777;margin-top:6px;">New retailers are added on the <b>➕ Register retailer</b> tab above; the category shown here comes from that register.</p>
     </div>
   </section>
 
@@ -361,31 +366,23 @@
     <div id="notif-centre"></div>
   </section>
 
-  <!-- ============ MODULE 19: SALESMAN REPORTS (FIELD VISITS) ============ -->
-  <section id="view-field" class="hidden">
-    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Salesman Reports</h2>
-      <p>Field check-ins from the Aurum FieldVisit app — a GPS- and time-stamped selfie at each distributor, the order taken, and notes from the party. You see your own team's visits; the Director sees everyone.</p></div>
-    <div class="subtabs">
-      <button class="chip on" id="fld-visits" onclick="fieldTab('visits')">Field visits</button>
-      <button class="chip dir-only" id="fld-salesmen" onclick="fieldTab('salesmen')">Salesmen</button>
-      <button class="chip dir-only" id="fld-creds" onclick="fieldTab('creds')">App credentials</button>
-    </div>
-    <div id="field-body"></div>
-  </section>
-
-  <!-- ============ MODULE 7: SALES REPORTS & TARGETS ============ -->
+  <!-- ============ MODULES 7 + 19 MERGED: SALES TEAM — REPORTS, TARGETS & FIELD VISITS ============ -->
   <section id="view-reports" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Team Reports &amp; Targets</h2>
-      <p>Your sales team's daily activity, monthly reports, and progress against monthly &amp; quarterly targets — in cases. Cases booked are counted from the order book, never self-declared.</p></div>
+    <div class="welcome"><h2>Sales Team — Reports &amp; Targets</h2>
+      <p>Everything about your sales team in one place: daily activity, monthly reports, targets (in cases, counted from the order book) and the field check-ins coming in from the Aurum FieldVisit app.</p></div>
     <div class="subtabs">
       <button class="chip on" id="rp-today" onclick="reportsTab('today')">Today</button>
       <button class="chip" id="rp-mine" onclick="reportsTab('mine')">My month</button>
       <button class="chip hidden" id="rp-team" onclick="reportsTab('team')">Team</button>
       <button class="chip dir-only" id="rp-targets" onclick="reportsTab('targets')">Targets</button>
+      <span class="fld-tab" style="width:1px;background:#ddd;align-self:stretch;margin:0 4px;"></span>
+      <button class="chip fld-tab" id="fld-visits" onclick="fieldTab('visits')">🤳 Field visits</button>
+      <button class="chip fld-tab dir-only" id="fld-salesmen" onclick="fieldTab('salesmen')">Salesmen</button>
+      <button class="chip fld-tab dir-only" id="fld-creds" onclick="fieldTab('creds')">App credentials</button>
     </div>
     <div id="reports-body"></div>
+    <div id="field-body" class="hidden"></div>
   </section>
 
   <!-- ============ SALES REPORT (distributor / retailer wise, cases) ============ -->
@@ -462,18 +459,7 @@
     <div id="comp-body"></div>
   </section>
 
-  <!-- ============ MODULE 2: ONBOARDING & VENDORS ============ -->
-  <section id="view-onboard" class="hidden">
-    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Onboarding &amp; Vendors</h2>
-      <p>Distributor applications (AS/SALES/DO-01), vendor registrations and the retailer register. Approval creates the party — no re-typing.</p></div>
-    <div class="subtabs">
-      <button class="chip on" id="ot-apps" onclick="onbTab('apps')">Distributor applications</button>
-      <button class="chip" id="ot-vendors" onclick="onbTab('vendors')">Vendors</button>
-      <button class="chip" id="ot-retailers" onclick="onbTab('retailers')">🏪 Retailers</button>
-    </div>
-    <div id="onb-body"></div>
-  </section>
+  <!-- (Onboarding & Vendors now lives inside Party Master — see #view-parties) -->
 
   <!-- ============ MODULE 1: RATES & OUTSTANDING (Director) ============ -->
   <section id="view-rates" class="hidden">
@@ -598,15 +584,13 @@ const SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
 
 const MODULES = [
   {key:'sales',   ico:'🧾', name:'Sales & Orders',   desc:'Distributor orders, approval, dispatch', live:true,  open:()=>openOrders()},
-  {key:'party',   ico:'🤝', name:'Party Master',     desc:'Distributors & vendors — separate lists', live:true,  open:()=>openParties()},
+  {key:'party',   ico:'🤝', name:'Party Master & Onboarding', desc:'Distributors, vendors, retailers + applications', live:true,  open:()=>openParties()},
   {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Deccan Crest, Frost 91 family, packs',   live:true,  open:()=>openBrands()},
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
   {key:'prod',    ico:'🎯', name:'Production',       desc:'Monthly targets & completion status',   live:true, mfgOnly:true, open:()=>openProd()},
-  {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
-  {key:'reports', ico:'📈', name:'Team Reports & Targets', desc:'Daily activity, team reports, targets', live:true, open:()=>openReports()},
+  {key:'reports', ico:'📈', name:'Sales Team — Reports & Targets', desc:'Daily activity, targets & field visits', live:true, open:()=>openReports()},
   {key:'salesrep', ico:'📊', name:'Sales Report',    desc:'Distributor & retailer wise, brand-wise cases', live:true, open:()=>openSalesRep()},
-  {key:'field',   ico:'🤳', name:'Salesman Reports', desc:'Field visits: selfies, GPS & orders',      live:true, fieldOnly:true, open:()=>openField()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
   {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
@@ -631,7 +615,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','field','purchase','mail','acct','docs','contacts'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -1054,12 +1038,16 @@ async function openParties(){
         `<td>${esc(r.category||'—')}</td><td>${esc(r.district||'—')}</td><td>${esc(r.area||'—')}</td>` +
         `<td>${esc(r.contact_person||'—')}${r.phone?'<br><span style="font-size:11px;color:#777">'+esc(r.phone)+'</span>':''}</td>` +
         `<td>${r.status==='ACTIVE'?'✔':'✖'}</td>` +
-        `<td style="white-space:nowrap"><button class="mini" onclick="openOnboard().then(()=>onbTab('retailers'))">Manage</button></td>`;
+        `<td style="white-space:nowrap"><button class="mini" onclick="onbTab('retailers')">Manage</button></td>`;
       tbR.appendChild(tr);
     }
     $('party-count-r').textContent = nR;
     if (!nR) tbR.innerHTML = '<tr><td colspan="8" style="color:#777">No retailers yet — add them in Onboarding &amp; Vendors → 🏪 Retailers.</td></tr>';
   } catch(e){ tbR.innerHTML = '<tr><td colspan="8" style="color:#777">Retailer list is not available to you.</td></tr>'; }
+  // Onboarding (registration) tabs are for Directors; everyone sees the lists.
+  document.querySelectorAll('.onb-tab').forEach(el => el.classList.toggle('hidden', !isDir()));
+  if (!$('onb-body').classList.contains('hidden')) { /* stay on the onboarding tab */ }
+  else pmShow(['d','v','r'].find(k => $('pm-'+k).classList.contains('on')) || 'd');
   show('parties');
 }
 function pmShow(which){
@@ -1067,6 +1055,9 @@ function pmShow(which){
     $('pm-'+k).classList.toggle('on', k===which);
     $('pm-sec-'+k).classList.toggle('hidden', k!==which);
   });
+  // leaving the onboarding side of this section
+  ['apps','vendors','retailers'].forEach(k => $('ot-'+k).classList.remove('on'));
+  $('onb-body').classList.add('hidden');
 }
 function openPartyEdit(p, kind){
   editingParty = p;
@@ -1608,10 +1599,13 @@ async function rmReceive(id){
   if (!error) mfgTab('rm');
 }
 
-/* ================= MODULE 2: ONBOARDING & VENDORS ================= */
-async function openOnboard(){ await loadMasters(); onbTab('apps'); show('onboard'); }
+/* ===== ONBOARDING & VENDORS — now the registration side of Party Master ===== */
+async function openOnboard(){ await openParties(); await onbTab('apps'); }
 async function onbTab(which){
   ['apps','vendors','retailers'].forEach(k => $('ot-'+k).classList.toggle('on', k===which));
+  // this is the onboarding side of the section — park the party lists
+  ['d','v','r'].forEach(k => { $('pm-'+k).classList.remove('on'); $('pm-sec-'+k).classList.add('hidden'); });
+  $('onb-body').classList.remove('hidden');
   const B = $('onb-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
   const S = db.schema('sales');
   if (which === 'apps'){
@@ -2165,10 +2159,17 @@ async function openReports(){
   const { data: tm } = await db.schema('adm').from('users').select('id, full_name, designation').eq('reports_to', me.id).eq('is_active', true);
   teamMembers = tm || [];
   $('rp-team').classList.toggle('hidden', !(isDir() || teamMembers.length));
+  // Field-visit tabs show for the Director and for anyone with a team reporting to them.
+  const canField = isDir() || !!window.__hasReports || teamMembers.length > 0;
+  document.querySelectorAll('.fld-tab').forEach(el => el.classList.toggle('hidden', !canField));
   reportsTab('today'); applyDirOnly(); show('reports');
 }
 async function reportsTab(t){
   for (const k of ['today','mine','team','targets']) $('rp-'+k).classList.toggle('on', k === t);
+  // leaving the field-visit side of this section
+  ['visits','salesmen','creds'].forEach(k => $('fld-'+k).classList.remove('on'));
+  $('field-body').classList.add('hidden');
+  $('reports-body').classList.remove('hidden');
   const B = $('reports-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const S = db.schema('sales');
 
@@ -5957,11 +5958,15 @@ async function mktSaveBudget(){ const amt=Number($('bg-amt').value); const perio
   const {error}=await db.schema('sales').from('mkt_budgets').upsert(row,{onConflict:'period_type,period,category'}); if(error){say('bg-msg','Save failed: '+error.message,false);return;} mktTab('budget'); }
 async function mktSaveExpense(){ const amt=Number($('ex-amt').value); if(!(amt>=0)){say('ex-msg','Enter an amount.',false);return;} const {error}=await db.schema('sales').from('mkt_expenses').insert({expense_date:$('ex-date').value||null,category:$('ex-cat').value,amount:amt,description:$('ex-desc').value.trim()||null,vendor:$('ex-vendor').value.trim()||null,created_by:me.id}); if(error){say('ex-msg','Save failed: '+error.message,false);return;} mktTab('spend'); }
 
-/* ================= MODULE 19: SALESMAN REPORTS (FIELD VISITS) ================= */
+/* ===== SALESMAN / FIELD VISITS — now the field side of Sales Team Reports ===== */
 const FBUCKET='visit-selfies';
-async function openField(){ window.__fldDate=window.__fldDate||''; window.__fldUser=window.__fldUser||''; fieldTab('visits'); show('field'); applyDirOnly(); }
+async function openField(){ await openReports(); await fieldTab('visits'); }
 async function fieldTab(t){
   ['visits','salesmen','creds'].forEach(k=>{ const el=$('fld-'+k); if(el) el.classList.toggle('on',k===t); });
+  // this is the field side of the section — park the team reports
+  ['today','mine','team','targets'].forEach(k=>{ const el=$('rp-'+k); if(el) el.classList.remove('on'); });
+  $('reports-body').classList.add('hidden');
+  $('field-body').classList.remove('hidden');
   const B=$('field-body');
   if(t==='visits') return fieldLoadVisits();
   if(t==='salesmen'){ if(!isDir()){ B.innerHTML='<div class="card" style="color:#777">Salesmen are managed by the Director only.</div>'; return; } return fieldLoadSalesmen(); }
