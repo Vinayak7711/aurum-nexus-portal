@@ -4309,15 +4309,15 @@ async function docsList(){
     ${canDocsEdit() ? `
     <div class="card" style="max-width:680px;margin-bottom:14px;">
       <h3 style="font-size:15px;">Add a document</h3>
-      <label>Title *</label><input type="text" id="doc-title" maxlength="120" placeholder="e.g. MMC bottling agreement 2026, GST registration, Office rent agreement">
+      <label>Title (used when uploading a single file — for multiple files each file's own name becomes its title)</label><input type="text" id="doc-title" maxlength="120" placeholder="e.g. MMC bottling agreement 2026, GST registration, Office rent agreement">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
-        <input type="file" id="doc-file" style="max-width:320px;">
-        <button class="btn gold sm" onclick="docUpload(false)">⬆ Upload this file</button>
+        <input type="file" id="doc-file" multiple style="max-width:320px;">
+        <button class="btn gold sm" onclick="docUpload(false)">⬆ Upload file(s)</button>
         <span style="color:#777;">or</span>
         <input type="file" id="doc-scan" accept="image/*" capture="environment" style="display:none;" onchange="docUpload(true)">
         <button class="btn ghost sm" onclick="$('doc-scan').click()" title="On a phone or tablet this opens the camera">📷 Scan a copy</button>
       </div>
-      <p style="font-size:11.5px;color:#666;margin-top:6px;">Any file type up to ${DOC_MAX_MB} MB — PDFs and images can be viewed and printed right here; other types can be downloaded.</p>
+      <p style="font-size:11.5px;color:#666;margin-top:6px;">Pick as many files as you like in one go (hold Ctrl / ⌘ or long-press to select several). Any file type up to ${DOC_MAX_MB} MB each — PDFs and images can be viewed and printed right here; other types can be downloaded.</p>
       <div id="doc-msg"></div>
     </div>` : ''}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 8px;">
@@ -4339,20 +4339,30 @@ function docsFilter(){
 }
 async function docUpload(fromScan){
   const inp = fromScan ? $('doc-scan') : $('doc-file');
-  const f = inp && inp.files && inp.files[0];
-  if (!f){ say('doc-msg','Choose a file first.', false); return; }
-  if (f.size > DOC_MAX_MB*1024*1024){ say('doc-msg','This file is '+fmtBytes(f.size)+' — please keep documents under '+DOC_MAX_MB+' MB (tip: scan as PDF or compress the image).', false); return; }
-  const title = ($('doc-title').value||'').trim() || f.name.replace(/\.[^.]+$/,'');
-  say('doc-msg','Uploading '+f.name+'…', true);
-  try {
-    const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]||''); r.onerror=()=>rej(new Error('Could not read the file.')); r.readAsDataURL(f); });
-    const { error } = await db.schema('comp').from('doc_library').insert({
-      title, filename: f.name, content_type: f.type || 'application/octet-stream', size_bytes: f.size, data_b64: b64 });
-    if (error) throw new Error(error.message);
-    inp.value=''; $('doc-title').value='';
-    await docsList();
-    say('doc-msg','“'+title+'” is saved in the library.', true);
-  } catch(e){ say('doc-msg','Could not upload: '+e.message, false); }
+  const files = inp && inp.files ? [...inp.files] : [];
+  if (!files.length){ say('doc-msg','Choose one or more files first.', false); return; }
+  const typedTitle = ($('doc-title').value||'').trim();
+  let done = 0; const skipped = [], failed = [];
+  for (let i = 0; i < files.length; i++){
+    const f = files[i];
+    if (f.size > DOC_MAX_MB*1024*1024){ skipped.push(f.name+' ('+fmtBytes(f.size)+')'); continue; }
+    // A typed title applies when uploading ONE file; with several, each file's own name is its title.
+    const title = (files.length === 1 && typedTitle) ? typedTitle : f.name.replace(/\.[^.]+$/,'');
+    say('doc-msg','Uploading '+(i+1)+' of '+files.length+' — '+f.name+'…', true);
+    try {
+      const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]||''); r.onerror=()=>rej(new Error('Could not read the file.')); r.readAsDataURL(f); });
+      const { error } = await db.schema('comp').from('doc_library').insert({
+        title, filename: f.name, content_type: f.type || 'application/octet-stream', size_bytes: f.size, data_b64: b64 });
+      if (error) throw new Error(error.message);
+      done++;
+    } catch(e){ failed.push(f.name+' — '+e.message); }
+  }
+  inp.value=''; $('doc-title').value='';
+  await docsList();
+  let msg = done + ' document' + (done===1?'':'s') + ' saved in the library.';
+  if (skipped.length) msg += ' Skipped (over '+DOC_MAX_MB+' MB): ' + skipped.join(', ') + '.';
+  if (failed.length) msg += ' Failed: ' + failed.join('; ') + '.';
+  say('doc-msg', msg, failed.length === 0);
 }
 async function docFetch(id){
   const { data, error } = await db.schema('comp').from('doc_library').select('*').eq('id', id).single();
