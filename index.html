@@ -286,29 +286,22 @@
     <div id="sku-price-panel"></div>
   </section>
 
-  <!-- ============ MODULE 2: MANUFACTURING @ MMC ============ -->
+  <!-- ============ MODULE 2: MANUFACTURING & PRODUCTION @ MMC ============ -->
+  <!-- Targets and the batch book are one story: what we planned to make, and what
+       actually came out of the line. They live in one section, six tabs. -->
   <section id="view-mfg" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Manufacturing @ MMC</h2>
-      <p>Your material, their premises — custody tracked. QC gates every batch; only PASSED stock exists.</p></div>
+    <div class="welcome"><h2>Manufacturing &amp; Production @ MMC</h2>
+      <p>Your material, their premises — custody tracked. QC gates every batch; only PASSED stock exists. Monthly targets are set here too, and <b>Produced</b> is cross-checked straight from the batch book.</p></div>
     <div class="subtabs">
       <button class="chip on" id="mt-fg" onclick="mfgTab('fg')">FG stock</button>
       <button class="chip" id="mt-batches" onclick="mfgTab('batches')">Batches &amp; QC</button>
       <button class="chip" id="mt-report" onclick="mfgTab('report')">Production report</button>
       <button class="chip" id="mt-rm" onclick="mfgTab('rm')">Raw material</button>
-    </div>
-    <div id="mfg-body"></div>
-  </section>
-
-  <!-- ============ MODULE 13: PRODUCTION (TARGETS & COMPLETION) ============ -->
-  <section id="view-prod" class="hidden">
-    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Production</h2>
-      <p>Monthly production targets per SKU, set by the Director. The production team marks completion here; <b>Produced</b> is cross-checked from the batch book.</p></div>
-    <div class="subtabs">
-      <button class="chip on" id="pd-targets" onclick="prodTab('targets')">Targets &amp; completion</button>
+      <button class="chip" id="pd-targets" onclick="prodTab('targets')">🎯 Targets &amp; completion</button>
       <button class="chip" id="pd-log" onclick="prodTab('log')">Update log</button>
     </div>
+    <div id="mfg-body"></div>
     <div id="prod-body"></div>
   </section>
 
@@ -636,8 +629,7 @@ const MODULES = [
   {key:'party',   ico:'🤝', name:'Party Master & Onboarding', desc:'Distributors, vendors, retailers + applications', live:true,  open:()=>openParties()},
   {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Deccan Crest, Frost 91 family, packs',   live:true,  open:()=>openBrands()},
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
-  {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
-  {key:'prod',    ico:'🎯', name:'Production',       desc:'Monthly targets & completion status',   live:true, mfgOnly:true, open:()=>openProd()},
+  {key:'mfg',     ico:'🏭', name:'Manufacturing & Production', desc:'Targets, batches, QC, RM custody, FG stock', live:true, open:()=>openMfg()},
   {key:'reports', ico:'📈', name:'Sales Team — Reports & Targets', desc:'Daily activity, targets & field visits', live:true, open:()=>openReports()},
   {key:'salesrep', ico:'📊', name:'Sales Report',    desc:'Distributor & retailer wise, brand-wise cases', live:true, open:()=>openSalesRep()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
@@ -668,8 +660,8 @@ const SECTIONS = {
              ['fld-visits','Field visits'],['fld-salesmen','Salesmen'],['fld-creds','App credentials']],
   salesrep: [['sr-dist','Distributor-wise (primary)'],['sr-ret','Retailer-wise (secondary)']],
   brand:    [],
-  mfg:      [['mt-fg','FG stock'],['mt-batches','Batches & QC'],['mt-report','Production report'],['mt-rm','Raw material']],
-  prod:     [['pd-targets','Targets & completion'],['pd-log','Update log']],
+  mfg:      [['mt-fg','FG stock'],['mt-batches','Batches & QC'],['mt-report','Production report'],['mt-rm','Raw material'],
+             ['pd-targets','Targets & completion'],['pd-log','Update log']],
   tasks:    [['kt-my','My tasks'],['kt-all','All tasks'],['kt-duties','Duties']],
   mkt:      [['mk-budget','Budget & utilisation'],['mk-spend','Spends'],['mk-requests','Budget requests'],['mk-schemes','Scheme master']],
   purchase: [['pu-pos','Purchase orders'],['pu-new','New PO'],['pu-req','Material requests'],
@@ -680,7 +672,7 @@ const SECTIONS = {
   rates:    [['rt-rates','Billing rates'],['rt-struct','Duty structure'],['rt-out','Outstanding'],['rt-cm','MMC payable']],
 };
 // view id -> module key, so sections can be applied whenever a screen opens
-const VIEW_MOD = { parties:'party', reports:'reports', salesrep:'salesrep', mfg:'mfg', prod:'prod',
+const VIEW_MOD = { parties:'party', reports:'reports', salesrep:'salesrep', mfg:'mfg',
                    tasks:'tasks', mkt:'mkt', purchase:'purchase', acct:'acct', rates:'rates' };
 function secAllowed(modKey, tabId){
   if (isDir()) return true;
@@ -720,7 +712,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
   window.scrollTo(0,0);
@@ -1015,7 +1007,7 @@ function openEdit(u){
   const g = $('permgrid');
   g.innerHTML = '<div class="permrow"><div>Module</div>' + PERM_ACTIONS.map(a=>`<div>${a}</div>`).join('') + '</div>';
   for (const m of MODULES){
-    if (['control','rates','reports','purchase','mail','prod','calendar','meetings','notif'].includes(m.key)) continue;  // these use the sales, finance & mfg grants / roles or are open to all
+    if (['control','rates','reports','purchase','mail','calendar','meetings','notif'].includes(m.key)) continue;  // these use the sales, finance & mfg grants / roles or are open to all
     const p = (u.permissions_json||{})[m.key] || {};
     g.insertAdjacentHTML('beforeend',
       `<div class="permrow"><div>${m.ico} ${m.name}</div>` +
@@ -1629,6 +1621,8 @@ async function saveMcActual(structId){
 async function openMfg(){ await loadMasters(); mfgTab('fg'); show('mfg'); }
 async function mfgTab(which){
   ['fg','batches','report','rm'].forEach(k => $('mt-'+k).classList.toggle('on', k===which));
+  ['targets','log'].forEach(k => $('pd-'+k).classList.remove('on'));   // the targets half steps aside
+  $('prod-body').innerHTML = '';
   const B = $('mfg-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
   const MF = db.schema('mfg');
   if (which === 'fg'){
@@ -1744,9 +1738,13 @@ async function mfgTab(which){
   }
 }
 /* ================= MODULE 13: PRODUCTION SECTION ================= */
-async function openProd(){ await loadMasters(); prodTab('targets'); show('prod'); }
+// Production now lives inside Manufacturing — this keeps every old entry point
+// (menus, links, deep links) working by opening the merged section on its tab.
+async function openProd(){ await openMfg(); await prodTab('targets'); }
 async function prodTab(t){
   ['targets','log'].forEach(k => $('pd-'+k).classList.toggle('on', k===t));
+  ['fg','batches','report','rm'].forEach(k => $('mt-'+k).classList.remove('on'));
+  $('mfg-body').innerHTML = '';
   const B = $('prod-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
   const MF = db.schema('mfg');
 
