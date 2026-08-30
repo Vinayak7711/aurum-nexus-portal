@@ -386,7 +386,7 @@
       <button class="chip on" id="rp-today" onclick="reportsTab('today')">Today</button>
       <button class="chip" id="rp-mine" onclick="reportsTab('mine')">My month</button>
       <button class="chip hidden" id="rp-team" onclick="reportsTab('team')">Team</button>
-      <button class="chip dir-only" id="rp-targets" onclick="reportsTab('targets')">Targets</button>
+      <button class="chip hidden" id="rp-targets" onclick="reportsTab('targets')">Targets</button>
       <span class="fld-tab" style="width:1px;background:#ddd;align-self:stretch;margin:0 4px;"></span>
       <button class="chip fld-tab" id="fld-visits" onclick="fieldTab('visits')">🤳 Field visits</button>
       <button class="chip fld-tab dir-only" id="fld-salesmen" onclick="fieldTab('salesmen')">Salesmen</button>
@@ -2580,6 +2580,9 @@ async function openReports(){
   const { data: tm } = await db.schema('adm').from('users').select('id, full_name, designation').eq('reports_to', me.id).eq('is_active', true);
   teamMembers = tm || [];
   $('rp-team').classList.toggle('hidden', !(isDir() || teamMembers.length));
+  // Targets: the Director hands each team leader a total; a leader divides his
+  // total among his salesmen — so leaders see this tab too.
+  $('rp-targets').classList.toggle('hidden', !(isDir() || teamMembers.length));
   // Field-visit tabs show for the Director and for anyone with a team reporting to them.
   const canField = isDir() || !!window.__hasReports || teamMembers.length > 0;
   document.querySelectorAll('.fld-tab').forEach(el => el.classList.toggle('hidden', !canField));
@@ -2690,37 +2693,142 @@ async function reportsTab(t){
   }
 
   if (t === 'targets'){
-    if (!isDir()){ B.innerHTML = '<p style="color:#777">Targets are set by the Director.</p>'; return; }
-    const { data: users } = await db.schema('adm').from('users').select('id, full_name, designation').eq('is_active', true).order('full_name');
-    const { data: allt } = await S.from('v_target_progress').select('*').order('period', {ascending:false});
-    B.innerHTML = `
-      <h4 class="sec">Set a target (cases)</h4>
+    // Targets flow down the team tree: the Director gives each TEAM LEADER a
+    // total, and the leader divides it among the salesmen reporting to him.
+    const A = db.schema('adm');
+    const [{ data: users }, { data: allt }] = await Promise.all([
+      A.from('users').select('id, full_name, designation, reports_to').eq('is_active', true).order('full_name'),
+      S.from('v_target_progress').select('*').order('period', {ascending:false})
+    ]);
+    const byId = {}; (users||[]).forEach(u => byId[u.id] = u);
+    const leaderIds = [...new Set((users||[]).filter(u => u.reports_to && byId[u.reports_to]).map(u => u.reports_to))];
+    const teamOf = lid => (users||[]).filter(u => u.reports_to === lid);
+    let html = '';
+
+    if (isDir()){
+      html += `
+      <h4 class="sec">Give a team leader the total target (cases)</h4>
+      <p style="font-size:12px;color:#777;margin:2px 0 8px;">You hand each <b>team leader</b> one total for the period. The leader then opens this tab and divides it among his salesmen — the split can never exceed what you gave him. (Who leads whom comes from "Reports to" in the Control Panel.)</p>
       <div class="row2c">
-        <div><label>Salesperson</label><select id="tg-user">${(users||[]).map(u=>`<option value="${u.id}">${esc(u.full_name)}${u.designation?' — '+esc(u.designation):''}</option>`).join('')}</select></div>
+        <div><label>Team leader</label><select id="tg-user">${leaderIds.length
+          ? leaderIds.map(id=>`<option value="${id}">${esc(byId[id].full_name)}${byId[id].designation?' — '+esc(byId[id].designation):''} (${teamOf(id).length} salesmen)</option>`).join('')
+          : '<option value="">— no team leaders yet —</option>'}</select></div>
         <div><label>Period type</label><select id="tg-type" onchange="$('tg-period').value = this.value==='MONTH' ? monthLabelJS() : quarterLabelJS()"><option value="MONTH">Monthly</option><option value="QUARTER">Quarterly</option></select></div>
       </div>
       <div class="row2c">
         <div><label>Period</label><input type="text" id="tg-period" value="${monthLabelJS()}"><span style="font-size:11px;color:#777">Month: ${monthLabelJS()} · Quarter: ${quarterLabelJS()}</span></div>
-        <div><label>Target (cases) *</label><input type="number" id="tg-cases" min="1" placeholder="e.g. 500"></div>
+        <div><label>Total target (cases) *</label><input type="number" id="tg-cases" min="1" placeholder="e.g. 500"></div>
       </div>
-      <button class="btn gold" id="btn-tg-save" style="margin-top:8px;">Save target</button>
-      <div id="tg-msg"></div>
-      <h4 class="sec" style="margin-top:18px;">All targets &amp; progress</h4>
-      <div class="table-scroll"><table><thead><tr><th>Salesperson</th><th>Type</th><th>Period</th><th class="amount">Target</th><th class="amount">Achieved</th><th>Progress</th></tr></thead><tbody>
-      ${(allt||[]).map(p=>`<tr><td>${esc(p.full_name)}</td><td>${p.period_type}</td><td>${p.period}</td><td class="amount">${Number(p.target_cases)}</td><td class="amount">${Number(p.achieved_cases)}</td><td>${bar(p.pct)}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">No targets yet.</td></tr>'}
-      </tbody></table></div>`;
-    $('btn-tg-save').onclick = async () => {
+      <button class="btn gold" id="btn-tg-save" style="margin-top:8px;">Save team total</button>
+      <div id="tg-msg"></div>`;
+      if (!leaderIds.length) html += '<p style="font-size:12px;color:#b3261e;">No one has a team yet — set each salesman\'s "Reports to" in the Control Panel first.</p>';
+    }
+
+    // ---- the leader's own splitting desk ----
+    const myTeam = teamMembers || [];
+    if (myTeam.length && !isDir()){
+      html += `
+      <h4 class="sec">Divide your team total among your salesmen</h4>
+      <div class="row2c">
+        <div><label>Period type</label><select id="sp-type" onchange="$('sp-period').value = this.value==='MONTH' ? monthLabelJS() : quarterLabelJS(); tgSplitLoad();"><option value="MONTH">Monthly</option><option value="QUARTER">Quarterly</option></select></div>
+        <div><label>Period</label><input type="text" id="sp-period" value="${monthLabelJS()}" onchange="tgSplitLoad()"></div>
+      </div>
+      <div id="tg-split"></div>`;
+    }
+
+    // ---- progress, grouped leader → salesmen ----
+    const rows = allt || [];
+    const rowFor = (uid, per, ty) => rows.find(r => r.user_id===uid && r.period===per && r.period_type===ty);
+    const periods = [...new Set(rows.map(r => r.period_type+'|'+r.period))];
+    html += `<h4 class="sec" style="margin-top:18px;">All targets &amp; progress</h4>
+      <div class="table-scroll"><table><thead><tr><th>Team / salesperson</th><th>Type</th><th>Period</th><th class="amount">Target</th><th class="amount">Achieved</th><th>Progress</th></tr></thead><tbody>`;
+    let printed = new Set();
+    for (const pk of periods){
+      const [ty, per] = pk.split('|');
+      for (const lid of leaderIds){
+        const lt = rowFor(lid, per, ty);
+        const kids = teamOf(lid).map(k => rowFor(k.id, per, ty)).filter(Boolean);
+        if (!lt && !kids.length) continue;
+        const divided = kids.reduce((a,r)=>a+Number(r.target_cases||0),0);
+        if (lt){ printed.add(lt.id);
+          html += `<tr style="background:#faf6ea;"><td><b>👑 ${esc(lt.full_name)}</b> <span style="font-size:11px;color:#777">team total${lt.target_cases>0?` · ${divided} of ${Number(lt.target_cases)} divided`:''}</span></td><td>${ty}</td><td>${per}</td><td class="amount"><b>${Number(lt.target_cases)}</b></td><td class="amount">${Number(lt.achieved_cases)}</td><td>${bar(lt.pct)}</td></tr>`;
+        } else {
+          html += `<tr style="background:#faf6ea;"><td><b>👑 ${esc(byId[lid]?byId[lid].full_name:'')}</b> <span style="font-size:11px;color:#b3261e">no team total set</span></td><td>${ty}</td><td>${per}</td><td class="amount">—</td><td class="amount">—</td><td>—</td></tr>`;
+        }
+        for (const kr of kids){ printed.add(kr.id);
+          html += `<tr><td style="padding-left:28px;">↳ ${esc(kr.full_name)}</td><td>${ty}</td><td>${per}</td><td class="amount">${Number(kr.target_cases)}</td><td class="amount">${Number(kr.achieved_cases)}</td><td>${bar(kr.pct)}</td></tr>`;
+        }
+      }
+    }
+    const loose = rows.filter(r => !printed.has(r.id));
+    for (const p of loose)
+      html += `<tr><td>${esc(p.full_name)}</td><td>${p.period_type}</td><td>${p.period}</td><td class="amount">${Number(p.target_cases)}</td><td class="amount">${Number(p.achieved_cases)}</td><td>${bar(p.pct)}</td></tr>`;
+    if (!rows.length) html += '<tr><td colspan="6" style="color:#777">No targets yet.</td></tr>';
+    html += '</tbody></table></div>';
+
+    B.innerHTML = html;
+    if (isDir() && $('btn-tg-save')) $('btn-tg-save').onclick = async () => {
       const cases = Number($('tg-cases').value);
+      if (!$('tg-user').value){ say('tg-msg','No team leaders yet — set "Reports to" in the Control Panel first.',false); return; }
       if (!(cases > 0)){ say('tg-msg','Enter a target above zero cases.',false); return; }
       const { error: e } = await S.rpc('set_target', {
         p_user: $('tg-user').value, p_type: $('tg-type').value,
         p_period: $('tg-period').value.trim(), p_cases: cases });
       if (e){ say('tg-msg','Could not save: '+e.message,false); return; }
-      say('tg-msg','Target saved.',true); reportsTab('targets');
+      say('tg-msg','Team total saved. The leader can now divide it among his salesmen.',true); reportsTab('targets');
     };
+    if (myTeam.length && !isDir()) tgSplitLoad();
     return;
   }
 }
+/* ---- the team leader's splitting desk ----
+   Shows his total for the chosen period and one box per salesman. The boxes must
+   add up to no more than the total; the database enforces the same rule. */
+async function tgSplitLoad(){
+  const box = $('tg-split'); if (!box) return;
+  const ty = $('sp-type').value, per = $('sp-period').value.trim();
+  box.innerHTML = '<p style="color:#777;font-size:13px;">Loading…</p>';
+  const S = db.schema('sales');
+  const ids = [me.id, ...teamMembers.map(m=>m.id)];
+  const { data: tg } = await S.from('targets').select('user_id,target_cases')
+    .eq('period_type', ty).eq('period', per).in('user_id', ids);
+  const of = uid => { const r=(tg||[]).find(x=>x.user_id===uid); return r?Number(r.target_cases):null; };
+  const total = of(me.id);
+  if (total == null){
+    box.innerHTML = `<div class="msg err show" style="display:block;">You have no team total for <b>${esc(per)}</b> yet — ask the Director to set it first.</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="statgrid" style="margin-top:8px;">
+      <div class="stat"><div class="n">${total}</div><div class="l">Your team total (cases)</div></div>
+      <div class="stat"><div class="n" id="sp-left">—</div><div class="l">Still to divide</div></div></div>
+    <div class="table-scroll"><table><thead><tr><th>Salesman</th><th class="amount" style="width:140px;">Target (cases)</th></tr></thead><tbody>` +
+    teamMembers.map(m => `<tr><td>${esc(m.full_name)}${m.designation?` <span style="font-size:11px;color:#777">${esc(m.designation)}</span>`:''}</td>
+      <td class="amount"><input type="number" min="0" class="sp-box" data-uid="${m.id}" value="${of(m.id)??''}" placeholder="0" oninput="tgSplitSum(${total})" style="width:120px;text-align:right;"></td></tr>`).join('') +
+    `</tbody></table></div>
+    <button class="btn gold" style="margin-top:10px;" onclick="tgSplitSave('${ty}','${esc(per)}',${total})">Save the division</button>
+    <div id="sp-msg"></div>`;
+  tgSplitSum(total);
+}
+function tgSplitSum(total){
+  const sum = [...document.querySelectorAll('.sp-box')].reduce((a,b)=>a+(Number(b.value)||0),0);
+  const el = $('sp-left'); if (!el) return;
+  el.textContent = total - sum;
+  el.style.color = sum > total ? '#b3261e' : (sum === total ? '#1a7f37' : '#1c2455');
+}
+async function tgSplitSave(ty, per, total){
+  const boxes = [...document.querySelectorAll('.sp-box')];
+  const sum = boxes.reduce((a,b)=>a+(Number(b.value)||0),0);
+  if (sum > total){ say('sp-msg', `That adds up to ${sum} cases — more than your team total of ${total}. Trim it first.`, false); return; }
+  const S = db.schema('sales');
+  for (const b of boxes){
+    if (b.value === '') continue;   // untouched salesmen keep whatever they had
+    const { error } = await S.rpc('set_target', { p_user: b.dataset.uid, p_type: ty, p_period: per, p_cases: Number(b.value)||0 });
+    if (error){ say('sp-msg','Could not save: '+error.message, false); return; }
+  }
+  say('sp-msg', `Saved — ${sum} of your ${total} cases are divided${sum<total?`, ${total-sum} still in hand`:''}.`, true);
+}
+
 // Director wipes one salesperson's filed DAILY reports. Their monthly report
 // summaries, targets, orders and field-visit records all stay exactly as they are.
 async function rpDeleteReports(uid, name){
