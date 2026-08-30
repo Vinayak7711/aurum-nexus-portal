@@ -148,13 +148,17 @@
   <section id="view-login" class="login-wrap hidden">
     <div class="card">
       <h2>Sign in</h2>
-      <p class="sub">Enter your company email. We'll send you a one-tap sign-in link — no password to remember.</p>
+      <p class="sub">Use the email and password given to you by the Director.</p>
       <label for="login-email">Email</label>
-      <input type="email" id="login-email" placeholder="name@aurumspirits.com" autocomplete="email">
-      <button class="btn gold" id="btn-magic">Send sign-in link</button>
+      <input type="email" id="login-email" placeholder="name@aurumspirits.com" autocomplete="username">
+      <label for="login-pass" style="margin-top:10px;">Password</label>
+      <input type="password" id="login-pass" autocomplete="current-password" placeholder="Your password" onkeydown="if(event.key==='Enter')doPasswordLogin()">
+      <button class="btn gold" id="btn-pwlogin" onclick="doPasswordLogin()" style="margin-top:14px;">Sign in</button>
       <div id="login-msg"></div>
-      <p style="font-size:12px;color:#777;margin:14px 0 0;">Forgot the password you use on the company-website sign-in?
-        <a href="#" onclick="sendPassReset();return false;" style="color:#1c2455;">Email me a password-reset link</a></p>
+      <p style="font-size:12px;color:#777;margin:16px 0 0;border-top:1px solid #eee;padding-top:12px;">
+        No password yet? Ask the Director — he sets it and hands it over personally.<br>
+        Forgot it? <a href="#" onclick="sendPassReset();return false;" style="color:#1c2455;">Email me a reset link</a>
+        &nbsp;·&nbsp; <a href="#" onclick="sendMagicLink();return false;" style="color:#1c2455;">Email me a sign-in link instead</a></p>
     </div>
   </section>
 
@@ -197,8 +201,10 @@
   <section id="view-admin" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Users &amp; Roles</h2>
-      <p>Add a person here, set their role and hand them the company mailboxes they may send from. They finish by signing in once with their own email — no password ever passes through this screen.</p></div>
-    <div style="margin:0 0 12px;"><button class="btn gold" onclick="openInvite()">➕ Add a person</button></div>
+      <p>Add a person here, set their role and hand them the company mailboxes they may send from. You choose their first password while adding them and give it to them yourself — it is never emailed.</p></div>
+    <div style="margin:0 0 12px;"><button class="btn gold" onclick="openInvite()">➕ Add a person</button>
+      <button class="btn" onclick="loginHealth()" style="margin-left:8px;">🩺 Check everyone's login</button></div>
+    <div id="health-box"></div>
     <div class="table-scroll"><table>
       <thead><tr><th>Name</th><th>Role</th><th>Designation</th><th>Sends mail as</th><th>Active</th><th></th></tr></thead>
       <tbody id="user-rows"></tbody>
@@ -819,14 +825,32 @@ async function init(){
   if(!window.__notifTimer) window.__notifTimer=setInterval(()=>{try{notifLoad();}catch(e){}},60000);
   if(!window.__mailTimer) window.__mailTimer=setInterval(()=>{try{mailWatch();}catch(e){}},30000);
 }
-$('btn-magic').onclick = async () => {
-  const email = $('login-email').value.trim();
-  if (!email) { say('login-msg','Please enter your email.',false); return; }
-  $('btn-magic').disabled = true;
+// The normal way in: the email and password the Director handed over.
+async function doPasswordLogin(){
+  const email = ($('login-email').value || '').trim().toLowerCase();
+  const pass  = $('login-pass').value || '';
+  if (!email){ say('login-msg','Please enter your email.', false); return; }
+  if (!pass){ say('login-msg','Please enter your password.', false); return; }
+  const btn = $('btn-pwlogin'); btn.disabled = true; btn.textContent = 'Signing in…';
+  const { data, error } = await db.auth.signInWithPassword({ email, password: pass });
+  btn.disabled = false; btn.textContent = 'Sign in';
+  if (error || !data.session){
+    const m = (error && error.message) || '';
+    say('login-msg', /invalid login|credentials/i.test(m)
+      ? 'That email and password do not match. Ask the Director to confirm your password, or use the reset link below.'
+      : (/not confirmed/i.test(m) ? 'Your account is not confirmed yet — ask the Director to set your password again.' : ('Could not sign in: ' + m)), false);
+    return;
+  }
+  $('login-pass').value = '';
+  init();
+}
+// Kept as a fallback for anyone who has no password yet.
+async function sendMagicLink(){
+  const email = ($('login-email').value || '').trim();
+  if (!email) { say('login-msg','Please enter your email first.',false); return; }
   const { error } = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.href.split('#')[0] } });
-  $('btn-magic').disabled = false;
   say('login-msg', error ? 'Could not send the link: '+error.message : 'Link sent. Open the email on this device and tap it.', !error);
-};
+}
 $('btn-signout').onclick = async () => { await db.auth.signOut(); location.reload(); };
 
 /* ---- first sign-in from an invitation link ---- */
@@ -999,8 +1023,10 @@ async function renderInvites(){
       `<td>${esc(iv.designation||'—')}</td>` +
       `<td style="font-size:11.5px;color:#555">${esc(names)}</td>` +
       `<td style="white-space:nowrap"><button class="mini" data-act="send" style="color:#1a7f37;border-color:#1a7f37;">📧 Send invite email</button> ` +
+      `<button class="mini" data-act="pass">Password</button> ` +
       `<button class="mini" data-act="del" style="color:#c0392b;border-color:#c0392b;">Cancel</button></td>`;
     tr.querySelector('[data-act="send"]').onclick = () => sendInviteMail(iv.email, iv.full_name || 'They');
+    tr.querySelector('[data-act="pass"]').onclick = () => userSetPass({ full_name: iv.full_name || iv.email, email: iv.email });
     tr.querySelector('[data-act="del"]').onclick = () => delInvite(iv);
     tb.appendChild(tr);
   }
@@ -1013,8 +1039,51 @@ async function userSetPass(u){
   if (p.length < 8){ alert('Use at least 8 characters.'); return; }
   try{
     await salesmanApi({ action:'invite_create', email: u.email, password: p });
-    alert('Password set for ' + u.full_name + '. They sign in with it from the invitation link or the company website (Employee Login).');
+    alert('Password set for ' + u.full_name + '.\n\nThey can sign in straight away — on this portal\'s sign-in screen, or at www.aurumspirits.com → Employee Login — with ' + u.email + ' and that password.');
+    openAdmin();
   }catch(e){ alert('Could not set the password: ' + e.message); }
+}
+
+// One tap tells the Director exactly who can get in and who is stuck.
+async function loginHealth(){
+  const box = $('health-box'); if (!box) return;
+  box.innerHTML = '<div class="card" style="margin:0 0 14px;">Checking every login…</div>';
+  let d;
+  try{ d = await salesmanApi({ action:'login_status' }); }
+  catch(e){ box.innerHTML = '<div class="msg err">Could not check: ' + esc(e.message) + '</div>'; return; }
+  const rows = d.rows || [], strays = d.strays || [];
+  const days = s => { if(!s) return null; return Math.floor((Date.now() - new Date(s).getTime())/86400000); };
+  const trouble = rows.filter(r => !r.has_login || !r.id_matches || r.banned || !r.confirmed || !r.is_active);
+  const never   = rows.filter(r => r.has_login && r.id_matches && !r.last_sign_in);
+  let h = '<div class="card" style="margin:0 0 14px;">';
+  h += '<h3 style="margin:0 0 8px;font-size:15px;">Login health</h3>';
+  if (!trouble.length) h += '<p style="margin:0 0 6px;color:#1a7f37;">✔ All ' + rows.length + ' people have a working login — nobody is locked out by the system.</p>';
+  else {
+    h += '<p style="margin:0 0 6px;color:#c0392b;">' + trouble.length + ' need attention:</p><ul style="margin:0 0 8px 18px;padding:0;font-size:13px;">';
+    for (const r of trouble){
+      const why = !r.has_login ? 'no login exists — press Password on their row to create one'
+                : !r.id_matches ? 'their login and ERP record do not match — press Password on their row to relink'
+                : r.banned ? 'login is blocked — switch them back on with Edit'
+                : !r.confirmed ? 'login not confirmed — press Password on their row'
+                : 'account switched off in the ERP (Edit → Active)';
+      h += '<li><b>' + esc(r.name) + '</b> — ' + why + '</li>';
+    }
+    h += '</ul>';
+  }
+  if (never.length){
+    h += '<p style="margin:8px 0 4px;font-size:13px;color:#8a6d1f;">Never signed in yet (give them their password): ' +
+         never.map(r => esc(r.name)).join(', ') + '</p>';
+  }
+  const stale = rows.filter(r => r.last_sign_in && days(r.last_sign_in) > 30);
+  if (stale.length) h += '<p style="margin:4px 0 0;font-size:12.5px;color:#777;">Not used in over a month: ' + stale.map(r => esc(r.name) + ' (' + days(r.last_sign_in) + ' days)').join(', ') + '</p>';
+  if (strays.length){
+    h += '<p style="margin:10px 0 0;font-size:13px;color:#c0392b;">Left-over logins with no person in the ERP: ' +
+         strays.map(s => esc(s.email)).join(', ') +
+         ' — add that person again to reconnect them, or tell me to clear them.</p>';
+  }
+  h += '<p style="margin:10px 0 0;font-size:12px;color:#777;">Someone who simply forgot their password is not a fault — press <b>Password</b> on their row, set a new one and tell them.</p>';
+  h += '</div>';
+  box.innerHTML = h;
 }
 
 async function delInvite(iv){
