@@ -377,16 +377,23 @@
   <!-- ============ MODULE 7: SALES REPORTS & TARGETS ============ -->
   <section id="view-reports" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Sales Reports &amp; Targets</h2>
-      <p>Daily activity, monthly reports, and progress against monthly &amp; quarterly targets — in cases. Cases booked are counted from the order book, never self-declared.</p></div>
+    <div class="welcome"><h2>Team Reports &amp; Targets</h2>
+      <p>Your sales team's daily activity, monthly reports, and progress against monthly &amp; quarterly targets — in cases. Cases booked are counted from the order book, never self-declared.</p></div>
     <div class="subtabs">
       <button class="chip on" id="rp-today" onclick="reportsTab('today')">Today</button>
       <button class="chip" id="rp-mine" onclick="reportsTab('mine')">My month</button>
       <button class="chip hidden" id="rp-team" onclick="reportsTab('team')">Team</button>
-      <button class="chip" id="rp-sales" onclick="reportsTab('sales')">📊 Sales report</button>
       <button class="chip dir-only" id="rp-targets" onclick="reportsTab('targets')">Targets</button>
     </div>
     <div id="reports-body"></div>
+  </section>
+
+  <!-- ============ SALES REPORT (distributor / retailer wise, cases) ============ -->
+  <section id="view-salesrep" class="hidden">
+    <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>Sales Report</h2>
+      <p>Distributor-wise (primary sale, from the order book) and retailer-wise (secondary sale) — brand by brand, in cases. Daily, weekly, monthly or any date range.</p></div>
+    <div id="salesrep-body"></div>
   </section>
 
   <!-- ============ MODULE 8: PURCHASES & RM STORE ============ -->
@@ -597,7 +604,8 @@ const MODULES = [
   {key:'mfg',     ico:'🏭', name:'Manufacturing @ MMC', desc:'RM custody, batches, QC, FG stock',   live:true,  open:()=>openMfg()},
   {key:'prod',    ico:'🎯', name:'Production',       desc:'Monthly targets & completion status',   live:true, mfgOnly:true, open:()=>openProd()},
   {key:'onboard', ico:'📋', name:'Onboarding & Vendors', desc:'Distributor applications, vendor register', live:true, dirOnly:true, open:()=>openOnboard()},
-  {key:'reports', ico:'📈', name:'Sales Reports',    desc:'Daily activity, monthly reports, targets', live:true, open:()=>openReports()},
+  {key:'reports', ico:'📈', name:'Team Reports & Targets', desc:'Daily activity, team reports, targets', live:true, open:()=>openReports()},
+  {key:'salesrep', ico:'📊', name:'Sales Report',    desc:'Distributor & retailer wise, brand-wise cases', live:true, open:()=>openSalesRep()},
   {key:'field',   ico:'🤳', name:'Salesman Reports', desc:'Field visits: selfies, GPS & orders',      live:true, fieldOnly:true, open:()=>openField()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
@@ -623,7 +631,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','field','purchase','mail','acct','docs','contacts'])
+  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','prod','onboard','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','field','purchase','mail','acct','docs','contacts'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   window.scrollTo(0,0);
 }
@@ -2028,18 +2036,25 @@ function bar(pct){
 /* ---- SALES REPORT — distributor-wise (primary, straight from the order book) and
    ---- retailer-wise (secondary: distributor → retailer). Brand-wise CASES only, no amounts. ---- */
 let srMode = 'dist', srPeriod = 'month';
+async function openSalesRep(){
+  window.__srB = $('salesrep-body');
+  srShell(window.__srB);
+  show('salesrep');
+}
+function srReload(){ if (window.__srB) srShell(window.__srB); }
 function srShell(B){
+  window.__srB = B;
   B.innerHTML = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
-      <button class="chip ${srMode==='dist'?'on':''}" onclick="srMode='dist';reportsTab('sales')">🤝 Distributor-wise (primary sale)</button>
-      <button class="chip ${srMode==='ret'?'on':''}" onclick="srMode='ret';reportsTab('sales')">🏪 Retailer-wise (secondary sale)</button>
+      <button class="chip ${srMode==='dist'?'on':''}" onclick="srMode='dist';srReload()">🤝 Distributor-wise (primary sale)</button>
+      <button class="chip ${srMode==='ret'?'on':''}" onclick="srMode='ret';srReload()">🏪 Retailer-wise (secondary sale)</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
-      <button class="chip ${srPeriod==='day'?'on':''}" onclick="srPeriod='day';reportsTab('sales')">Daily (today)</button>
-      <button class="chip ${srPeriod==='week'?'on':''}" onclick="srPeriod='week';reportsTab('sales')">This week</button>
-      <button class="chip ${srPeriod==='month'?'on':''}" onclick="srPeriod='month';reportsTab('sales')">This month</button>
-      <button class="chip ${srPeriod==='range'?'on':''}" onclick="srPeriod='range';reportsTab('sales')">Date range</button>
-      ${srPeriod==='range'?`<input type="date" id="sr-from" value="${window.__srFrom||todayISO()}" style="width:auto;"> <span style="color:#777;">to</span> <input type="date" id="sr-to" value="${window.__srTo||todayISO()}" style="width:auto;"> <button class="mini" onclick="window.__srFrom=$('sr-from').value;window.__srTo=$('sr-to').value;reportsTab('sales')">Apply</button>`:''}
+      <button class="chip ${srPeriod==='day'?'on':''}" onclick="srPeriod='day';srReload()">Daily (today)</button>
+      <button class="chip ${srPeriod==='week'?'on':''}" onclick="srPeriod='week';srReload()">This week</button>
+      <button class="chip ${srPeriod==='month'?'on':''}" onclick="srPeriod='month';srReload()">This month</button>
+      <button class="chip ${srPeriod==='range'?'on':''}" onclick="srPeriod='range';srReload()">Date range</button>
+      ${srPeriod==='range'?`<input type="date" id="sr-from" value="${window.__srFrom||todayISO()}" style="width:auto;"> <span style="color:#777;">to</span> <input type="date" id="sr-to" value="${window.__srTo||todayISO()}" style="width:auto;"> <button class="mini" onclick="window.__srFrom=$('sr-from').value;window.__srTo=$('sr-to').value;srReload()">Apply</button>`:''}
     </div>
     <div id="sr-body"><p style="color:#777">Loading…</p></div>`;
   srRender();
@@ -2144,7 +2159,7 @@ async function ssSave(){
     sale_date: $('ss-date').value || todayISO(), party_id: $('ss-dist').value || null,
     retailer_id: retId, sku_id: skuId, cases, created_by: me.id });
   if (error){ say('ss-msg','Could not save: '+error.message,false); return; }
-  reportsTab('sales');
+  srReload();
 }
 async function openReports(){
   const { data: tm } = await db.schema('adm').from('users').select('id, full_name, designation').eq('reports_to', me.id).eq('is_active', true);
@@ -2153,10 +2168,9 @@ async function openReports(){
   reportsTab('today'); applyDirOnly(); show('reports');
 }
 async function reportsTab(t){
-  for (const k of ['today','mine','team','sales','targets']) $('rp-'+k).classList.toggle('on', k === t);
+  for (const k of ['today','mine','team','targets']) $('rp-'+k).classList.toggle('on', k === t);
   const B = $('reports-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const S = db.schema('sales');
-  if (t === 'sales'){ srShell(B); return; }
 
   if (t === 'today'){
     const { data: rows, error } = await S.from('v_activity_reports').select('*').eq('user_id', me.id).eq('report_date', todayISO());
