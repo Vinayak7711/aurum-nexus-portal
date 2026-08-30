@@ -416,6 +416,7 @@
       <button class="chip" id="ac-petty" onclick="acctTab('petty')">Petty Cash</button>
       <button class="chip" id="ac-tax" onclick="acctTab('tax')">Purchase Tax</button>
       <button class="chip" id="ac-vdues" onclick="acctTab('vdues')">Vendor Dues</button>
+      <button class="chip" id="ac-recv" onclick="acctTab('recv')">Distributor Dues</button>
       <button class="chip" id="ac-exp" onclick="acctTab('exp')">Expenses</button>
       <button class="chip" id="ac-salary" onclick="acctTab('salary')">Salary</button>
       <button class="chip" id="ac-adv" onclick="acctTab('adv')">Advances</button>
@@ -667,7 +668,8 @@ const SECTIONS = {
   purchase: [['pu-pos','Purchase orders'],['pu-new','New PO'],['pu-req','Material requests'],
              ['pu-grn','Receipts & QC'],['pu-store','RM store'],['pu-hist','PO history']],
   acct:     [['ac-banks','Banks'],['ac-newe','New entry'],['ac-ledger','Ledger'],['ac-petty','Petty cash'],
-             ['ac-tax','Purchase tax'],['ac-vdues','Vendor dues'],['ac-exp','Expenses'],['ac-salary','Salary'],
+             ['ac-tax','Purchase tax'],['ac-vdues','Vendor dues'],['ac-recv','Distributor dues'],
+             ['ac-exp','Expenses'],['ac-salary','Salary'],
              ['ac-adv','Advances'],['ac-assets','Assets']],
   rates:    [['rt-rates','Billing rates'],['rt-struct','Duty structure'],['rt-out','Outstanding'],['rt-cm','MMC payable']],
 };
@@ -1585,11 +1587,7 @@ async function ratesTab(which){
     B.innerHTML = html + '</tbody></table></div><p style="font-size:11px;color:#777;margin-top:8px;">Per-case figures are computed by the database from per-bottle inputs — they cannot be mistyped. New states get their own structure rows when you expand.</p><div id="rates-msg"></div>';
   }
   if (which === 'out'){
-    const { data, error } = await S.from('v_party_outstanding').select('*').order('outstanding',{ascending:false});
-    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
-    let html = '<div class="table-scroll"><table><thead><tr><th>Party</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th class="amount">Outstanding ₹</th></tr></thead><tbody>';
-    for (const r of (data||[])) html += `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${inr(r.billed)}</td><td class="amount">${inr(r.paid)}</td><td class="amount"><b>${inr(r.outstanding)}</b></td></tr>`;
-    B.innerHTML = html + '</tbody></table></div>';
+    await recvLoad('rates-body');
   }
   if (which === 'cm'){
     const { data, error } = await S.from('cm_payables').select('*, order:orders(so_no)').order('accrued_at',{ascending:false}).limit(200);
@@ -1601,6 +1599,92 @@ async function ratesTab(which){
     B.innerHTML = html + '</tbody></table></div>';
   }
 }
+/* ============ DISTRIBUTOR RECEIVABLES (money owed TO us) ====================
+   A receivable is born the moment goods leave for a distributor — the order is
+   marked DISPATCHED and its billed value is frozen from the rate card. Receipts
+   recorded against that order knock it down. The same screen serves Rates →
+   Outstanding (Director) and Accounting → Distributor dues (finance), so both
+   read one number, never two.                                                 */
+let recvRows = [], recvBills = [], recvOpen = null, recvTarget = 'rates-body';
+async function recvLoad(targetId){
+  recvTarget = targetId; recvOpen = null;
+  const B = $(targetId); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
+  const S = db.schema('sales');
+  const [o, b] = await Promise.all([
+    S.from('v_dist_outstanding').select('*').order('outstanding', {ascending:false}),
+    S.from('v_dist_bills').select('*').order('due_date')
+  ]);
+  if (o.error){ B.innerHTML = `<div class="msg err">Could not load receivables: ${esc(o.error.message)}</div>`; return; }
+  recvRows = o.data || []; recvBills = b.data || [];
+  recvDraw();
+}
+function recvToggle(pid){ recvOpen = (recvOpen === pid) ? null : pid; recvDraw(); }
+function recvDraw(){
+  const B = $(recvTarget); if (!B) return;
+  const sum = k => recvRows.reduce((a, r) => a + Number(r[k] || 0), 0);
+  const totalOut = sum('outstanding'), totalOverdue = sum('overdue');
+  const withDues = recvRows.filter(r => Number(r.outstanding) > 0).length;
+  let html = `<div class="statgrid">
+    <div class="stat"><div class="n">₹ ${inr(totalOut)}</div><div class="l">Receivable from distributors</div></div>
+    <div class="stat"><div class="n" style="color:${totalOverdue > 0 ? '#b3261e' : '#1a7f37'}">₹ ${inr(totalOverdue)}</div><div class="l">Past its due date</div></div>
+    <div class="stat"><div class="n">${withDues}</div><div class="l">Distributors with dues</div></div></div>`;
+
+  html += `<h4 class="sec">How old the money is</h4>
+    <div class="table-scroll"><table><thead><tr>
+      <th class="amount">Not due yet ₹</th><th class="amount">1–30 days ₹</th><th class="amount">31–60 days ₹</th>
+      <th class="amount">61–90 days ₹</th><th class="amount">Over 90 days ₹</th></tr></thead><tbody>
+      <tr><td class="amount">${inr(sum('not_due'))}</td><td class="amount">${inr(sum('d1_30'))}</td>
+          <td class="amount">${inr(sum('d31_60'))}</td><td class="amount" style="color:#7a5c10">${inr(sum('d61_90'))}</td>
+          <td class="amount" style="color:#b3261e;font-weight:700">${inr(sum('d90p'))}</td></tr>
+    </tbody></table></div>`;
+
+  html += `<h4 class="sec">Distributor-wise</h4>
+    <div class="table-scroll"><table><thead><tr>
+      <th>Distributor</th><th class="amount">Billed ₹</th><th class="amount">Received ₹</th>
+      <th class="amount">Outstanding ₹</th><th class="amount">Overdue ₹</th><th>Oldest due</th>
+      <th class="amount">Open bills</th><th></th></tr></thead><tbody>`;
+  if (!recvRows.length){
+    html += `<tr><td colspan="8" style="color:#777">Nothing is outstanding yet. A distributor's bill appears here the moment their order is marked <b>Dispatched</b> in Sales &amp; Orders.</td></tr>`;
+  }
+  for (const r of recvRows){
+    const over = Number(r.overdue || 0), out = Number(r.outstanding || 0);
+    const open = recvOpen === r.party_id;
+    html += `<tr${over > 0 ? ' style="background:#fdf6ee;"' : ''}>
+      <td><b>${esc(r.code || '')}</b> ${esc(r.name || '')}${r.credit_days ? `<br><span style="font-size:11px;color:#777">${r.credit_days} days credit</span>` : ''}</td>
+      <td class="amount">${inr(r.billed)}</td><td class="amount">${inr(r.paid)}</td>
+      <td class="amount"><b>${inr(out)}</b></td>
+      <td class="amount" style="color:${over > 0 ? '#b3261e' : '#777'};font-weight:${over > 0 ? '700' : '400'}">${inr(over)}</td>
+      <td>${r.oldest_due || '—'}${Number(r.worst_days) > 0 ? `<br><span style="font-size:11px;color:#b3261e">${r.worst_days} days late</span>` : ''}</td>
+      <td class="amount">${r.open_bills || 0}</td>
+      <td><button class="mini" onclick="recvToggle('${r.party_id}')">${open ? 'Hide bills' : 'Bills…'}</button></td></tr>`;
+    if (open){
+      const bills = recvBills.filter(b => b.party_id === r.party_id && Number(b.balance) !== 0);
+      html += `<tr><td colspan="8" style="background:#fbf9f4;padding:10px 12px;">
+        <div style="font-size:12px;color:#555;margin-bottom:6px;">Every dispatched order still carrying a balance. Open one to record the money when it comes in.</div>
+        <div class="table-scroll"><table><thead><tr>
+          <th>Order</th><th>Dispatched</th><th>Due on</th><th class="amount">Cases</th>
+          <th class="amount">Bill ₹</th><th class="amount">Received ₹</th><th class="amount">Balance ₹</th>
+          <th>Age</th><th></th></tr></thead><tbody>` +
+        (bills.length ? bills.map(b => {
+          const late = Number(b.days_overdue) > 0;
+          return `<tr>
+            <td><b>${esc(b.so_no || '')}</b>${b.invoice_no ? `<br><span style="font-size:11px;color:#777">Inv ${esc(b.invoice_no)}</span>` : ''}</td>
+            <td>${b.dispatched_at ? String(b.dispatched_at).slice(0,10) : '—'}</td>
+            <td>${b.due_date || '—'}</td>
+            <td class="amount">${b.cases || 0}</td>
+            <td class="amount">${inr(b.amount)}</td>
+            <td class="amount">${inr(b.paid)}</td>
+            <td class="amount"><b>${inr(b.balance)}</b></td>
+            <td style="color:${late ? '#b3261e' : '#1a7f37'}">${late ? b.days_overdue + ' days late' : 'within credit'}</td>
+            <td><button class="mini" onclick="openOrderDetail('${b.order_id}')">Open &amp; record receipt</button></td></tr>`;
+        }).join('') : '<tr><td colspan="9" style="color:#777">Every bill for this distributor is settled.</td></tr>') +
+        '</tbody></table></div></td></tr>';
+    }
+  }
+  B.innerHTML = html + `</tbody></table></div>
+    <p style="font-size:11.5px;color:#777;margin-top:8px;">This is money owed <b>to</b> Aurum by distributors — the primary sale. The bill is raised automatically when an order is dispatched, valued from the billing rate card, and the due date is the dispatch date plus that distributor's credit days. Receipts are recorded on the order itself, so Sales and Accounting always show the same balance. Vendor bills we have to pay are the other direction — see <b>Accounting → Vendor dues</b>.</p>`;
+}
+
 async function saveRate(skuId){
   const rate = Number($('nr-'+skuId).value);
   const eff = $('nd-'+skuId).value || new Date().toISOString().slice(0,10);
@@ -3418,9 +3502,17 @@ async function openAcct(){
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
 function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
 async function acctTab(t){
-  for (const k of ['banks','newe','ledger','petty','tax','vdues','exp','salary','adv','assets','appr']) $('ac-'+k).classList.toggle('on', k===t);
+  for (const k of ['banks','newe','ledger','petty','tax','vdues','recv','exp','salary','adv','assets','appr']) $('ac-'+k).classList.toggle('on', k===t);
   const B = $('acct-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const A = db.schema('acct');
+
+  // Money owed TO us by distributors — the mirror image of Vendor dues. Same
+  // screen the Director sees under Rates → Outstanding, reading the same views.
+  if (t === 'recv'){
+    if (!canFin()){ B.innerHTML = '<div class="msg err">Distributor dues are visible to the Director and to Accounts (finance-view permission).</div>'; return; }
+    await recvLoad('acct-body');
+    return;
+  }
 
   if (t === 'appr'){
     if (!canFinApprove()){ B.innerHTML = '<div class="msg err">Pending approvals are visible only to the Director and the Accounts head (finance-approve permission).</div>'; return; }
