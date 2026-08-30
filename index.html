@@ -1018,9 +1018,15 @@ async function userSetPass(u){
 }
 
 async function delInvite(iv){
-  if (!confirm('Cancel the invitation for ' + (iv.full_name || iv.email) + '?\n\nThey will no longer be able to sign in.')) return;
-  await db.schema('adm').from('invites').delete().eq('email', iv.email);
-  await db.schema('adm').from('auth_allowlist').delete().eq('email', iv.email);
+  if (!confirm('Cancel the invitation for ' + (iv.full_name || iv.email) + '?\n\nTheir login (if it was already created) is removed as well — the email can be added again later.')) return;
+  try{
+    await salesmanApi({ action:'user_delete', email: iv.email });
+  }catch(e){
+    // even if the removal service is unreachable, at least withdraw the invitation
+    await db.schema('adm').from('invites').delete().eq('email', iv.email);
+    await db.schema('adm').from('auth_allowlist').delete().eq('email', iv.email);
+    alert('The invitation was withdrawn, but the login itself could not be removed right now: ' + e.message);
+  }
   openAdmin();
 }
 
@@ -1125,15 +1131,14 @@ From then on you can sign in any time at www.aurumspirits.com -> Employee Login,
   return false;
 }
 async function delUser(u){
-  if (!confirm('Delete ' + u.full_name + ' (' + u.email + ') from the ERP?\n\nThey immediately lose all access. If they have past records (orders, entries, mail), they are deactivated instead so your books stay intact.')) return;
-  const { data, error } = await db.schema('adm').rpc('delete_user', { p_user: u.id });
-  if (error){ alert('Could not delete: ' + error.message); return; }
-  if (data === 'deactivated'){
-    // Their history stays intact in the books, but the name is stamped deleted
-    // so it disappears from this list (and every other people list) for good.
-    await db.schema('adm').from('users').update({ deleted_at: new Date().toISOString() }).eq('id', u.id);
-    alert(u.full_name + ' has been removed. Their past records stay intact in the books, but the name will no longer appear in any list.');
-  }
+  if (!confirm('Delete ' + u.full_name + ' (' + u.email + ') from the ERP?\n\nTheir login is removed completely, so this email can be added again later as a new person. If they have past records (orders, entries, mail), the name stays in your books — but all access is gone either way.')) return;
+  try{
+    const r = await salesmanApi({ action:'user_delete', id: u.id });
+    if (r && r.mode === 'archived')
+      alert(u.full_name + ' has been removed. Their past records stay intact in the books, and the login is fully deleted — the email can be added again any time.');
+    else
+      alert(u.full_name + ' has been removed completely, login and all. The email can be added again any time.');
+  }catch(e){ alert('Could not delete: ' + e.message); return; }
   openAdmin();
 }
 function secAll(modKey, on){
