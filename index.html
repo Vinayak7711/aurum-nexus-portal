@@ -6430,9 +6430,70 @@ async function fieldLoadSalesmen(){
       <button class="mini" onclick="salesmanEdit('${s.id}','${esc(s.full_name).replace(/'/g,'')}','${(s.app_login_id||'').replace(/'/g,'')}','${(s.phone||'').replace(/'/g,'')}')">Edit</button>
       <button class="mini" onclick="salesmanPass('${s.id}')">Set password</button>
       ${s.is_active?`<button class="mini" style="color:#c0392b;" onclick="salesmanToggle('${s.id}',false)">Disable</button>`:`<button class="mini" onclick="salesmanToggle('${s.id}',true)">Enable</button>`}
+      <button class="mini" onclick="smParties('${s.id}','${esc(s.full_name).replace(/'/g,'')}')">Assigned parties</button>
     </td></tr>`).join('')||'<tr><td colspan="5" style="color:#777">No salesmen yet.</td></tr>';
-  h+='</tbody></table></div>';
+  h+='</tbody></table></div><div id="sm-party-panel"></div>';
   B.innerHTML=h;
+}
+
+/* ---- which parties this salesman carries in the field app ---- */
+// A party has one owner. Ticking it here hands it to this salesman (taking it
+// from whoever had it — the row says who that is); unticking sets it free.
+async function smParties(uid, name){
+  const P = $('sm-party-panel');
+  P.innerHTML = '<p style="color:#777">Loading parties…</p>';
+  const [{ data: parties, error }, { data: users }] = await Promise.all([
+    db.schema('sales').from('parties').select('id,code,name,city,owner_id,party_type')
+      .eq('is_active', true).eq('party_type','DISTRIBUTOR').order('name'),
+    db.schema('adm').from('users').select('id,full_name')
+  ]);
+  if (error){ P.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  const nameOf = {}; (users||[]).forEach(u=>nameOf[u.id]=u.full_name);
+  window.__smpOwner = {}; (parties||[]).forEach(p=>window.__smpOwner[p.id]=p.owner_id);
+  P.innerHTML = `<div class="card" style="margin-top:14px;max-width:640px;">
+    <h3 style="font-size:15px;">Parties assigned to ${esc(name)}</h3>
+    <p style="font-size:12px;color:#777;margin:4px 0 10px;">Ticked parties appear in this salesman's field app for visits and orders. A party can carry only one salesman — ticking one that belongs to someone else moves it over; unticking leaves it unassigned.</p>
+    <input type="text" id="smp-q" placeholder="🔍 Filter parties…" oninput="[...document.querySelectorAll('.smp-row')].forEach(r=>{r.style.display=r.dataset.t.includes(this.value.toLowerCase())?'flex':'none';})">
+    <div style="max-height:320px;overflow:auto;margin-top:8px;display:flex;flex-direction:column;gap:6px;">` +
+    ((parties||[]).map(p=>{
+      const mine = p.owner_id === uid;
+      const other = p.owner_id && !mine ? (nameOf[p.owner_id]||'someone else') : null;
+      return `<label class="smp-row" data-t="${esc((p.name+' '+p.code+' '+(p.city||'')).toLowerCase())}"
+        style="display:flex;gap:8px;align-items:center;font-weight:normal;font-size:13px;padding:6px 8px;border:1px solid #eee6d6;border-radius:8px;">
+        <input type="checkbox" class="smp-box" data-pid="${p.id}" ${mine?'checked':''}>
+        <span style="flex:1;"><b>${esc(p.code)}</b> ${esc(p.name)}${p.city?' · '+esc(p.city):''}</span>
+        ${other?`<span style="font-size:11px;color:#b3821e;">with ${esc(other)}</span>`:(p.owner_id?'':'<span style="font-size:11px;color:#999;">unassigned</span>')}
+      </label>`;
+    }).join('') || '<p style="color:#777;font-size:13px;">No active distributors yet — add them in Party Master.</p>') +
+    `</div>
+    <div class="row2" style="margin-top:12px;">
+      <button class="btn ghost sm" onclick="$('sm-party-panel').innerHTML=''">Close</button>
+      <button class="btn gold sm" onclick="smPartiesSave('${uid}','${esc(name).replace(/'/g,'')}')">Save assignments</button>
+    </div>
+    <div id="smp-msg"></div></div>`;
+  P.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+async function smPartiesSave(uid, name){
+  const boxes = [...document.querySelectorAll('.smp-box')];
+  const take = [], drop = [];
+  for (const b of boxes){
+    const pid = b.dataset.pid, was = window.__smpOwner[pid] === uid;
+    if (b.checked && !was) take.push(pid);        // hand it to this salesman
+    if (!b.checked && was) drop.push(pid);        // set it free
+  }
+  if (!take.length && !drop.length){ say('smp-msg','Nothing changed.', true); return; }
+  const S = db.schema('sales');
+  if (take.length){
+    const { error } = await S.from('parties').update({ owner_id: uid }).in('id', take);
+    if (error){ say('smp-msg','Could not assign: '+error.message, false); return; }
+  }
+  if (drop.length){
+    const { error } = await S.from('parties').update({ owner_id: null }).in('id', drop);
+    if (error){ say('smp-msg','Could not unassign: '+error.message, false); return; }
+  }
+  const n = boxes.filter(b=>b.checked).length;
+  await smParties(uid, name);   // redraw with the fresh owners…
+  say('smp-msg', `Saved — ${name} now carries ${n} part${n===1?'y':'ies'}. The field app picks this up the next time it opens.`, true);
 }
 async function salesmanCreate(){
   const name=$('sm-name').value.trim(), login=$('sm-login').value.trim(), phone=$('sm-phone').value.trim(), pass=$('sm-pass').value;
