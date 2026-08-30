@@ -153,6 +153,22 @@
       <input type="email" id="login-email" placeholder="name@aurumspirits.com" autocomplete="email">
       <button class="btn gold" id="btn-magic">Send sign-in link</button>
       <div id="login-msg"></div>
+      <p style="font-size:12px;color:#777;margin:14px 0 0;">Forgot the password you use on the company-website sign-in?
+        <a href="#" onclick="sendPassReset();return false;" style="color:#1c2455;">Email me a password-reset link</a></p>
+    </div>
+  </section>
+
+  <!-- Landed here from a password-reset email: choose the new password. -->
+  <section id="view-recover" class="login-wrap hidden">
+    <div class="card">
+      <h2>Choose a new password</h2>
+      <p class="sub">This becomes your password for the Employee Portal sign-in on the company website. At least 8 characters.</p>
+      <label>New password</label>
+      <input type="password" id="rc-pass1" autocomplete="new-password">
+      <label style="margin-top:10px;">Type it again</label>
+      <input type="password" id="rc-pass2" autocomplete="new-password">
+      <button class="btn gold" id="btn-recover" onclick="saveNewPassword()" style="margin-top:14px;">Save password &amp; enter ERP</button>
+      <div id="rc-msg"></div>
     </div>
   </section>
 
@@ -705,6 +721,9 @@ function applySections(modKey){
   }
 }
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Remember whether this page was opened from a password-reset email, before the
+// auth library strips the #hash. In that case we ask for the new password first.
+const CAME_FROM_RECOVERY = /type=recovery/.test(location.hash);
 let me = null, editing = null, editingParty = null, allUsers = [];
 let M = { brands:[], skus:[], mfrs:[], cats:[], users:[], parties:[] };  // master cache
 let orderFilter = 'ALL';
@@ -714,7 +733,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
+  for (const v of ['login','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
   window.scrollTo(0,0);
@@ -753,6 +772,8 @@ async function dirDel(sch, tbl, id, label, afterB64){
 async function init(){
   const { data:{ session } } = await db.auth.getSession();
   if (!session) { show('login'); return; }
+  // A password-reset link signs you in and must land on the new-password card.
+  if (CAME_FROM_RECOVERY && !window.__recoveryDone){ show('recover'); return; }
   let { data, error } = await db.schema('adm').from('users').select('*').eq('id', session.user.id).single();
   if (error || !data){ show('login'); say('login-msg','Signed in, but your profile was not found. Contact a Director.',false); return; }
   me = data;
@@ -784,6 +805,27 @@ $('btn-magic').onclick = async () => {
   say('login-msg', error ? 'Could not send the link: '+error.message : 'Link sent. Open the email on this device and tap it.', !error);
 };
 $('btn-signout').onclick = async () => { await db.auth.signOut(); location.reload(); };
+
+/* ---- password reset (for the company-website Employee Portal sign-in) ---- */
+async function sendPassReset(){
+  const email = $('login-email').value.trim();
+  if (!email){ say('login-msg','Type your email above first, then tap the reset link.', false); return; }
+  const { error } = await db.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0] });
+  say('login-msg', error ? 'Could not send the reset email: '+error.message
+    : 'Password-reset email sent. Open it and tap the link — you will be asked to choose a new password.', !error);
+}
+async function saveNewPassword(){
+  const p1 = $('rc-pass1').value, p2 = $('rc-pass2').value;
+  if (p1.length < 8){ say('rc-msg','Use at least 8 characters.', false); return; }
+  if (p1 !== p2){ say('rc-msg','The two passwords do not match.', false); return; }
+  const btn = $('btn-recover'); btn.disabled = true;
+  const { error } = await db.auth.updateUser({ password: p1 });
+  btn.disabled = false;
+  if (error){ say('rc-msg','Could not save: '+error.message, false); return; }
+  window.__recoveryDone = true;
+  say('rc-msg','Saved. This is now your Employee Portal password.', true);
+  setTimeout(()=>init(), 900);
+}
 db.auth.onAuthStateChange((event) => { if (event === 'SIGNED_IN' && !me) init(); });
 
 /* ---------------- home ---------------- */
