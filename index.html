@@ -230,17 +230,31 @@
   <section id="view-parties" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Party Master</h2>
-      <p>Distributors and vendors — kept in separate lists. One row each, forever. Deactivate, never delete.</p></div>
-    <h4 class="sec">🤝 Distributors (<span id="party-count-d">0</span>)</h4>
+      <p>Distributors, vendors and retailers — kept in separate lists. One row each, forever. Deactivate, never delete.</p></div>
+    <div class="subtabs">
+      <button class="chip on" id="pm-d" onclick="pmShow('d')">🤝 Distributors (<span id="party-count-d">0</span>)</button>
+      <button class="chip" id="pm-v" onclick="pmShow('v')">💳 Vendors (<span id="party-count-v">0</span>)</button>
+      <button class="chip" id="pm-r" onclick="pmShow('r')">🏪 Retailers (<span id="party-count-r">0</span>)</button>
+    </div>
+    <div id="pm-sec-d">
     <div class="table-scroll"><table>
       <thead><tr><th>Code</th><th>Name</th><th>City</th><th>Territory</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows"></tbody>
     </table></div>
-    <h4 class="sec" style="margin-top:18px;">💳 Vendors — suppliers &amp; service providers (<span id="party-count-v">0</span>)</h4>
+    </div>
+    <div id="pm-sec-v" class="hidden">
     <div class="table-scroll"><table>
       <thead><tr><th>Code</th><th>Name</th><th>City</th><th>GSTIN</th><th>Contact</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows-v"></tbody>
     </table></div>
+    </div>
+    <div id="pm-sec-r" class="hidden">
+    <div class="table-scroll"><table>
+      <thead><tr><th>Code</th><th>Name</th><th>Category</th><th>District</th><th>Area</th><th>Contact</th><th>Active</th><th></th></tr></thead>
+      <tbody id="party-rows-r"></tbody>
+    </table></div>
+    <p style="font-size:12px;color:#777;margin-top:6px;">Retailers are added and edited in <b>Onboarding &amp; Vendors → 🏪 Retailers</b>; the category shown here comes from that register.</p>
+    </div>
   </section>
 
   <!-- ============ MODULE 1: BRANDS & SKUs ============ -->
@@ -1017,7 +1031,32 @@ async function openParties(){
   $('party-count-d').textContent = nD; $('party-count-v').textContent = nV;
   if (!nD) tbD.innerHTML = '<tr><td colspan="7" style="color:#777">No distributors yet — new distributors come in through Onboarding &amp; Vendors.</td></tr>';
   if (!nV) tbV.innerHTML = '<tr><td colspan="7" style="color:#777">No vendors yet — register vendors through Onboarding &amp; Vendors.</td></tr>';
+  // Retailers — linked straight from the Onboarding retailer register, category and all.
+  const tbR = $('party-rows-r'); tbR.innerHTML = '';
+  try {
+    const { data: rets } = await db.schema('sales').from('retailers').select('*').order('name');
+    let nR = 0;
+    for (const r of (rets||[])){
+      nR++;
+      const tr = document.createElement('tr');
+      if (r.status !== 'ACTIVE') tr.className = 'inactive';
+      tr.innerHTML = `<td><b>${esc(r.code)}</b></td><td>${esc(r.name)}${r.license_no?'<br><span style="font-size:11px;color:#777">Lic: '+esc(r.license_no)+'</span>':''}</td>` +
+        `<td>${esc(r.category||'—')}</td><td>${esc(r.district||'—')}</td><td>${esc(r.area||'—')}</td>` +
+        `<td>${esc(r.contact_person||'—')}${r.phone?'<br><span style="font-size:11px;color:#777">'+esc(r.phone)+'</span>':''}</td>` +
+        `<td>${r.status==='ACTIVE'?'✔':'✖'}</td>` +
+        `<td style="white-space:nowrap"><button class="mini" onclick="openOnboard().then(()=>onbTab('retailers'))">Manage</button></td>`;
+      tbR.appendChild(tr);
+    }
+    $('party-count-r').textContent = nR;
+    if (!nR) tbR.innerHTML = '<tr><td colspan="8" style="color:#777">No retailers yet — add them in Onboarding &amp; Vendors → 🏪 Retailers.</td></tr>';
+  } catch(e){ tbR.innerHTML = '<tr><td colspan="8" style="color:#777">Retailer list is not available to you.</td></tr>'; }
   show('parties');
+}
+function pmShow(which){
+  ['d','v','r'].forEach(k => {
+    $('pm-'+k).classList.toggle('on', k===which);
+    $('pm-sec-'+k).classList.toggle('hidden', k!==which);
+  });
 }
 function openPartyEdit(p, kind){
   editingParty = p;
@@ -4297,7 +4336,7 @@ async function openDocs(){
 async function docsList(){
   const B = $('docs-body'); B.innerHTML = '<p style="color:#555">Loading…</p>';
   const { data, error } = await db.schema('comp').from('doc_library')
-    .select('id,title,filename,content_type,size_bytes,uploaded_by,created_at')
+    .select('id,title,filename,content_type,size_bytes,uploaded_by,created_at,group_id')
     .order('created_at',{ascending:false}).limit(500);
   if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
   window.__docsAll = data || [];
@@ -4309,7 +4348,7 @@ async function docsList(){
     ${canDocsEdit() ? `
     <div class="card" style="max-width:680px;margin-bottom:14px;">
       <h3 style="font-size:15px;">Add a document</h3>
-      <label>Title (used when uploading a single file — for multiple files each file's own name becomes its title)</label><input type="text" id="doc-title" maxlength="120" placeholder="e.g. MMC bottling agreement 2026, GST registration, Office rent agreement">
+      <label>Title * — everything you upload together is saved as ONE entry under this title</label><input type="text" id="doc-title" maxlength="120" placeholder="e.g. MMC bottling agreement 2026, GST registration, Office rent agreement">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
         <input type="file" id="doc-file" multiple style="max-width:320px;">
         <button class="btn gold sm" onclick="docUpload(false)">⬆ Upload file(s)</button>
@@ -4324,13 +4363,32 @@ async function docsList(){
       <input id="doc-q" placeholder="🔍 Search by title or file name…" style="flex:1;min-width:220px;max-width:380px;" oninput="docsFilter()">
       <span style="font-size:12px;color:#555;">${window.__docsAll.length} document${window.__docsAll.length===1?'':'s'}</span>
     </div>
-    <div class="table-scroll"><table><thead><tr><th>Title</th><th>File</th><th>Type</th><th class="amount">Size</th><th>Uploaded</th><th></th></tr></thead><tbody id="doc-rows">
-    ${window.__docsAll.map(d=>`<tr data-doc="${esc((d.title+' '+d.filename).toLowerCase())}">
-      <td><b>${esc(d.title)}</b></td><td style="font-size:12px;">${esc(d.filename)}</td><td>${kindOf(d.content_type)}</td>
-      <td class="amount">${fmtBytes(d.size_bytes)}</td>
-      <td style="font-size:12px;">${esc(userBy[d.uploaded_by]||'—')}<br><span style="color:#555;">${d.created_at? new Date(d.created_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):''}</span></td>
-      <td style="white-space:nowrap;"><button class="mini" onclick="docView('${d.id}')" title="Open and read here">👁 View</button> <button class="mini" onclick="docDownload('${d.id}')" title="Save to your device">⬇ Download</button> <button class="mini" onclick="docPrint('${d.id}')" title="Print / save PDF">🖨 Print</button> ${dirDelBtn('comp','doc_library', d.id, d.title, 'docsList()')}</td></tr>`).join('')
-      || '<tr><td colspan="6" style="color:#555">No documents yet' + (canDocsEdit()?' — upload the first one above.':'.') + '</td></tr>'}
+    <div class="table-scroll"><table><thead><tr><th>Title</th><th>File(s)</th><th>Type</th><th class="amount">Size</th><th>Uploaded</th><th></th></tr></thead><tbody id="doc-rows">
+    ${(function(){
+      // One entry per upload: files uploaded together (same group) appear under ONE title.
+      const groups = [];
+      const byGid = {};
+      for (const d of window.__docsAll){
+        const key = d.group_id || d.id;
+        if (!byGid[key]){ byGid[key] = { key, gid: d.group_id, title: d.title, files: [], uploaded_by: d.uploaded_by, created_at: d.created_at }; groups.push(byGid[key]); }
+        byGid[key].files.push(d);
+      }
+      const fbtns = f => `<button class="mini" onclick="docView('${f.id}')" title="Open and read here">👁</button> <button class="mini" onclick="docDownload('${f.id}')" title="Save to your device">⬇</button> <button class="mini" onclick="docPrint('${f.id}')" title="Print / save PDF">🖨</button>`;
+      return groups.map(g=>{
+        const totalSz = g.files.reduce((s,f)=>s+Number(f.size_bytes||0),0);
+        const kinds = [...new Set(g.files.map(f=>kindOf(f.content_type)))];
+        const del = g.files.length===1 && !g.gid
+          ? dirDelBtn('comp','doc_library', g.files[0].id, g.title, 'docsList()')
+          : (isDir()?`<button class="mini" title="Delete this entry (Director)" style="color:#b3261e;border-color:#b3261e;" onclick="docDelGroup('${g.gid||g.key}','${esc(g.title).replace(/'/g,"\\'")}',${g.files.length})">🗑</button>`:'');
+        return `<tr data-doc="${esc((g.title+' '+g.files.map(f=>f.filename).join(' ')).toLowerCase())}">
+        <td><b>${esc(g.title)}</b>${g.files.length>1?'<br><span style="font-size:11px;color:#777">'+g.files.length+' files in this entry</span>':''}</td>
+        <td style="font-size:12px;">${g.files.map(f=>`<div style="margin:2px 0;white-space:nowrap;">${esc(f.filename)} &nbsp;${fbtns(f)}</div>`).join('')}</td>
+        <td>${kinds.length===1?kinds[0]:'📎 Mixed'}</td>
+        <td class="amount">${fmtBytes(totalSz)}</td>
+        <td style="font-size:12px;">${esc(userBy[g.uploaded_by]||'—')}<br><span style="color:#555;">${g.created_at? new Date(g.created_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):''}</span></td>
+        <td style="white-space:nowrap;">${del}</td></tr>`;
+      }).join('') || '<tr><td colspan="6" style="color:#555">No documents yet' + (canDocsEdit()?' — upload the first one above.':'.') + '</td></tr>';
+    })()}
     </tbody></table></div>`;
 }
 function docsFilter(){
@@ -4341,28 +4399,35 @@ async function docUpload(fromScan){
   const inp = fromScan ? $('doc-scan') : $('doc-file');
   const files = inp && inp.files ? [...inp.files] : [];
   if (!files.length){ say('doc-msg','Choose one or more files first.', false); return; }
-  const typedTitle = ($('doc-title').value||'').trim();
+  // ONE upload = ONE library entry: the typed title covers every file selected together.
+  const title = ($('doc-title').value||'').trim() || files[0].name.replace(/\.[^.]+$/,'');
+  const gid = crypto.randomUUID();
   let done = 0; const skipped = [], failed = [];
   for (let i = 0; i < files.length; i++){
     const f = files[i];
     if (f.size > DOC_MAX_MB*1024*1024){ skipped.push(f.name+' ('+fmtBytes(f.size)+')'); continue; }
-    // A typed title applies when uploading ONE file; with several, each file's own name is its title.
-    const title = (files.length === 1 && typedTitle) ? typedTitle : f.name.replace(/\.[^.]+$/,'');
     say('doc-msg','Uploading '+(i+1)+' of '+files.length+' — '+f.name+'…', true);
     try {
       const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]||''); r.onerror=()=>rej(new Error('Could not read the file.')); r.readAsDataURL(f); });
       const { error } = await db.schema('comp').from('doc_library').insert({
-        title, filename: f.name, content_type: f.type || 'application/octet-stream', size_bytes: f.size, data_b64: b64 });
+        title, group_id: gid, filename: f.name, content_type: f.type || 'application/octet-stream', size_bytes: f.size, data_b64: b64 });
       if (error) throw new Error(error.message);
       done++;
     } catch(e){ failed.push(f.name+' — '+e.message); }
   }
   inp.value=''; $('doc-title').value='';
   await docsList();
-  let msg = done + ' document' + (done===1?'':'s') + ' saved in the library.';
+  let msg = done ? '“'+title+'” is saved in the library'+(done>1?' with '+done+' files':'')+'.' : 'Nothing was uploaded.';
   if (skipped.length) msg += ' Skipped (over '+DOC_MAX_MB+' MB): ' + skipped.join(', ') + '.';
   if (failed.length) msg += ' Failed: ' + failed.join('; ') + '.';
-  say('doc-msg', msg, failed.length === 0);
+  say('doc-msg', msg, done > 0 && failed.length === 0);
+}
+async function docDelGroup(gid, title, n){
+  if (!isDir()){ alert('Only a Director can delete entries.'); return; }
+  if (!confirm('Delete “'+title+'” ('+n+' file'+(n===1?'':'s')+') from the library? This cannot be undone.')) return;
+  const rows = (window.__docsAll||[]).filter(d => d.group_id === gid);
+  for (const r of rows){ await db.schema('app').rpc('dir_delete', { p_schema:'comp', p_table:'doc_library', p_id: r.id }); }
+  await docsList();
 }
 async function docFetch(id){
   const { data, error } = await db.schema('comp').from('doc_library').select('*').eq('id', id).single();
