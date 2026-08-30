@@ -2680,9 +2680,11 @@ async function reportsTab(t){
           `<td>${u.today ? '✔ filed' + (u.today.reviewed_by ? ' · reviewed' : '') : '<span style="color:#b3261e">— not filed</span>'}</td>` +
           `<td class="amount">${m0 ? Number(m0.achieved_cases) + ' / ' + Number(m0.target_cases) : '—'}</td><td>${m0 ? bar(m0.pct) : '—'}</td>` +
           `<td class="amount">${q0 ? Number(q0.achieved_cases) + ' / ' + Number(q0.target_cases) : '—'}</td><td>${q0 ? bar(q0.pct) : '—'}</td>` +
-          `<td><button class="mini" onclick="rpMember('${id}', '${esc(u.name)}')">Reports</button></td></tr>`; }).join('')
+          `<td style="white-space:nowrap"><button class="mini" onclick="rpMember('${id}', '${esc(u.name)}')">Reports</button>` +
+          `${isDir() ? ` <button class="mini" style="color:#c0392b;border-color:#c0392b;" onclick="rpDeleteReports('${id}','${esc(u.name).replace(/'/g,'')}')">🗑 Delete</button>` : ''}</td></tr>`; }).join('')
         || '<tr><td colspan="7" style="color:#777">No team members with targets or reports yet. Set each salesman’s “Reports to” in the Control Panel, and their targets in the Targets tab.</td></tr>'}
       </tbody></table></div>
+      <p style="font-size:11.5px;color:#777;margin-top:8px;">Daily reports clean themselves up: anything older than <b>45 days</b> is removed automatically every night. Monthly report summaries, targets and the order book are never touched.</p>
       <div id="rp-member"></div>`;
     return;
   }
@@ -2718,6 +2720,18 @@ async function reportsTab(t){
     };
     return;
   }
+}
+// Director wipes one salesperson's filed DAILY reports. Their monthly report
+// summaries, targets, orders and field-visit records all stay exactly as they are.
+async function rpDeleteReports(uid, name){
+  const S = db.schema('sales');
+  const { count } = await S.from('activity_reports').select('*', { count:'exact', head:true }).eq('user_id', uid);
+  if (!count){ alert(name + ' has no daily reports to delete.'); return; }
+  if (!confirm(`Delete all ${count} daily report(s) filed by ${name}?\n\nOnly the daily activity reports go. Monthly summaries, targets and orders are kept.`)) return;
+  const { error } = await S.from('activity_reports').delete().eq('user_id', uid);
+  if (error){ alert('Could not delete: ' + error.message); return; }
+  $('rp-member').innerHTML = '';
+  reportsTab('team');
 }
 async function rpMember(uid, name){
   const S = db.schema('sales');
