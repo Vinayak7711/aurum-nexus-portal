@@ -382,6 +382,7 @@
       <button class="chip on" id="rp-today" onclick="reportsTab('today')">Today</button>
       <button class="chip" id="rp-mine" onclick="reportsTab('mine')">My month</button>
       <button class="chip hidden" id="rp-team" onclick="reportsTab('team')">Team</button>
+      <button class="chip" id="rp-sales" onclick="reportsTab('sales')">📊 Sales report</button>
       <button class="chip dir-only" id="rp-targets" onclick="reportsTab('targets')">Targets</button>
     </div>
     <div id="reports-body"></div>
@@ -2023,6 +2024,127 @@ function bar(pct){
   const col = p >= 100 ? '#1a7f37' : (p >= 60 ? '#b8860b' : '#b3261e');
   return `<div style="background:#eee;border-radius:6px;height:10px;min-width:90px;"><div style="width:${p}%;background:${col};height:10px;border-radius:6px;"></div></div><span style="font-size:11px;color:#555">${p}%</span>`;
 }
+/* ---- SALES REPORT — distributor-wise (primary, straight from the order book) and
+   ---- retailer-wise (secondary: distributor → retailer). Brand-wise CASES only, no amounts. ---- */
+let srMode = 'dist', srPeriod = 'month';
+function srShell(B){
+  B.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
+      <button class="chip ${srMode==='dist'?'on':''}" onclick="srMode='dist';reportsTab('sales')">🤝 Distributor-wise (primary sale)</button>
+      <button class="chip ${srMode==='ret'?'on':''}" onclick="srMode='ret';reportsTab('sales')">🏪 Retailer-wise (secondary sale)</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
+      <button class="chip ${srPeriod==='day'?'on':''}" onclick="srPeriod='day';reportsTab('sales')">Daily (today)</button>
+      <button class="chip ${srPeriod==='week'?'on':''}" onclick="srPeriod='week';reportsTab('sales')">This week</button>
+      <button class="chip ${srPeriod==='month'?'on':''}" onclick="srPeriod='month';reportsTab('sales')">This month</button>
+      <button class="chip ${srPeriod==='range'?'on':''}" onclick="srPeriod='range';reportsTab('sales')">Date range</button>
+      ${srPeriod==='range'?`<input type="date" id="sr-from" value="${window.__srFrom||todayISO()}" style="width:auto;"> <span style="color:#777;">to</span> <input type="date" id="sr-to" value="${window.__srTo||todayISO()}" style="width:auto;"> <button class="mini" onclick="window.__srFrom=$('sr-from').value;window.__srTo=$('sr-to').value;reportsTab('sales')">Apply</button>`:''}
+    </div>
+    <div id="sr-body"><p style="color:#777">Loading…</p></div>`;
+  srRender();
+}
+function srDates(){
+  const iso = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  if (srPeriod==='day') return [todayISO(), todayISO()];
+  if (srPeriod==='week'){ const d = new Date(); const dow = (d.getDay()+6)%7; d.setDate(d.getDate()-dow); return [iso(d), todayISO()]; }
+  if (srPeriod==='month'){ const d = new Date(); d.setDate(1); return [iso(d), todayISO()]; }
+  return [window.__srFrom||todayISO(), window.__srTo||todayISO()];
+}
+async function srRender(){
+  await loadMasters();
+  const box = $('sr-body'); if (!box) return;
+  const [from, to] = srDates();
+  const skuBy = {}; M.skus.forEach(s=>skuBy[s.id]=s);
+  const brandName = bid => ((M.brands.find(b=>b.id===bid))||{}).name || '(brand removed)';
+  const head = `<p style="font-size:12.5px;color:#555;margin:4px 0 10px;"><b>${from}</b> to <b>${to}</b> · all figures are <b>cases</b> · ${srMode==='dist'
+    ? 'primary sale — counted straight from the <a href="#" onclick="openOrders();return false;" style="color:#1c2455;">Sales &amp; Orders</a> order book (cancelled orders excluded)'
+    : 'secondary sale — what your distributors sold onward to retailers'}</p>`;
+  try {
+    const groups = {}; const brandTot = {}; let grand = 0;
+    const bump = (key, nm, bn, cases) => {
+      (groups[key] ??= { name: nm, sub: {}, tot: 0 });
+      groups[key].sub[bn] = (groups[key].sub[bn]||0) + cases;
+      groups[key].tot += cases;
+      brandTot[bn] = (brandTot[bn]||0) + cases; grand += cases;
+    };
+    if (srMode==='dist'){
+      const { data: os, error } = await db.schema('sales').from('orders').select('id, party_id').gte('order_date', from).lte('order_date', to).neq('status','CANCELLED');
+      if (error) throw error;
+      const ids = (os||[]).map(o=>o.id);
+      let lines = [];
+      if (ids.length){ const { data: ls, error: e2 } = await db.schema('sales').from('order_lines').select('order_id, sku_id, cases').in('order_id', ids); if (e2) throw e2; lines = ls||[]; }
+      const partyOf = {}; (os||[]).forEach(o=>partyOf[o.id]=o.party_id);
+      for (const l of lines){
+        const p = M.parties.find(x=>x.id===partyOf[l.order_id]);
+        bump(partyOf[l.order_id], p ? (p.code+' — '+p.name) : '(party removed)', brandName((skuBy[l.sku_id]||{}).brand_id), Number(l.cases));
+      }
+    } else {
+      const { data: ss, error } = await db.schema('sales').from('secondary_sales').select('*').gte('sale_date', from).lte('sale_date', to);
+      if (error) throw error;
+      const { data: rets } = await db.schema('sales').from('retailers').select('id, code, name, category');
+      const retBy = {}; (rets||[]).forEach(r=>retBy[r.id]=r);
+      for (const s of (ss||[])){
+        const r = retBy[s.retailer_id];
+        bump(s.retailer_id, r ? (r.code+' — '+r.name+(r.category?' · '+r.category:'')) : '(retailer removed)', brandName((skuBy[s.sku_id]||{}).brand_id), Number(s.cases));
+      }
+    }
+    const gl = Object.values(groups).sort((a,b)=>b.tot-a.tot);
+    const bt = Object.entries(brandTot).sort((a,b)=>b[1]-a[1]);
+    let html = head;
+    html += `<h4 class="sec">Brand-wise total — ${grand} case${grand===1?'':'s'}</h4><div class="table-scroll"><table><thead><tr><th>Brand</th><th class="amount">Cases</th></tr></thead><tbody>` +
+      (bt.map(([b,c])=>`<tr><td>${esc(b)}</td><td class="amount">${c}</td></tr>`).join('') || '<tr><td colspan="2" style="color:#777">No sales in this period.</td></tr>') + '</tbody></table></div>';
+    html += `<h4 class="sec" style="margin-top:16px;">${srMode==='dist'?'Distributor':'Retailer'}-wise, brand by brand</h4><div class="table-scroll"><table><thead><tr><th>${srMode==='dist'?'Distributor':'Retailer'}</th><th>Brand</th><th class="amount">Cases</th></tr></thead><tbody>` +
+      (gl.map(g=>{
+        const subs = Object.entries(g.sub).sort((a,b)=>b[1]-a[1]);
+        return subs.map(([b,c],i)=>`<tr>${i===0?`<td rowspan="${subs.length+1}" style="vertical-align:top;"><b>${esc(g.name)}</b></td>`:''}<td>${esc(b)}</td><td class="amount">${c}</td></tr>`).join('') +
+          `<tr style="background:#faf6ea;"><td><b>Total</b></td><td class="amount"><b>${g.tot}</b></td></tr>`;
+      }).join('') || `<tr><td colspan="3" style="color:#777">${srMode==='dist'?'No orders in this period.':'No secondary sales recorded in this period'+(srCanAdd()?' — record one below.':'.')}</td></tr>`) + '</tbody></table></div>';
+    if (srMode==='ret') html += srSecForm();
+    box.innerHTML = html;
+    if (srMode==='ret' && srCanAdd()) srSecFormInit();
+  } catch(e){ box.innerHTML = `<div class="msg err">Load failed: ${esc(e.message||String(e))}</div>`; }
+}
+function srCanAdd(){
+  const p = (me && me.permissions_json && me.permissions_json.sales) || {};
+  return isDir() || !!(p.add || p.edit || p.admin);
+}
+function srSecForm(){
+  if (!srCanAdd()) return '';
+  return `<div class="card" style="max-width:680px;margin-top:16px;"><h3 style="font-size:15px;">Record a secondary sale (distributor → retailer)</h3>
+    <div class="row2c" style="margin-top:8px;"><div><label>Date</label><input type="date" id="ss-date" value="${todayISO()}"></div>
+      <div><label>Distributor (seller)</label><select id="ss-dist"></select></div></div>
+    <div class="row2c" style="margin-top:8px;"><div><label>Retailer (buyer)</label><select id="ss-ret"></select></div>
+      <div><label>Brand</label><select id="ss-brand" onchange="ssBrandPick(this.value)"></select></div></div>
+    <div class="row2c" style="margin-top:8px;"><div><label>SKU (pack)</label><select id="ss-sku" disabled><option value="">— choose a brand first —</option></select></div>
+      <div><label>Cases</label><input type="number" id="ss-cases" min="1" placeholder="e.g. 10"></div></div>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="ssSave()">Save secondary sale</button>
+    <div id="ss-msg"></div></div>`;
+}
+async function srSecFormInit(){
+  const dists = M.parties.filter(p=>p.is_active && (p.party_type||'DISTRIBUTOR')==='DISTRIBUTOR');
+  $('ss-dist').innerHTML = dists.map(p=>`<option value="${p.id}">${esc(p.code)} — ${esc(p.name)}</option>`).join('');
+  const { data: rets } = await db.schema('sales').from('retailers').select('id,code,name,category').eq('status','ACTIVE').order('name');
+  $('ss-ret').innerHTML = (rets||[]).map(r=>`<option value="${r.id}">${esc(r.code)} — ${esc(r.name)}${r.category?' · '+esc(r.category):''}</option>`).join('') || '<option value="">— add retailers in Onboarding &amp; Vendors first —</option>';
+  $('ss-brand').innerHTML = '<option value="">— choose the brand —</option>' + M.brands.filter(b=>b.is_active!==false).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+}
+function ssBrandPick(bid){
+  const sel = $('ss-sku');
+  if (!bid){ sel.innerHTML = '<option value="">— choose a brand first —</option>'; sel.disabled = true; return; }
+  const skus = M.skus.filter(s=>s.is_active && s.brand_id===bid);
+  sel.innerHTML = skus.length ? '<option value="">— choose the pack —</option>'+skus.map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('') : '<option value="">— no active SKUs for this brand —</option>';
+  sel.disabled = false;
+}
+async function ssSave(){
+  const retId = $('ss-ret').value, skuId = $('ss-sku').value, cases = Number($('ss-cases').value);
+  if (!retId){ say('ss-msg','Choose the retailer.',false); return; }
+  if (!skuId){ say('ss-msg','Choose the brand and its SKU.',false); return; }
+  if (!(cases > 0)){ say('ss-msg','Enter the number of cases.',false); return; }
+  const { error } = await db.schema('sales').from('secondary_sales').insert({
+    sale_date: $('ss-date').value || todayISO(), party_id: $('ss-dist').value || null,
+    retailer_id: retId, sku_id: skuId, cases, created_by: me.id });
+  if (error){ say('ss-msg','Could not save: '+error.message,false); return; }
+  reportsTab('sales');
+}
 async function openReports(){
   const { data: tm } = await db.schema('adm').from('users').select('id, full_name, designation').eq('reports_to', me.id).eq('is_active', true);
   teamMembers = tm || [];
@@ -2030,9 +2152,10 @@ async function openReports(){
   reportsTab('today'); applyDirOnly(); show('reports');
 }
 async function reportsTab(t){
-  for (const k of ['today','mine','team','targets']) $('rp-'+k).classList.toggle('on', k === t);
+  for (const k of ['today','mine','team','sales','targets']) $('rp-'+k).classList.toggle('on', k === t);
   const B = $('reports-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const S = db.schema('sales');
+  if (t === 'sales'){ srShell(B); return; }
 
   if (t === 'today'){
     const { data: rows, error } = await S.from('v_activity_reports').select('*').eq('user_id', me.id).eq('report_date', todayISO());
