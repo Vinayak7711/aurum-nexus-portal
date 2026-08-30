@@ -941,7 +941,7 @@ async function renderInvites(){
   if (error || !data || !data.length) return;
   box.innerHTML =
     `<h3 style="margin:22px 0 6px;font-size:15px;">Waiting for first sign-in</h3>
-     <p style="font-size:12px;color:#666;margin:0 0 8px;">These people are set up and allowed in. Ask them to open the ERP, type their email on the sign-in screen and click the link that arrives. Everything below is applied the moment they land.</p>
+     <p style="font-size:12px;color:#666;margin:0 0 8px;">These people are set up and allowed in, but have not received their sign-in email yet. Tap <b>Send invite email</b> and a one-tap sign-in link goes to their inbox — everything below is applied the moment they use it.</p>
      <div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Designation</th><th>Sends mail as</th><th></th></tr></thead><tbody id="inv-body"></tbody></table></div>`;
   const tb = $('inv-body');
   for (const iv of data){
@@ -953,7 +953,9 @@ async function renderInvites(){
       `<td><span class="pill ${esc(iv.role||'STAFF')}">${esc(iv.role||'STAFF')}</span></td>` +
       `<td>${esc(iv.designation||'—')}</td>` +
       `<td style="font-size:11.5px;color:#555">${esc(names)}</td>` +
-      `<td style="white-space:nowrap"><button class="mini" data-act="del" style="color:#c0392b;border-color:#c0392b;">Cancel</button></td>`;
+      `<td style="white-space:nowrap"><button class="mini" data-act="send" style="color:#1a7f37;border-color:#1a7f37;">📧 Send invite email</button> ` +
+      `<button class="mini" data-act="del" style="color:#c0392b;border-color:#c0392b;">Cancel</button></td>`;
+    tr.querySelector('[data-act="send"]').onclick = () => sendInviteMail(iv.email, iv.full_name || 'They');
     tr.querySelector('[data-act="del"]').onclick = () => delInvite(iv);
     tb.appendChild(tr);
   }
@@ -1016,12 +1018,27 @@ $('btn-save-invite').onclick = async () => {
     created_by: (me && me.id) || null,
     used_at: null
   }, { onConflict: 'email' });
+  if (r.error){ btn.disabled = false; say('iv-msg','Could not save: '+r.error.message, false); return; }
+  // Send the invitation straight away: a one-tap sign-in link lands in their
+  // inbox, and their account, role and mailboxes are applied the moment they use it.
+  const mail = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.origin + location.pathname } });
   btn.disabled = false;
-  if (r.error){ say('iv-msg','Could not save: '+r.error.message, false); return; }
   closeSheet('invite-overlay');
-  alert(name + ' has been added.\n\nAsk them to open this ERP, type ' + email + ' on the sign-in screen and click the link that arrives in their inbox. Their account, role and mailboxes are set up the moment they land.');
+  if (mail.error){
+    alert(name + ' has been added, but the invitation email could not be sent (' + mail.error.message + ').\n\nUse "Send invite email" on their row to try again in a little while.');
+  } else {
+    alert(name + ' has been added, and an invitation email with a one-tap sign-in link is on its way to ' + email + '. Opening it signs them straight into the ERP with everything you set here.');
+  }
   openAdmin();
 };
+
+// Re-send the one-tap sign-in email to someone who is still waiting.
+async function sendInviteMail(email, name){
+  const { error } = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.origin + location.pathname } });
+  if (error){ alert('Could not send: ' + error.message); return; }
+  alert('Invitation email sent to ' + email + '. ' + name + ' just has to open it and tap the link.');
+  openAdmin();
+}
 async function delUser(u){
   if (!confirm('Delete ' + u.full_name + ' (' + u.email + ') from the ERP?\n\nThey immediately lose all access. If they have past records (orders, entries, mail), they are deactivated instead so your books stay intact.')) return;
   const { data, error } = await db.schema('adm').rpc('delete_user', { p_user: u.id });
