@@ -158,6 +158,22 @@
     </div>
   </section>
 
+  <!-- Landed here from an invitation email: first sign-in with the password the
+       Director gave them in person. -->
+  <section id="view-welcome" class="login-wrap hidden">
+    <div class="card">
+      <h2>Welcome to Aurum Nexus</h2>
+      <p class="sub">Sign in with the password given to you by the Director. Don't have it yet? Ask him — it is handed over personally, never emailed.</p>
+      <label>Email</label>
+      <input type="email" id="wl-email" autocomplete="username">
+      <label style="margin-top:10px;">Password</label>
+      <input type="password" id="wl-pass" autocomplete="current-password" onkeydown="if(event.key==='Enter')doWelcomeLogin()">
+      <button class="btn gold" id="btn-welcome" onclick="doWelcomeLogin()" style="margin-top:14px;">Sign in &amp; enter ERP</button>
+      <div id="wl-msg"></div>
+      <p style="font-size:12px;color:#777;margin:14px 0 0;">From next time you can also sign in at www.aurumspirits.com → Employee Login with this same email and password.</p>
+    </div>
+  </section>
+
   <!-- Landed here from a password-reset email: choose the new password. -->
   <section id="view-recover" class="login-wrap hidden">
     <div class="card">
@@ -528,6 +544,8 @@
     <label>Full name *</label><input type="text" id="iv-name" placeholder="e.g. Rahul Deshmukh">
     <label>Email address *</label><input type="email" id="iv-email" placeholder="name@aurumspirits.com">
     <label>Designation</label><input type="text" id="iv-desig" placeholder="e.g. Area Sales Manager">
+    <label>First password * <span style="font-weight:normal;color:#888;font-size:11px;">(min 8 — you tell it to them in person)</span></label>
+    <input type="text" id="iv-pass" placeholder="e.g. Aurum@2026" autocomplete="off">
     <label>Role (tier)</label>
     <select id="iv-role">
       <option value="STAFF">STAFF — own world only</option>
@@ -724,6 +742,8 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // Remember whether this page was opened from a password-reset email, before the
 // auth library strips the #hash. In that case we ask for the new password first.
 const CAME_FROM_RECOVERY = /type=recovery/.test(location.hash);
+// An invitation link (?welcome=their@email) lands on the first-sign-in screen.
+const WELCOME_EMAIL = (new URLSearchParams(location.search).get('welcome') || '').trim().toLowerCase();
 let me = null, editing = null, editingParty = null, allUsers = [];
 let M = { brands:[], skus:[], mfrs:[], cats:[], users:[], parties:[] };  // master cache
 let orderFilter = 'ALL';
@@ -733,7 +753,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
+  for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
   window.scrollTo(0,0);
@@ -771,7 +791,10 @@ async function dirDel(sch, tbl, id, label, afterB64){
 /* ---------------- auth ---------------- */
 async function init(){
   const { data:{ session } } = await db.auth.getSession();
-  if (!session) { show('login'); return; }
+  if (!session) {
+    if (WELCOME_EMAIL){ $('wl-email').value = WELCOME_EMAIL; show('welcome'); return; }
+    show('login'); return;
+  }
   // A password-reset link signs you in and must land on the new-password card.
   if (CAME_FROM_RECOVERY && !window.__recoveryDone){ show('recover'); return; }
   let { data, error } = await db.schema('adm').from('users').select('*').eq('id', session.user.id).single();
@@ -805,6 +828,25 @@ $('btn-magic').onclick = async () => {
   say('login-msg', error ? 'Could not send the link: '+error.message : 'Link sent. Open the email on this device and tap it.', !error);
 };
 $('btn-signout').onclick = async () => { await db.auth.signOut(); location.reload(); };
+
+/* ---- first sign-in from an invitation link ---- */
+async function doWelcomeLogin(){
+  const email = $('wl-email').value.trim().toLowerCase();
+  const pass = $('wl-pass').value;
+  if (!email || !pass){ say('wl-msg','Enter your email and the password the Director gave you.', false); return; }
+  const btn = $('btn-welcome'); btn.disabled = true;
+  const { error } = await db.auth.signInWithPassword({ email, password: pass });
+  btn.disabled = false;
+  if (error){
+    say('wl-msg', /invalid/i.test(error.message)
+      ? 'That password does not match. Check with the Director — he has your password.'
+      : error.message, false);
+    return;
+  }
+  history.replaceState(null, '', location.pathname);   // drop ?welcome=… from the address
+  say('wl-msg','');
+  init();
+}
 
 /* ---- password reset (for the company-website Employee Portal sign-in) ---- */
 async function sendPassReset(){
@@ -922,8 +964,11 @@ async function openAdmin(){
       `<td style="font-size:11.5px;color:#555">${esc(mbxNamesFor(u))}</td>` +
       `<td>${u.is_active?'✔':'✖'}</td>` +
       `<td style="white-space:nowrap"><button class="mini" data-act="edit">Edit</button>` +
+      `${isDir() && !u.is_superadmin ? ' <button class="mini" data-act="pass">Password</button>' : ''}` +
       `${isDir() && !u.is_superadmin && u.id !== (me&&me.id) ? ' <button class="mini" data-act="del" style="color:#c0392b;border-color:#c0392b;">Delete</button>' : ''}</td>`;
     tr.querySelector('[data-act="edit"]').onclick = () => openEdit(u);
+    const passBtn = tr.querySelector('[data-act="pass"]');
+    if (passBtn) passBtn.onclick = () => userSetPass(u);
     const delBtn = tr.querySelector('[data-act="del"]');
     if (delBtn) delBtn.onclick = () => delUser(u);
     tb.appendChild(tr);
@@ -960,6 +1005,18 @@ async function renderInvites(){
     tb.appendChild(tr);
   }
 }
+// Director sets or changes anyone's password. It goes straight to the secure
+// login store; nothing is written in the ERP database. Tell it to them in person.
+async function userSetPass(u){
+  const p = prompt('New password for ' + u.full_name + ' (' + u.email + ')\n\nAt least 8 characters. You tell it to them personally — it is never emailed.', '');
+  if (p === null) return;
+  if (p.length < 8){ alert('Use at least 8 characters.'); return; }
+  try{
+    await salesmanApi({ action:'invite_create', email: u.email, password: p });
+    alert('Password set for ' + u.full_name + '. They sign in with it from the invitation link or the company website (Employee Login).');
+  }catch(e){ alert('Could not set the password: ' + e.message); }
+}
+
 async function delInvite(iv){
   if (!confirm('Cancel the invitation for ' + (iv.full_name || iv.email) + '?\n\nThey will no longer be able to sign in.')) return;
   await db.schema('adm').from('invites').delete().eq('email', iv.email);
@@ -989,7 +1046,7 @@ function mbxBoxes(containerId, on, auto){
 }
 async function openInvite(){
   if (!allMailboxes.length) await loadMailboxMap();
-  $('iv-name').value = ''; $('iv-email').value = ''; $('iv-desig').value = ''; $('iv-role').value = 'STAFF';
+  $('iv-name').value = ''; $('iv-email').value = ''; $('iv-desig').value = ''; $('iv-pass').value = ''; $('iv-role').value = 'STAFF';
   mbxBoxes('iv-mbx', []);
   say('iv-msg','');
   $('invite-overlay').classList.remove('hidden');
@@ -997,15 +1054,16 @@ async function openInvite(){
 $('btn-save-invite').onclick = async () => {
   const name  = $('iv-name').value.trim();
   const email = $('iv-email').value.trim().toLowerCase();
+  const pass  = $('iv-pass').value;
   if (!name)  { say('iv-msg','Please put in the person\'s full name.', false); return; }
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ say('iv-msg','That email address does not look right.', false); return; }
+  if (pass.length < 8){ say('iv-msg','Choose a first password of at least 8 characters — you will tell it to them in person.', false); return; }
   if (allUsers.some(u => (u.email||'').toLowerCase() === email)){
     say('iv-msg','Somebody with that email is already in the ERP — use Edit on their row instead.', false); return;
   }
   const boxes = [...document.querySelectorAll('.iv-mbx-box')].filter(c=>c.checked).map(c=>c.dataset.mbx);
   const btn = $('btn-save-invite'); btn.disabled = true;
-  // The allow-list is what lets the sign-in link work at all; the invite carries
-  // the name, role and mailboxes that get applied on their first sign-in.
+  // 1) allow the address in, and save what gets applied to the account
   const a = await db.schema('adm').from('auth_allowlist')
     .upsert({ email, note: 'Added from Control Panel' }, { onConflict: 'email' });
   if (a.error){ btn.disabled = false; say('iv-msg','Could not allow that address in: '+a.error.message, false); return; }
@@ -1019,25 +1077,52 @@ $('btn-save-invite').onclick = async () => {
     used_at: null
   }, { onConflict: 'email' });
   if (r.error){ btn.disabled = false; say('iv-msg','Could not save: '+r.error.message, false); return; }
-  // Send the invitation straight away: a one-tap sign-in link lands in their
-  // inbox, and their account, role and mailboxes are applied the moment they use it.
-  const mail = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.origin + location.pathname } });
+  // 2) create their login with the password YOU chose. The password goes straight
+  //    to the secure login store — never into our database or this page's storage.
+  try{
+    await salesmanApi({ action:'invite_create', email, password: pass });
+  }catch(e){
+    btn.disabled = false; say('iv-msg','Could not create the login: '+e.message, false); return;
+  }
+  // 3) invitation email: a link to the ERP's first-sign-in screen. No password in
+  //    the email — they ask you for it, exactly as you wanted.
+  const sent = await sendInviteMail(email, name, true);
   btn.disabled = false;
   closeSheet('invite-overlay');
-  if (mail.error){
-    alert(name + ' has been added, but the invitation email could not be sent (' + mail.error.message + ').\n\nUse "Send invite email" on their row to try again in a little while.');
-  } else {
-    alert(name + ' has been added, and an invitation email with a one-tap sign-in link is on its way to ' + email + '. Opening it signs them straight into the ERP with everything you set here.');
-  }
+  alert(name + ' has been added and their login is ready.' +
+    (sent ? '\n\nAn invitation email is on its way to ' + email + '. When they open the link, the ERP asks for the password — give it to them in person and they are in.'
+          : '\n\nThe invitation email could not be sent right now — use "Send invite email" on their row to try again.') +
+    '\n\nAfter the first sign-in they can also log in any time from the company website (Employee Login) with the same email and password.');
   openAdmin();
 };
 
-// Re-send the one-tap sign-in email to someone who is still waiting.
-async function sendInviteMail(email, name){
-  const { error } = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.origin + location.pathname } });
-  if (error){ alert('Could not send: ' + error.message); return; }
-  alert('Invitation email sent to ' + email + '. ' + name + ' just has to open it and tap the link.');
-  openAdmin();
+// The invitation email itself — sent from a company mailbox through the ERP's
+// own mail engine, with a link to the first-sign-in screen. Returns true if sent.
+async function sendInviteMail(email, name, quiet){
+  const link = location.origin + location.pathname + '?welcome=' + encodeURIComponent(email);
+  const body =
+`Hello ${name},
+
+You have been added to Aurum Nexus, the internal portal of Aurum Spirits India Limited.
+
+Open this link to sign in for the first time:
+${link}
+
+It will ask for your email (already filled in) and your password. Your password is with the Director — ask him and he will give it to you personally. It is not written in this email on purpose.
+
+From then on you can sign in any time at www.aurumspirits.com -> Employee Login, with this same email address and password.`;
+  const t = await mailToken();
+  // try the company mailboxes in a sensible order — whichever is connected sends it
+  for (const box of ['admin','info','marketing','vs']){
+    try{
+      const r = await fetch(FN_BASE + '/mail-send', { method:'POST',
+        headers:{ 'content-type':'application/json', authorization:'Bearer '+t },
+        body: JSON.stringify({ mailbox: box, to: email, subject: 'Your Aurum Nexus access — first sign-in', body, attachments: [] }) });
+      if (r.ok){ if(!quiet){ alert('Invitation email sent to ' + email + '.'); openAdmin(); } return true; }
+    }catch(_){ /* try the next mailbox */ }
+  }
+  if(!quiet) alert('The invitation email could not be sent right now — none of the company mailboxes would send. Try again in a few minutes.');
+  return false;
 }
 async function delUser(u){
   if (!confirm('Delete ' + u.full_name + ' (' + u.email + ') from the ERP?\n\nThey immediately lose all access. If they have past records (orders, entries, mail), they are deactivated instead so your books stay intact.')) return;
