@@ -1618,7 +1618,9 @@ async function saveMcActual(structId){
 }
 
 /* ================= MODULE 2: MANUFACTURING ================= */
-async function openMfg(){ await loadMasters(); mfgTab('fg'); show('mfg'); }
+// Awaited on purpose: openProd() opens this section and then switches to the
+// targets tab, and an unawaited FG load would land in the body afterwards.
+async function openMfg(){ await loadMasters(); await mfgTab('fg'); show('mfg'); }
 async function mfgTab(which){
   ['fg','batches','report','rm'].forEach(k => $('mt-'+k).classList.toggle('on', k===which));
   ['targets','log'].forEach(k => $('pd-'+k).classList.remove('on'));   // the targets half steps aside
