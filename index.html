@@ -348,6 +348,7 @@
       <button class="chip on" id="mk-budget" onclick="mktTab('budget')">Budget &amp; utilisation</button>
       <button class="chip" id="mk-spend" onclick="mktTab('spend')">Spends (where used)</button>
       <button class="chip" id="mk-requests" onclick="mktTab('requests')">Budget requests</button>
+      <button class="chip" id="mk-schemes" onclick="mktTab('schemes')">🎁 Scheme master</button>
     </div>
     <div id="mkt-body"></div>
   </section>
@@ -5587,10 +5588,146 @@ function inAccountsJS(){ const f=me?.permissions_json?.finance||{}; return isDir
 function canMktApprove(){ return isDir() || inAccountsJS(); }
 function canMktRequest(){ return isDir() || !!(me?.permissions_json?.mkt?.edit) || !!(me?.permissions_json?.mkt?.view); }
 function isoWeekJS(){ const d=new Date(); const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=t.getUTCDay()||7; t.setUTCDate(t.getUTCDate()+4-day); const ys=new Date(Date.UTC(t.getUTCFullYear(),0,1)); const wk=Math.ceil((((t-ys)/86400000)+1)/7); return t.getUTCFullYear()+'-W'+String(wk).padStart(2,'0'); }
+/* ---- SCHEME MASTER — announce case-slab schemes for retailer categories for a period,
+   ---- and report who lifted how much, from which distributor, which brand (from secondary sales). ---- */
+let schSlabs = [];
+async function schRenderMain(){
+  const B = window.__mkB; if (!B) return;
+  await loadMasters();
+  const { data: schemes, error } = await db.schema('sales').from('schemes').select('*').order('created_at',{ascending:false});
+  if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  window.__schemes = schemes||[];
+  const canEd = isDir() || canMktEdit();
+  let html = '';
+  if (canEd){
+    html += `<div class="card" style="max-width:720px;margin-bottom:14px;"><h3 style="font-size:15px;">Announce a new scheme</h3>
+      <div class="row2c" style="margin-top:8px;"><div><label>Scheme name *</label><input type="text" id="sc-name" placeholder="e.g. Monsoon Push — Beer Shoppes"></div>
+        <div><label>Brand (blank = all brands)</label><select id="sc-brand"><option value="">— All brands —</option>${M.brands.filter(b=>b.is_active!==false).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></div></div>
+      <div class="row2c" style="margin-top:8px;"><div><label>From date *</label><input type="date" id="sc-from" value="${todayISO()}"></div>
+        <div><label>To date *</label><input type="date" id="sc-to"></div></div>
+      <label style="margin-top:10px;">Retailer categories covered — tick none to cover ALL categories</label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:4px 0;">${RETAILER_CATS.map(c=>`<label style="font-weight:normal;font-size:12.5px;display:flex;gap:4px;align-items:center;"><input type="checkbox" class="sc-cat" value="${c}">${c}</label>`).join('')}</div>
+      <label style="margin-top:10px;">Case slabs — lift at least this many cases in the period → get the benefit</label>
+      <div class="row2c"><input type="number" id="sc-slab-min" min="1" placeholder="Minimum cases (e.g. 25)"><input type="text" id="sc-slab-ben" placeholder="Benefit (e.g. 1 case free / gift / credit note)"></div>
+      <button class="btn ghost sm" style="margin-top:6px;" onclick="schAddSlab()">➕ Add slab</button>
+      <div id="sc-slab-list" style="margin-top:6px;"></div>
+      <label>Notes (optional)</label><input type="text" id="sc-notes" placeholder="Any conditions">
+      <button class="btn gold" style="margin-top:10px;" onclick="schAnnounce()">📣 Announce scheme</button>
+      <div id="sc-msg"></div></div>`;
+  }
+  html += '<div id="sc-report"></div>';
+  html += `<h4 class="sec">Schemes</h4><div class="table-scroll"><table><thead><tr><th>Code</th><th>Scheme</th><th>Period</th><th>Brand</th><th>Categories</th><th>Slabs</th><th>Status</th><th></th></tr></thead><tbody>` +
+    ((schemes||[]).map(s=>{
+      const today = todayISO();
+      const state = s.status!=='ACTIVE' ? 'CLOSED' : (s.date_from>today ? 'UPCOMING' : (s.date_to<today ? 'ENDED' : 'LIVE'));
+      const pill = state==='LIVE'?'DELIVERED':(state==='UPCOMING'?'RECEIVED':(state==='ENDED'?'DISPATCHED':'CANCELLED'));
+      const cats = (s.categories&&s.categories.length)? s.categories.join(', ') : 'All categories';
+      const bn = s.brand_id ? (((M.brands.find(b=>b.id===s.brand_id))||{}).name||'—') : 'All brands';
+      const slabs = (s.slabs||[]).map(x=>x.min+'+ → '+x.benefit).join(' · ')||'—';
+      return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.name)}${s.notes?'<br><span style="font-size:11px;color:#777">'+esc(s.notes)+'</span>':''}</td>
+        <td style="font-size:12px;">${s.date_from}<br>→ ${s.date_to}</td><td>${esc(bn)}</td>
+        <td style="font-size:12px;">${esc(cats)}</td><td style="font-size:12px;">${esc(slabs)}</td>
+        <td><span class="pill ${pill}">${state}</span></td>
+        <td style="white-space:nowrap;"><button class="mini" onclick="schReport('${s.id}')">📊 Performance</button> ${canEd?`<button class="mini" onclick="schToggle('${s.id}','${s.status==='ACTIVE'?'CLOSED':'ACTIVE'}')">${s.status==='ACTIVE'?'Close':'Reopen'}</button> `:''}${dirDelBtn('sales','schemes', s.id, s.name, "mktTab('schemes')")}</td></tr>`;
+    }).join('') || '<tr><td colspan="8" style="color:#777">No schemes announced yet' + (canEd?' — announce the first one above.':'.') + '</td></tr>') + '</tbody></table></div>';
+  B.innerHTML = html;
+  schSlabs = []; schDrawSlabs();
+}
+function schAddSlab(){
+  const min = Number($('sc-slab-min').value), ben = $('sc-slab-ben').value.trim();
+  if (!(min>0) || !ben){ say('sc-msg','Enter the minimum cases and the benefit for the slab.',false); return; }
+  schSlabs.push({ min, benefit: ben }); schSlabs.sort((a,b)=>a.min-b.min);
+  $('sc-slab-min').value=''; $('sc-slab-ben').value=''; say('sc-msg',''); schDrawSlabs();
+}
+function schDrawSlabs(){
+  const el = $('sc-slab-list'); if (!el) return;
+  el.innerHTML = schSlabs.length
+    ? schSlabs.map((s,i)=>`<span class="pill DELIVERED" style="margin:2px 6px 2px 0;display:inline-block;">${s.min}+ cases → ${esc(s.benefit)} <a href="#" onclick="schSlabs.splice(${i},1);schDrawSlabs();return false;" style="color:#b3261e;text-decoration:none;">✕</a></span>`).join('')
+    : '<span style="font-size:12px;color:#999;">No slabs yet — add at least one.</span>';
+}
+async function schAnnounce(){
+  const name = $('sc-name').value.trim(), from = $('sc-from').value, to = $('sc-to').value;
+  if (!name){ say('sc-msg','Give the scheme a name.',false); return; }
+  if (!from || !to || to < from){ say('sc-msg','Choose a valid from and to date.',false); return; }
+  if (!schSlabs.length){ say('sc-msg','Add at least one case slab.',false); return; }
+  const cats = [...document.querySelectorAll('.sc-cat:checked')].map(c=>c.value);
+  const { data: code, error: e1 } = await db.schema('app').rpc('next_code', { p_series: 'SCH' });
+  if (e1){ say('sc-msg', e1.message, false); return; }
+  const { error } = await db.schema('sales').from('schemes').insert({
+    code, name, brand_id: $('sc-brand').value||null, date_from: from, date_to: to,
+    categories: cats, slabs: schSlabs, notes: $('sc-notes').value.trim()||null, status: 'ACTIVE', created_by: me.id });
+  if (error){ say('sc-msg','Could not announce: '+error.message,false); return; }
+  mktTab('schemes');
+}
+async function schToggle(id, status){
+  const { error } = await db.schema('sales').from('schemes').update({ status }).eq('id', id);
+  if (error){ alert(error.message); return; }
+  mktTab('schemes');
+}
+let schRepMode = 'ret';
+async function schReport(id, mode){
+  if (mode) schRepMode = mode;
+  const s = (window.__schemes||[]).find(x=>x.id===id); if (!s) return;
+  const box = $('sc-report'); if (!box) return;
+  box.innerHTML = '<p style="color:#777">Building the report…</p>';
+  await loadMasters();
+  const skuBy = {}; M.skus.forEach(x=>skuBy[x.id]=x);
+  const brandName = bid => ((M.brands.find(b=>b.id===bid))||{}).name || '(brand removed)';
+  const { data: ss, error } = await db.schema('sales').from('secondary_sales').select('*').gte('sale_date', s.date_from).lte('sale_date', s.date_to);
+  if (error){ box.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  const { data: rets } = await db.schema('sales').from('retailers').select('id,code,name,category,district');
+  const retBy = {}; (rets||[]).forEach(r=>retBy[r.id]=r);
+  const catOk = r => !(s.categories&&s.categories.length) || (r && s.categories.includes(r.category));
+  const rows = (ss||[]).filter(x => (!s.brand_id || ((skuBy[x.sku_id]||{}).brand_id === s.brand_id)) && catOk(retBy[x.retailer_id]));
+  const slabFor = cases => { let hit = null; for (const sl of (s.slabs||[])) if (cases >= sl.min) hit = sl; return hit; };
+  const distName = pid => { const p = M.parties.find(x=>x.id===pid); return p ? (p.code+' — '+p.name) : '(not recorded)'; };
+  const agg = {};
+  for (const x of rows){
+    const r = retBy[x.retailer_id];
+    let key, nm;
+    if (schRepMode==='ret'){ key = x.retailer_id; nm = r ? (r.code+' — '+r.name+(r.category?' · '+r.category:'')+(r.district?' · '+r.district:'')) : '(retailer removed)'; }
+    else if (schRepMode==='district'){ key = (r&&r.district)||'(no district)'; nm = key; }
+    else { key = x.party_id||'none'; nm = distName(x.party_id); }
+    (agg[key] ??= { name: nm, tot: 0, brands: {}, dists: {}, rets: {} });
+    const a = agg[key], c = Number(x.cases);
+    a.tot += c;
+    const bn2 = brandName((skuBy[x.sku_id]||{}).brand_id);
+    a.brands[bn2] = (a.brands[bn2]||0)+c;
+    a.dists[distName(x.party_id)] = (a.dists[distName(x.party_id)]||0)+c;
+    const rn = r ? r.name : '?'; a.rets[rn] = (a.rets[rn]||0)+c;
+  }
+  const list = Object.values(agg).sort((a,b)=>b.tot-a.tot);
+  const fmtMap = m => Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([k,c])=>esc(k)+' ('+c+')').join(', ') || '—';
+  const bn = s.brand_id ? brandName(s.brand_id) : 'All brands';
+  box.innerHTML = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">📊 ${esc(s.code)} — ${esc(s.name)}</h3>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">${s.date_from} → ${s.date_to} · ${esc(bn)} · ${(s.categories&&s.categories.length)?esc(s.categories.join(', ')):'All categories'} · figures = <b>cases lifted</b>, straight from the secondary-sales record</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      <button class="chip ${schRepMode==='ret'?'on':''}" onclick="schReport('${s.id}','ret')">Retailer-wise</button>
+      <button class="chip ${schRepMode==='district'?'on':''}" onclick="schReport('${s.id}','district')">District-wise</button>
+      <button class="chip ${schRepMode==='dist'?'on':''}" onclick="schReport('${s.id}','dist')">Distributor-wise</button>
+      <button class="mini" onclick="$('sc-report').innerHTML=''">✕ Close report</button>
+    </div>
+    <div class="table-scroll"><table><thead><tr>
+      <th>${schRepMode==='ret'?'Retailer':(schRepMode==='district'?'District':'Distributor')}</th>
+      <th class="amount">Cases lifted</th>
+      ${schRepMode==='ret'?'<th>Slab achieved</th>':''}
+      <th>Brand-wise</th>
+      <th>${schRepMode==='dist'?'Retailers served':'Lifted from (distributor)'}</th></tr></thead><tbody>` +
+    (list.map(v=>{
+      const sl = slabFor(v.tot);
+      return `<tr><td><b>${esc(v.name)}</b></td><td class="amount"><b>${v.tot}</b></td>` +
+        (schRepMode==='ret'?`<td>${sl?('✅ '+sl.min+'+ → '+esc(sl.benefit)):'—'}</td>`:'') +
+        `<td style="font-size:12px;">${fmtMap(v.brands)}</td>
+         <td style="font-size:12px;">${schRepMode==='dist'?fmtMap(v.rets):fmtMap(v.dists)}</td></tr>`;
+    }).join('') || `<tr><td colspan="5" style="color:#777">No lifting recorded in this scheme's period yet — the report fills up as secondary sales (distributor → retailer) are recorded in Sales Reports → 📊 Sales report.</td></tr>`) +
+    '</tbody></table></div></div>';
+  box.scrollIntoView({behavior:'smooth', block:'start'});
+}
 async function openMkt(){ mktTab('budget'); show('mkt'); }
 async function mktTab(t){
-  ['budget','spend','requests'].forEach(k=>$('mk-'+k).classList.toggle('on',k===t));
+  ['budget','spend','requests','schemes'].forEach(k=>$('mk-'+k).classList.toggle('on',k===t));
   const B=$('mkt-body'); B.innerHTML='<p style="color:#777">Loading…</p>'; const S=db.schema('sales');
+  if(t==='schemes'){ window.__mkB = B; await schRenderMain(); return; }
   if(t==='budget'){
     const {data,error}=await S.from('v_mkt_budget').select('*').order('period',{ascending:false});
     if(error){B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`;return;}
