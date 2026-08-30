@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aurum Spirits — Employee Login</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+  :root{ --gold:#d4af37; --ink:#0d0a07; --card:#161210; --text:#f3ede2; --muted:#a99c80; }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;min-height:100%;}
+  body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;color:var(--text);
+       background:radial-gradient(1200px 600px at 70% -10%, #3b2f1e 0%, #1a1410 45%, #0d0a07 100%);
+       min-height:100vh;display:flex;flex-direction:column;}
+  header{display:flex;align-items:center;justify-content:space-between;padding:22px 6vw;border-bottom:1px solid rgba(212,175,55,.25);}
+  .brand{display:flex;align-items:center;gap:14px;}
+  .logo{width:48px;height:48px;border-radius:50%;border:2px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--gold);letter-spacing:1px;}
+  .bn{font-size:20px;font-weight:600;letter-spacing:2px;}
+  .bs{font-size:11px;color:#c8b98a;letter-spacing:4px;text-transform:uppercase;}
+  .loginBtn{background:transparent;color:var(--gold);border:1.5px solid var(--gold);border-radius:8px;padding:10px 22px;font-size:14px;font-weight:600;letter-spacing:1px;cursor:pointer;}
+  main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 6vw;}
+  .badge{border:1px solid rgba(212,175,55,.5);color:var(--gold);border-radius:999px;padding:6px 18px;font-size:12px;letter-spacing:4px;text-transform:uppercase;margin-bottom:28px;}
+  h1{font-size:clamp(34px,6vw,64px);margin:0;font-weight:700;line-height:1.15;}
+  .gold{color:var(--gold);}
+  .sub{max-width:640px;margin:22px auto 0;font-size:17px;line-height:1.7;color:#cfc5b2;}
+  .progress-wrap{width:min(420px,80vw);margin-top:40px;}
+  .bar{height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;}
+  .bar > div{width:65%;height:100%;border-radius:999px;background:linear-gradient(90deg,#8a6d1f,var(--gold));}
+  .progress-label{margin-top:10px;font-size:13px;color:#b7a97f;letter-spacing:1px;text-transform:uppercase;}
+  footer{padding:18px 6vw;border-top:1px solid rgba(212,175,55,.2);font-size:13px;color:#9c9078;text-align:center;}
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;padding:16px;z-index:50;}
+  .overlay.open{display:flex;}
+  .modal{position:relative;width:min(400px,92vw);background:var(--card);border:1px solid rgba(212,175,55,.4);border-radius:16px;padding:34px 30px;box-shadow:0 24px 60px rgba(0,0,0,.6);text-align:left;}
+  .modal h2{margin:0;font-size:22px;font-weight:700;}
+  .hint{margin:8px 0 24px;font-size:13.5px;color:var(--muted);}
+  label{display:block;font-size:13px;font-weight:600;color:#d8cdb6;margin-bottom:7px;letter-spacing:.5px;text-transform:uppercase;color:var(--gold);}
+  input{width:100%;background:#0e0b09;border:1px solid #3d3628;border-radius:8px;padding:12px 14px;font-size:14.5px;color:var(--text);outline:none;margin-bottom:18px;}
+  input:focus{border-color:var(--gold);}
+  input#empEmail{background:#eef1fb;color:#101423;}
+  .go{width:100%;background:linear-gradient(90deg,#b8912a,var(--gold));color:#1a1410;border:none;border-radius:8px;padding:13px;font-size:15px;font-weight:700;letter-spacing:1px;cursor:pointer;margin-top:4px;}
+  .go:disabled{opacity:.6;}
+  .close{position:absolute;top:14px;right:16px;background:none;border:none;color:#8f8468;font-size:22px;cursor:pointer;line-height:1;}
+  .msg{display:none;border-radius:8px;padding:10px 12px;font-size:13px;margin-top:16px;line-height:1.55;}
+  .msg.show{display:block;}
+  .msg.bad{background:rgba(180,60,60,.12);border:1px solid rgba(220,90,90,.4);color:#e89b9b;}
+  .msg.ok{background:rgba(80,160,90,.12);border:1px solid rgba(110,200,120,.4);color:#9fd8a8;}
+  .forgot{margin:14px 0 0;font-size:13px;color:var(--muted);text-align:center;}
+  .forgot a{color:var(--gold);}
+  .foot{margin-top:16px;font-size:12.5px;color:#8f8468;text-align:center;}
+  .spin{display:inline-block;width:14px;height:14px;border:2.5px solid #1a1410;border-top-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:8px;}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo">A</div>
+      <div><div class="bn">AURUM SPIRITS</div><div class="bs">India Ltd</div></div>
+    </div>
+    <button class="loginBtn" onclick="openLogin()">Employee Login</button>
+  </header>
+
+  <main>
+    <div class="badge">Internal Portal</div>
+    <h1>Welcome to <span class="gold">Aurum Nexus</span></h1>
+    <p class="sub">Sign in with the email address and password given to you by the Director.</p>
+  </main>
+
+  <footer>© <span id="yr"></span> Aurum Spirits India Ltd. All rights reserved.</footer>
+
+  <div class="overlay open" id="loginOverlay">
+    <div class="modal">
+      
+      <h2>Employee Portal</h2>
+      <p class="hint">Sign in with your Aurum Spirits email and the password the Director gave you. First time? Ask him for your password — it is handed over personally, never emailed.</p>
+      <label for="empEmail">Company email</label>
+      <input type="email" id="empEmail" placeholder="you@aurumspirits.com" autocomplete="username" autocapitalize="none">
+      <label for="empPass">Password</label>
+      <input type="password" id="empPass" placeholder="Your password (min 8 characters)" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+      <button class="go" id="goBtn" onclick="doLogin()">Sign in &amp; enter ERP</button>
+      <div class="msg" id="loginMsg"></div>
+      <p class="forgot">Forgot your password? <a href="#" onclick="forgotPass();return false;">Email me a reset link</a></p>
+      <div class="foot">Salesmen using the field-visit app should use the FieldVisit app instead.</div>
+    </div>
+  </div>
+
+<script>
+  document.getElementById('yr').textContent = new Date().getFullYear();
+  var SUPABASE_URL = "https://qkytrfvmamgtyxvivppu.supabase.co";
+  var SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
+  var ERP_URL = "https://vinayak7711.github.io/aurum-nexus-portal/";
+  var db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  function $(id){ return document.getElementById(id); }
+  function openLogin(){ $('loginOverlay').classList.add('open'); setTimeout(function(){ $('empEmail').focus(); }, 60); }
+  function closeLogin(){ $('loginOverlay').classList.remove('open'); say('',''); }
+  function say(text, kind){ var m=$('loginMsg'); m.textContent=text; m.className='msg'+(text?(' show '+kind):''); }
+
+  function enterErp(session){
+    // Hand the signed-in session to the ERP (implicit-flow hash, same as a magic-link callback).
+    var h = '#access_token=' + encodeURIComponent(session.access_token) +
+            '&refresh_token=' + encodeURIComponent(session.refresh_token) +
+            '&expires_in=' + (session.expires_in || 3600) +
+            '&token_type=bearer&type=magiclink';
+    window.location.href = ERP_URL + h;
+  }
+
+  // Sign-in only. Accounts are created by the Director in the ERP, who also sets
+  // the first password and hands it over in person — this page never creates one.
+  async function doLogin(){
+    var email = ($('empEmail').value || '').trim().toLowerCase();
+    var pass = $('empPass').value || '';
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ say('Please type your full email address.','bad'); return; }
+    if(!pass){ say('Please enter your password.','bad'); return; }
+    var btn = $('goBtn'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Signing in…';
+    try{
+      var si = await db.auth.signInWithPassword({ email: email, password: pass });
+      if(si.data && si.data.session){ return enterErp(si.data.session); }
+      var m = (si.error && si.error.message) || '';
+      if(/invalid login|credentials/i.test(m)){
+        say('That email and password do not match. If you have not been given a password yet, ask the Director — he sets it for you. Otherwise tap "Email me a reset link" below.','bad');
+      } else if(/not confirmed/i.test(m)){
+        say('Your account is not ready yet. Ask the Director to set your password once more, then sign in.','bad');
+      } else {
+        say('Could not sign in: ' + m, 'bad');
+      }
+      btn.disabled=false; btn.innerHTML='Sign in &amp; enter ERP';
+    }catch(e){
+      say('Sign-in failed: ' + e.message, 'bad');
+      btn.disabled=false; btn.innerHTML='Sign in &amp; enter ERP';
+    }
+  }
+
+  // Sends a password-reset email. The link in it opens the ERP, which asks for
+  // the new password and then signs you straight in.
+  async function forgotPass(){
+    var email = ($('empEmail').value || '').trim().toLowerCase();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ say('Type your email above first, then tap the reset link.','bad'); return; }
+    try{
+      var r = await db.auth.resetPasswordForEmail(email, { redirectTo: ERP_URL });
+      if(r.error){ say('Could not send the reset email: ' + r.error.message, 'bad'); return; }
+      say('Reset email sent to ' + email + '. Open it, tap the link, and choose your new password — it signs you into the ERP at the same time.','ok');
+    }catch(e){ say('Could not send the reset email: ' + e.message, 'bad'); }
+  }
+</script>
+</body>
+</html>
