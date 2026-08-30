@@ -499,7 +499,7 @@
     <p style="font-size:11.5px;color:#666;margin:2px 0 6px;">Untick a section and this person will not see that tab at all. Untick every section of a module and the module disappears from their home screen.</p>
     <div id="secgrid"></div>
     <label style="margin-top:16px;">Company mailboxes this person may send from</label>
-    <p style="font-size:11.5px;color:#666;margin:2px 0 6px;">Tick a mailbox and this person can open it and send from that address using their own login. The signature on anything they send carries <b>their</b> name and designation, so the reader always sees who wrote it.</p>
+    <p style="font-size:11.5px;color:#666;margin:2px 0 6px;">Tick a mailbox and this person can open it and send from that address using their own login. The signature on anything they send carries <b>their</b> name and designation, so the reader always sees who wrote it. Boxes marked <i>comes with their role</i> were opened by a module permission above — untick one and it is taken away from them anyway.</p>
     <div id="mbxgrid"></div>
     <div class="switch"><input type="checkbox" id="edit-active"><span>Account active</span></div>
     <div class="row2" style="margin-top:16px;">
@@ -819,20 +819,22 @@ async function loadMasters(){
 /* ================= CONTROL PANEL (users) ================= */
 // Every company mailbox, and who has been handed each one. Loaded once per visit
 // to the Control Panel so the list and both modals can draw the same picture.
-let allMailboxes = [], mbxAssign = {};   // mbxAssign[user_id] = [mailbox_id, ...]
+let allMailboxes = [], mbxAssign = {}, mbxDeny = {};   // [user_id] = [mailbox_id, ...]
 async function loadMailboxMap(){
   const { data: bx } = await db.schema('mail').from('mailboxes')
     .select('id,key,address,display,dir_only,owner_id,grant_module,grant_action,admin_ok').eq('is_active', true).order('key');
   allMailboxes = bx || [];
-  const { data: mu } = await db.schema('mail').from('mailbox_users').select('mailbox_id,user_id');
-  mbxAssign = {};
-  for (const r of (mu || [])) (mbxAssign[r.user_id] ??= []).push(r.mailbox_id);
+  const { data: mu } = await db.schema('mail').from('mailbox_users').select('mailbox_id,user_id,denied');
+  mbxAssign = {}; mbxDeny = {};
+  for (const r of (mu || [])) (r.denied ? (mbxDeny[r.user_id] ??= []) : (mbxAssign[r.user_id] ??= [])).push(r.mailbox_id);
 }
-// A mailbox can reach a person two ways: the Director hands it to them here
-// (explicit), or their role / module grant already opens it (automatic). Both are
-// shown, so the Control Panel never claims less access than the person really has.
+// A mailbox reaches a person three ways: the Director hands it over here
+// (explicit), their role / module grant opens it (automatic), or the Director
+// switches it off (denied) — and a switch-off beats everything else, so a
+// mailbox that came with the role can still be taken away.
 function mbxAccessFor(u){
   const explicit = new Set(mbxAssign[u.id] || []);
+  const denied   = new Set(mbxDeny[u.id] || []);
   const auto = new Set();
   for (const b of allMailboxes){
     if (b.dir_only) { if (u.role === 'DIRECTOR') auto.add(b.id); continue; }
@@ -842,14 +844,15 @@ function mbxAccessFor(u){
     if (b.grant_module && b.grant_action &&
         ((u.permissions_json || {})[b.grant_module] || {})[b.grant_action]) auto.add(b.id);
   }
-  return { explicit, auto };
+  // what they actually end up with
+  const on = new Set([...explicit, ...auto].filter(id => !denied.has(id)));
+  return { explicit, auto, denied, on };
 }
 function mbxNamesFor(u){
-  if (u.role === 'DIRECTOR') return 'all mailboxes';
-  const { explicit, auto } = mbxAccessFor(u);
-  const names = allMailboxes
-    .filter(b => explicit.has(b.id) || auto.has(b.id))
-    .map(b => (b.address || b.key) + (explicit.has(b.id) ? '' : ' (by role)'));
+  const { explicit, auto, on } = mbxAccessFor(u);
+  if (u.is_superadmin) return 'all mailboxes';
+  const names = allMailboxes.filter(b => on.has(b.id))
+    .map(b => (b.address || b.key) + (explicit.has(b.id) || !auto.has(b.id) ? '' : ' (by role)'));
   return names.length ? names.join(', ') : '—';
 }
 async function openAdmin(){
@@ -913,20 +916,22 @@ async function delInvite(iv){
 }
 
 /* ---- add a person ---- */
-function mbxBoxes(containerId, chosen, auto){
-  const set  = new Set(chosen || []);
-  const gave = auto || new Set();            // already open to them by role — shown, but not editable here
+// Every box is freely tickable. A tick means "this person may use this mailbox";
+// an empty box means "they may not" — even when their role would have opened it,
+// in which case saving records a switch-off that overrules the role.
+function mbxBoxes(containerId, on, auto){
+  const set  = new Set(on || []);
+  const gave = auto || new Set();
   const el = $(containerId);
   const usable = allMailboxes.filter(b => !b.dir_only);
   const locked = allMailboxes.filter(b => b.dir_only);
   el.innerHTML =
     (usable.length
-      ? `<div style="display:flex;gap:12px;flex-wrap:wrap;">` + usable.map(b => {
-          const isAuto = gave.has(b.id) && !set.has(b.id);
-          return `<label style="font-weight:normal;font-size:12px;display:flex;gap:5px;align-items:center;${isAuto?'opacity:.65;':''}">
-             <input type="checkbox" class="${containerId}-box" data-mbx="${b.id}" ${set.has(b.id)?'checked':''} ${isAuto?'checked disabled':''}>
-             ${esc(b.display || b.key)} <span style="color:#777">&lt;${esc(b.address||'')}&gt;</span>${isAuto?' <span style="color:#777;font-size:10.5px;">(by role)</span>':''}</label>`;
-        }).join('') + `</div>`
+      ? `<div style="display:flex;gap:12px;flex-wrap:wrap;">` + usable.map(b =>
+          `<label style="font-weight:normal;font-size:12px;display:flex;gap:5px;align-items:center;">
+             <input type="checkbox" class="${containerId}-box" data-mbx="${b.id}" data-auto="${gave.has(b.id)?'1':'0'}" ${set.has(b.id)?'checked':''}>
+             ${esc(b.display || b.key)} <span style="color:#777">&lt;${esc(b.address||'')}&gt;</span>${gave.has(b.id)?' <span style="color:#8a7a55;font-size:10.5px;">(comes with their role — untick to take it away)</span>':''}</label>`
+        ).join('') + `</div>`
       : `<div style="font-size:12px;color:#777;">No shared mailboxes are set up yet.</div>`) +
     (locked.length ? `<div style="font-size:11.5px;color:#777;margin-top:6px;">Director-only: ${esc(locked.map(b=>b.address||b.key).join(', '))} — these cannot be handed out.</div>` : '');
 }
@@ -1032,7 +1037,7 @@ function openEdit(u){
       '</div></div>');
   }
   // ---- company mailboxes this person may send from ----
-  mbxBoxes('mbxgrid', mbxAssign[u.id] || [], mbxAccessFor(u).auto);
+  { const a = mbxAccessFor(u); mbxBoxes('mbxgrid', [...a.on], a.auto); }
   say('edit-msg','');
   $('edit-overlay').classList.remove('hidden');
 }
@@ -1062,20 +1067,28 @@ $('btn-save-user').onclick = async () => {
   };
   const { error } = await db.schema('adm').from('users').update(patch).eq('id', editing.id);
   if (error){ say('edit-msg','Save failed: '+error.message,false); return; }
-  // Mailbox hand-outs: add the newly ticked, remove the newly unticked. Only the
-  // boxes shown in this modal are touched, so a Director's own access is safe.
+  // Mailboxes. For each box on screen we work out what row (if any) the database
+  // should hold: a plain grant where the tick is not covered by their role, a
+  // switch-off where the tick was removed from something their role would open,
+  // and no row at all when the role already says the right thing.
   {
-    const live   = [...document.querySelectorAll('.mbxgrid-box')].filter(c => !c.disabled);
-    const shown  = live.map(c => c.dataset.mbx);
-    const wanted = new Set(live.filter(c => c.checked).map(c => c.dataset.mbx));
-    const had    = new Set(mbxAssign[editing.id] || []);
-    const add = shown.filter(id =>  wanted.has(id) && !had.has(id)).map(id => ({ mailbox_id: id, user_id: editing.id }));
-    const rem = shown.filter(id => !wanted.has(id) &&  had.has(id));
-    if (add.length){
-      const r = await db.schema('mail').from('mailbox_users').insert(add);
+    const boxes = [...document.querySelectorAll('.mbxgrid-box')];
+    const hadOn  = new Set(mbxAssign[editing.id] || []);
+    const hadOff = new Set(mbxDeny[editing.id] || []);
+    const put = [], drop = [];
+    for (const c of boxes){
+      const id = c.dataset.mbx, auto = c.dataset.auto === '1', want = c.checked;
+      const rowWanted = want ? (auto ? null : { denied: false }) : (auto ? { denied: true } : null);
+      const rowHad    = hadOn.has(id) ? { denied: false } : (hadOff.has(id) ? { denied: true } : null);
+      if (JSON.stringify(rowWanted) === JSON.stringify(rowHad)) continue;
+      if (rowWanted) put.push({ mailbox_id: id, user_id: editing.id, denied: rowWanted.denied });
+      else drop.push(id);
+    }
+    for (const id of drop) await db.schema('mail').from('mailbox_users').delete().eq('mailbox_id', id).eq('user_id', editing.id);
+    if (put.length){
+      const r = await db.schema('mail').from('mailbox_users').upsert(put, { onConflict: 'mailbox_id,user_id' });
       if (r.error){ say('edit-msg','Saved, but the mailboxes could not be updated: '+r.error.message,false); return; }
     }
-    for (const id of rem) await db.schema('mail').from('mailbox_users').delete().eq('mailbox_id', id).eq('user_id', editing.id);
   }
   closeSheet('edit-overlay'); openAdmin();
 };
