@@ -2708,11 +2708,12 @@ async function reportsTab(t){
     if (isDir()){
       html += `
       <h4 class="sec">Give a team leader the total target (cases)</h4>
-      <p style="font-size:12px;color:#777;margin:2px 0 8px;">You hand each <b>team leader</b> one total for the period. The leader then opens this tab and divides it among his salesmen — the split can never exceed what you gave him. (Who leads whom comes from "Reports to" in the Control Panel.)</p>
+      <p style="font-size:12px;color:#777;margin:2px 0 8px;">Pick any person as the <b>team leader</b> and hand them one total for the period. The leader then opens this tab and divides it among the salesmen who report to him — the split can never exceed what you gave him. (Who reports to whom comes from "Reports to" in the Control Panel.)</p>
       <div class="row2c">
-        <div><label>Team leader</label><select id="tg-user">${leaderIds.length
-          ? leaderIds.map(id=>`<option value="${id}">${esc(byId[id].full_name)}${byId[id].designation?' — '+esc(byId[id].designation):''} (${teamOf(id).length} salesmen)</option>`).join('')
-          : '<option value="">— no team leaders yet —</option>'}</select></div>
+        <div><label>Team leader</label><select id="tg-user">${(users||[]).map(u=>{
+            const n = teamOf(u.id).length;
+            return `<option value="${u.id}">${esc(u.full_name)}${u.designation?' — '+esc(u.designation):''}${n?` (${n} salesm${n===1?'an':'en'})`:''}</option>`;
+          }).join('')}</select></div>
         <div><label>Period type</label><select id="tg-type" onchange="$('tg-period').value = this.value==='MONTH' ? monthLabelJS() : quarterLabelJS()"><option value="MONTH">Monthly</option><option value="QUARTER">Quarterly</option></select></div>
       </div>
       <div class="row2c">
@@ -2740,8 +2741,12 @@ async function reportsTab(t){
     const rows = allt || [];
     const rowFor = (uid, per, ty) => rows.find(r => r.user_id===uid && r.period===per && r.period_type===ty);
     const periods = [...new Set(rows.map(r => r.period_type+'|'+r.period))];
+    const canDelTarget = uid => isDir() || (teamMembers||[]).some(m => m.id === uid);
+    const delBtn = (r) => canDelTarget(r.user_id)
+      ? ` <td><button class="mini" style="color:#c0392b;border-color:#c0392b;" onclick="tgDelete('${r.id}','${esc(r.full_name).replace(/'/g,'')}','${esc(r.period)}')">🗑 Delete</button></td>`
+      : '<td></td>';
     html += `<h4 class="sec" style="margin-top:18px;">All targets &amp; progress</h4>
-      <div class="table-scroll"><table><thead><tr><th>Team / salesperson</th><th>Type</th><th>Period</th><th class="amount">Target</th><th class="amount">Achieved</th><th>Progress</th></tr></thead><tbody>`;
+      <div class="table-scroll"><table><thead><tr><th>Team / salesperson</th><th>Type</th><th>Period</th><th class="amount">Target</th><th class="amount">Achieved</th><th>Progress</th><th></th></tr></thead><tbody>`;
     let printed = new Set();
     for (const pk of periods){
       const [ty, per] = pk.split('|');
@@ -2751,19 +2756,19 @@ async function reportsTab(t){
         if (!lt && !kids.length) continue;
         const divided = kids.reduce((a,r)=>a+Number(r.target_cases||0),0);
         if (lt){ printed.add(lt.id);
-          html += `<tr style="background:#faf6ea;"><td><b>👑 ${esc(lt.full_name)}</b> <span style="font-size:11px;color:#777">team total${lt.target_cases>0?` · ${divided} of ${Number(lt.target_cases)} divided`:''}</span></td><td>${ty}</td><td>${per}</td><td class="amount"><b>${Number(lt.target_cases)}</b></td><td class="amount">${Number(lt.achieved_cases)}</td><td>${bar(lt.pct)}</td></tr>`;
+          html += `<tr style="background:#faf6ea;"><td><b>👑 ${esc(lt.full_name)}</b> <span style="font-size:11px;color:#777">team total${lt.target_cases>0?` · ${divided} of ${Number(lt.target_cases)} divided`:''}</span></td><td>${ty}</td><td>${per}</td><td class="amount"><b>${Number(lt.target_cases)}</b></td><td class="amount">${Number(lt.achieved_cases)}</td><td>${bar(lt.pct)}</td>${delBtn(lt)}</tr>`;
         } else {
-          html += `<tr style="background:#faf6ea;"><td><b>👑 ${esc(byId[lid]?byId[lid].full_name:'')}</b> <span style="font-size:11px;color:#b3261e">no team total set</span></td><td>${ty}</td><td>${per}</td><td class="amount">—</td><td class="amount">—</td><td>—</td></tr>`;
+          html += `<tr style="background:#faf6ea;"><td><b>👑 ${esc(byId[lid]?byId[lid].full_name:'')}</b> <span style="font-size:11px;color:#b3261e">no team total set</span></td><td>${ty}</td><td>${per}</td><td class="amount">—</td><td class="amount">—</td><td>—</td><td></td></tr>`;
         }
         for (const kr of kids){ printed.add(kr.id);
-          html += `<tr><td style="padding-left:28px;">↳ ${esc(kr.full_name)}</td><td>${ty}</td><td>${per}</td><td class="amount">${Number(kr.target_cases)}</td><td class="amount">${Number(kr.achieved_cases)}</td><td>${bar(kr.pct)}</td></tr>`;
+          html += `<tr><td style="padding-left:28px;">↳ ${esc(kr.full_name)}</td><td>${ty}</td><td>${per}</td><td class="amount">${Number(kr.target_cases)}</td><td class="amount">${Number(kr.achieved_cases)}</td><td>${bar(kr.pct)}</td>${delBtn(kr)}</tr>`;
         }
       }
     }
     const loose = rows.filter(r => !printed.has(r.id));
     for (const p of loose)
-      html += `<tr><td>${esc(p.full_name)}</td><td>${p.period_type}</td><td>${p.period}</td><td class="amount">${Number(p.target_cases)}</td><td class="amount">${Number(p.achieved_cases)}</td><td>${bar(p.pct)}</td></tr>`;
-    if (!rows.length) html += '<tr><td colspan="6" style="color:#777">No targets yet.</td></tr>';
+      html += `<tr><td>${esc(p.full_name)}</td><td>${p.period_type}</td><td>${p.period}</td><td class="amount">${Number(p.target_cases)}</td><td class="amount">${Number(p.achieved_cases)}</td><td>${bar(p.pct)}</td>${delBtn(p)}</tr>`;
+    if (!rows.length) html += '<tr><td colspan="7" style="color:#777">No targets yet.</td></tr>';
     html += '</tbody></table></div>';
 
     B.innerHTML = html;
@@ -2781,6 +2786,15 @@ async function reportsTab(t){
     return;
   }
 }
+// Remove one target row. The Director can delete any; a team leader only what
+// he gave his own salesmen — the database enforces the same rule.
+async function tgDelete(id, name, period){
+  if (!confirm(`Delete the ${period} target for ${name}?\n\nOnly the target number goes — their reports, orders and achieved cases stay.`)) return;
+  const { error } = await db.schema('sales').rpc('delete_target', { p_target: id });
+  if (error){ alert('Could not delete: ' + error.message); return; }
+  reportsTab('targets');
+}
+
 /* ---- the team leader's splitting desk ----
    Shows his total for the chosen period and one box per salesman. The boxes must
    add up to no more than the total; the database enforces the same rule. */
