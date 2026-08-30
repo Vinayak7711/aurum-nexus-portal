@@ -349,8 +349,8 @@
   <!-- ============ MODULE 16: MARKETING ============ -->
   <section id="view-mkt" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Marketing</h2>
-      <p>Set the marketing budget month-wise and week-wise, log every spend, and monitor utilisation — budget vs spent vs remaining — and exactly where it went.</p></div>
+    <div class="welcome"><h2>Marketing &amp; Schemes</h2>
+      <p>Set the marketing budget month-wise and week-wise, log every spend, monitor utilisation — budget vs spent vs remaining — and run the retailer schemes from announcement through to reimbursement.</p></div>
     <div class="subtabs">
       <button class="chip on" id="mk-budget" onclick="mktTab('budget')">Budget &amp; utilisation</button>
       <button class="chip" id="mk-spend" onclick="mktTab('spend')">Spends (where used)</button>
@@ -632,7 +632,7 @@ const MODULES = [
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'calendar',ico:'📅', name:'Calendar',         desc:'Events + task, renewal & PO dates',      live:true,  open:()=>openCalendar()},
   {key:'meetings',ico:'📝', name:'Meetings',         desc:'Agendas, minutes, participants, views',  live:true,  open:()=>openMeetings()},
-  {key:'mkt',     ico:'📣', name:'Marketing',        desc:'Budget month/week + utilisation',        live:true, mktOnly:true, open:()=>openMkt()},
+  {key:'mkt',     ico:'🎯', name:'Marketing & Schemes', desc:'Budget, spends & retailer schemes',   live:true, mktOnly:true, open:()=>openMkt()},
   {key:'notif',   ico:'🔔', name:'Notification Centre', desc:'Tasks, emails, to-dos & approvals',  live:true,  open:()=>openNotifCentre()},
   {key:'excise',  ico:'📜', name:'License & Renewal',desc:'Licences, permits, registrations, expiries', live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
