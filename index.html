@@ -5601,8 +5601,9 @@ async function schRenderMain(){
   let html = '';
   if (canEd){
     html += `<div class="card" style="max-width:720px;margin-bottom:14px;"><h3 style="font-size:15px;">Announce a new scheme</h3>
-      <div class="row2c" style="margin-top:8px;"><div><label>Scheme name *</label><input type="text" id="sc-name" placeholder="e.g. Monsoon Push — Beer Shoppes"></div>
-        <div><label>Brand (blank = all brands)</label><select id="sc-brand"><option value="">— All brands —</option>${M.brands.filter(b=>b.is_active!==false).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></div></div>
+      <div style="margin-top:8px;"><label>Scheme name *</label><input type="text" id="sc-name" placeholder="e.g. Monsoon Push — Beer Shoppes" style="width:100%;"></div>
+      <label style="margin-top:10px;">Brands in this scheme — tick one or several (their sales are COMBINED together for the slabs); tick none to cover ALL brands</label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:4px 0;">${M.brands.filter(b=>b.is_active!==false).map(b=>`<label style="font-weight:normal;font-size:12.5px;display:flex;gap:4px;align-items:center;"><input type="checkbox" class="sc-brand" value="${b.id}">${esc(b.name)}</label>`).join('')}</div>
       <div class="row2c" style="margin-top:8px;"><div><label>From date *</label><input type="date" id="sc-from" value="${todayISO()}"></div>
         <div><label>To date *</label><input type="date" id="sc-to"></div></div>
       <label style="margin-top:10px;">Retailer categories covered — tick none to cover ALL categories</label>
@@ -5622,7 +5623,9 @@ async function schRenderMain(){
       const state = s.status!=='ACTIVE' ? 'CLOSED' : (s.date_from>today ? 'UPCOMING' : (s.date_to<today ? 'ENDED' : 'LIVE'));
       const pill = state==='LIVE'?'DELIVERED':(state==='UPCOMING'?'RECEIVED':(state==='ENDED'?'DISPATCHED':'CANCELLED'));
       const cats = (s.categories&&s.categories.length)? s.categories.join(', ') : 'All categories';
-      const bn = s.brand_id ? (((M.brands.find(b=>b.id===s.brand_id))||{}).name||'—') : 'All brands';
+      const bn = (s.brand_ids&&s.brand_ids.length)
+        ? s.brand_ids.map(bid=>((M.brands.find(b=>b.id===bid))||{}).name||'?').join(' + ')
+        : 'All brands';
       const slabs = (s.slabs||[]).map(x=>x.min+'+ → '+x.benefit).join(' · ')||'—';
       return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.name)}${s.notes?'<br><span style="font-size:11px;color:#777">'+esc(s.notes)+'</span>':''}</td>
         <td style="font-size:12px;">${s.date_from}<br>→ ${s.date_to}</td><td>${esc(bn)}</td>
@@ -5651,10 +5654,11 @@ async function schAnnounce(){
   if (!from || !to || to < from){ say('sc-msg','Choose a valid from and to date.',false); return; }
   if (!schSlabs.length){ say('sc-msg','Add at least one case slab.',false); return; }
   const cats = [...document.querySelectorAll('.sc-cat:checked')].map(c=>c.value);
+  const brandIds = [...document.querySelectorAll('.sc-brand:checked')].map(c=>c.value);
   const { data: code, error: e1 } = await db.schema('app').rpc('next_code', { p_series: 'SCH' });
   if (e1){ say('sc-msg', e1.message, false); return; }
   const { error } = await db.schema('sales').from('schemes').insert({
-    code, name, brand_id: $('sc-brand').value||null, date_from: from, date_to: to,
+    code, name, brand_ids: brandIds, date_from: from, date_to: to,
     categories: cats, slabs: schSlabs, notes: $('sc-notes').value.trim()||null, status: 'ACTIVE', created_by: me.id });
   if (error){ say('sc-msg','Could not announce: '+error.message,false); return; }
   mktTab('schemes');
@@ -5678,7 +5682,8 @@ async function schReport(id, mode){
   const { data: rets } = await db.schema('sales').from('retailers').select('id,code,name,category,district');
   const retBy = {}; (rets||[]).forEach(r=>retBy[r.id]=r);
   const catOk = r => !(s.categories&&s.categories.length) || (r && s.categories.includes(r.category));
-  const rows = (ss||[]).filter(x => (!s.brand_id || ((skuBy[x.sku_id]||{}).brand_id === s.brand_id)) && catOk(retBy[x.retailer_id]));
+  const brandOk = x => !(s.brand_ids&&s.brand_ids.length) || s.brand_ids.includes((skuBy[x.sku_id]||{}).brand_id);
+  const rows = (ss||[]).filter(x => brandOk(x) && catOk(retBy[x.retailer_id]));
   const slabFor = cases => { let hit = null; for (const sl of (s.slabs||[])) if (cases >= sl.min) hit = sl; return hit; };
   const distName = pid => { const p = M.parties.find(x=>x.id===pid); return p ? (p.code+' — '+p.name) : '(not recorded)'; };
   const agg = {};
@@ -5698,7 +5703,7 @@ async function schReport(id, mode){
   }
   const list = Object.values(agg).sort((a,b)=>b.tot-a.tot);
   const fmtMap = m => Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([k,c])=>esc(k)+' ('+c+')').join(', ') || '—';
-  const bn = s.brand_id ? brandName(s.brand_id) : 'All brands';
+  const bn = (s.brand_ids&&s.brand_ids.length) ? s.brand_ids.map(bid=>brandName(bid)).join(' + ')+' (combined)' : 'All brands';
   box.innerHTML = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">📊 ${esc(s.code)} — ${esc(s.name)}</h3>
     <p style="font-size:12px;color:#555;margin:4px 0 8px;">${s.date_from} → ${s.date_to} · ${esc(bn)} · ${(s.categories&&s.categories.length)?esc(s.categories.join(', ')):'All categories'} · figures = <b>cases lifted</b>, straight from the secondary-sales record</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
