@@ -165,11 +165,13 @@
   <section id="view-admin" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Users &amp; Roles</h2>
-      <p>People appear here automatically after their first sign-in. Promote, grant, or deactivate — never delete history.</p></div>
+      <p>Add a person here, set their role and hand them the company mailboxes they may send from. They finish by signing in once with their own email — no password ever passes through this screen.</p></div>
+    <div style="margin:0 0 12px;"><button class="btn gold" onclick="openInvite()">➕ Add a person</button></div>
     <div class="table-scroll"><table>
-      <thead><tr><th>Name</th><th>Role</th><th>Designation</th><th>Active</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Role</th><th>Designation</th><th>Sends mail as</th><th>Active</th><th></th></tr></thead>
       <tbody id="user-rows"></tbody>
     </table></div>
+    <div id="invite-rows"></div>
   </section>
 
   <!-- ============ MODULE 1: ORDERS ============ -->
@@ -496,12 +498,42 @@
     <label style="margin-top:16px;">Sections visible inside each module (ignored for Directors)</label>
     <p style="font-size:11.5px;color:#666;margin:2px 0 6px;">Untick a section and this person will not see that tab at all. Untick every section of a module and the module disappears from their home screen.</p>
     <div id="secgrid"></div>
+    <label style="margin-top:16px;">Company mailboxes this person may send from</label>
+    <p style="font-size:11.5px;color:#666;margin:2px 0 6px;">Tick a mailbox and this person can open it and send from that address using their own login. The signature on anything they send carries <b>their</b> name and designation, so the reader always sees who wrote it.</p>
+    <div id="mbxgrid"></div>
     <div class="switch"><input type="checkbox" id="edit-active"><span>Account active</span></div>
     <div class="row2" style="margin-top:16px;">
       <button class="btn ghost" onclick="closeSheet('edit-overlay')">Cancel</button>
       <button class="btn gold" id="btn-save-user">Save</button>
     </div>
     <div id="edit-msg"></div>
+  </div>
+</div>
+
+<!-- MODAL: ADD A PERSON (invite) -->
+<div class="overlay hidden" id="invite-overlay">
+  <div class="sheet">
+    <h3>Add a person to the ERP</h3>
+    <p class="email">They sign in once with this email address to activate the account. Everything you set here is applied automatically on that first sign-in.</p>
+    <label>Full name *</label><input type="text" id="iv-name" placeholder="e.g. Rahul Deshmukh">
+    <label>Email address *</label><input type="email" id="iv-email" placeholder="name@aurumspirits.com">
+    <label>Designation</label><input type="text" id="iv-desig" placeholder="e.g. Area Sales Manager">
+    <label>Role (tier)</label>
+    <select id="iv-role">
+      <option value="STAFF">STAFF — own world only</option>
+      <option value="ADMIN">ADMIN — runs a domain day-to-day</option>
+      <option value="DIRECTOR">DIRECTOR — sees &amp; approves everything</option>
+      <option value="PUBLIC">PUBLIC — outside surfaces only</option>
+    </select>
+    <label style="margin-top:14px;">Company mailboxes this person may send from</label>
+    <p style="font-size:11.5px;color:#666;margin:2px 0 6px;">Their own name and designation appear in the signature of every mail they send from these addresses.</p>
+    <div id="iv-mbx"></div>
+    <p style="font-size:11.5px;color:#666;margin:10px 0 0;">Module and section permissions can be set from <b>Edit</b> once they have signed in — or leave them and this person starts with the plain access their role gives.</p>
+    <div class="row2" style="margin-top:16px;">
+      <button class="btn ghost" onclick="closeSheet('invite-overlay')">Cancel</button>
+      <button class="btn gold" id="btn-save-invite">Add person</button>
+    </div>
+    <div id="iv-msg"></div>
   </div>
 </div>
 
@@ -785,11 +817,30 @@ async function loadMasters(){
 }
 
 /* ================= CONTROL PANEL (users) ================= */
+// Every company mailbox, and who has been handed each one. Loaded once per visit
+// to the Control Panel so the list and both modals can draw the same picture.
+let allMailboxes = [], mbxAssign = {};   // mbxAssign[user_id] = [mailbox_id, ...]
+async function loadMailboxMap(){
+  const { data: bx } = await db.schema('mail').from('mailboxes').select('id,key,address,display,dir_only,owner_id').eq('is_active', true).order('key');
+  allMailboxes = bx || [];
+  const { data: mu } = await db.schema('mail').from('mailbox_users').select('mailbox_id,user_id');
+  mbxAssign = {};
+  for (const r of (mu || [])) (mbxAssign[r.user_id] ??= []).push(r.mailbox_id);
+}
+function mbxNamesFor(u){
+  // A Director sees every mailbox anyway; an owner always has their own.
+  if (u.role === 'DIRECTOR') return 'all mailboxes';
+  const ids = new Set(mbxAssign[u.id] || []);
+  allMailboxes.forEach(b => { if (b.owner_id === u.id) ids.add(b.id); });
+  const names = allMailboxes.filter(b => ids.has(b.id)).map(b => b.address || b.key);
+  return names.length ? names.join(', ') : '—';
+}
 async function openAdmin(){
   const { data, error } = await db.schema('adm').from('users').select('*').order('full_name');
   if (error){ say('od-msg','Could not load users: '+error.message,false); return; }
   // Deleted people never appear in the list — only current (and deactivated-but-kept) staff show.
   allUsers = (data || []).filter(u => !u.deleted_at);
+  await loadMailboxMap();
   const tb = $('user-rows'); tb.innerHTML = '';
   for (const u of allUsers){
     const tr = document.createElement('tr');
@@ -797,7 +848,9 @@ async function openAdmin(){
     tr.innerHTML =
       `<td><b>${esc(u.full_name)}</b><br><span style="font-size:11px;color:#777">${esc(u.email)}</span></td>` +
       `<td><span class="pill ${u.role}">${u.role}</span>${u.is_superadmin?' <span class="lock" title="Founder lock">🔒</span>':''}</td>` +
-      `<td>${esc(u.designation||'—')}</td><td>${u.is_active?'✔':'✖'}</td>` +
+      `<td>${esc(u.designation||'—')}</td>` +
+      `<td style="font-size:11.5px;color:#555">${esc(mbxNamesFor(u))}</td>` +
+      `<td>${u.is_active?'✔':'✖'}</td>` +
       `<td style="white-space:nowrap"><button class="mini" data-act="edit">Edit</button>` +
       `${isDir() && !u.is_superadmin && u.id !== (me&&me.id) ? ' <button class="mini" data-act="del" style="color:#c0392b;border-color:#c0392b;">Delete</button>' : ''}</td>`;
     tr.querySelector('[data-act="edit"]').onclick = () => openEdit(u);
@@ -805,8 +858,95 @@ async function openAdmin(){
     if (delBtn) delBtn.onclick = () => delUser(u);
     tb.appendChild(tr);
   }
+  await renderInvites();
   show('admin');
 }
+
+/* ---- people added but not yet signed in ---- */
+async function renderInvites(){
+  const box = $('invite-rows'); if (!box) return;
+  box.innerHTML = '';
+  if (!isDir()) return;
+  const { data, error } = await db.schema('adm').from('invites').select('*').is('used_at', null).order('created_at');
+  if (error || !data || !data.length) return;
+  box.innerHTML =
+    `<h3 style="margin:22px 0 6px;font-size:15px;">Waiting for first sign-in</h3>
+     <p style="font-size:12px;color:#666;margin:0 0 8px;">These people are set up and allowed in. Ask them to open the ERP, type their email on the sign-in screen and click the link that arrives. Everything below is applied the moment they land.</p>
+     <div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Designation</th><th>Sends mail as</th><th></th></tr></thead><tbody id="inv-body"></tbody></table></div>`;
+  const tb = $('inv-body');
+  for (const iv of data){
+    const ids = new Set(iv.mailbox_ids || []);
+    const names = allMailboxes.filter(b => ids.has(b.id)).map(b => b.address || b.key).join(', ') || '—';
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td><b>${esc(iv.full_name || '—')}</b><br><span style="font-size:11px;color:#777">${esc(iv.email)}</span></td>` +
+      `<td><span class="pill ${esc(iv.role||'STAFF')}">${esc(iv.role||'STAFF')}</span></td>` +
+      `<td>${esc(iv.designation||'—')}</td>` +
+      `<td style="font-size:11.5px;color:#555">${esc(names)}</td>` +
+      `<td style="white-space:nowrap"><button class="mini" data-act="del" style="color:#c0392b;border-color:#c0392b;">Cancel</button></td>`;
+    tr.querySelector('[data-act="del"]').onclick = () => delInvite(iv);
+    tb.appendChild(tr);
+  }
+}
+async function delInvite(iv){
+  if (!confirm('Cancel the invitation for ' + (iv.full_name || iv.email) + '?\n\nThey will no longer be able to sign in.')) return;
+  await db.schema('adm').from('invites').delete().eq('email', iv.email);
+  await db.schema('adm').from('auth_allowlist').delete().eq('email', iv.email);
+  openAdmin();
+}
+
+/* ---- add a person ---- */
+function mbxBoxes(containerId, chosen){
+  const set = new Set(chosen || []);
+  const el = $(containerId);
+  const usable = allMailboxes.filter(b => !b.dir_only);
+  const locked = allMailboxes.filter(b => b.dir_only);
+  el.innerHTML =
+    (usable.length
+      ? `<div style="display:flex;gap:12px;flex-wrap:wrap;">` + usable.map(b =>
+          `<label style="font-weight:normal;font-size:12px;display:flex;gap:5px;align-items:center;">
+             <input type="checkbox" class="${containerId}-box" data-mbx="${b.id}" ${set.has(b.id)?'checked':''}>
+             ${esc(b.display || b.key)} <span style="color:#777">&lt;${esc(b.address||'')}&gt;</span></label>`).join('') + `</div>`
+      : `<div style="font-size:12px;color:#777;">No shared mailboxes are set up yet.</div>`) +
+    (locked.length ? `<div style="font-size:11.5px;color:#777;margin-top:6px;">Director-only: ${esc(locked.map(b=>b.address||b.key).join(', '))} — these cannot be handed out.</div>` : '');
+}
+async function openInvite(){
+  if (!allMailboxes.length) await loadMailboxMap();
+  $('iv-name').value = ''; $('iv-email').value = ''; $('iv-desig').value = ''; $('iv-role').value = 'STAFF';
+  mbxBoxes('iv-mbx', []);
+  say('iv-msg','');
+  $('invite-overlay').classList.remove('hidden');
+}
+$('btn-save-invite').onclick = async () => {
+  const name  = $('iv-name').value.trim();
+  const email = $('iv-email').value.trim().toLowerCase();
+  if (!name)  { say('iv-msg','Please put in the person\'s full name.', false); return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ say('iv-msg','That email address does not look right.', false); return; }
+  if (allUsers.some(u => (u.email||'').toLowerCase() === email)){
+    say('iv-msg','Somebody with that email is already in the ERP — use Edit on their row instead.', false); return;
+  }
+  const boxes = [...document.querySelectorAll('.iv-mbx-box')].filter(c=>c.checked).map(c=>c.dataset.mbx);
+  const btn = $('btn-save-invite'); btn.disabled = true;
+  // The allow-list is what lets the sign-in link work at all; the invite carries
+  // the name, role and mailboxes that get applied on their first sign-in.
+  const a = await db.schema('adm').from('auth_allowlist')
+    .upsert({ email, note: 'Added from Control Panel' }, { onConflict: 'email' });
+  if (a.error){ btn.disabled = false; say('iv-msg','Could not allow that address in: '+a.error.message, false); return; }
+  const r = await db.schema('adm').from('invites').upsert({
+    email, full_name: name,
+    designation: $('iv-desig').value.trim() || null,
+    role: $('iv-role').value,
+    permissions_json: {},
+    mailbox_ids: boxes,
+    created_by: (me && me.id) || null,
+    used_at: null
+  }, { onConflict: 'email' });
+  btn.disabled = false;
+  if (r.error){ say('iv-msg','Could not save: '+r.error.message, false); return; }
+  closeSheet('invite-overlay');
+  alert(name + ' has been added.\n\nAsk them to open this ERP, type ' + email + ' on the sign-in screen and click the link that arrives in their inbox. Their account, role and mailboxes are set up the moment they land.');
+  openAdmin();
+};
 async function delUser(u){
   if (!confirm('Delete ' + u.full_name + ' (' + u.email + ') from the ERP?\n\nThey immediately lose all access. If they have past records (orders, entries, mail), they are deactivated instead so your books stay intact.')) return;
   const { data, error } = await db.schema('adm').rpc('delete_user', { p_user: u.id });
@@ -871,6 +1011,8 @@ function openEdit(u){
            <input type="checkbox" class="secbox-${m.key}" data-secmod="${m.key}" data-sec="${id}" ${sec[id]===false?'':'checked'}>${esc(label)}</label>`).join('') +
       '</div></div>');
   }
+  // ---- company mailboxes this person may send from ----
+  mbxBoxes('mbxgrid', mbxAssign[u.id] || []);
   say('edit-msg','');
   $('edit-overlay').classList.remove('hidden');
 }
@@ -900,6 +1042,20 @@ $('btn-save-user').onclick = async () => {
   };
   const { error } = await db.schema('adm').from('users').update(patch).eq('id', editing.id);
   if (error){ say('edit-msg','Save failed: '+error.message,false); return; }
+  // Mailbox hand-outs: add the newly ticked, remove the newly unticked. Only the
+  // boxes shown in this modal are touched, so a Director's own access is safe.
+  {
+    const shown  = [...document.querySelectorAll('.mbxgrid-box')].map(c => c.dataset.mbx);
+    const wanted = new Set([...document.querySelectorAll('.mbxgrid-box')].filter(c=>c.checked).map(c=>c.dataset.mbx));
+    const had    = new Set(mbxAssign[editing.id] || []);
+    const add = shown.filter(id =>  wanted.has(id) && !had.has(id)).map(id => ({ mailbox_id: id, user_id: editing.id }));
+    const rem = shown.filter(id => !wanted.has(id) &&  had.has(id));
+    if (add.length){
+      const r = await db.schema('mail').from('mailbox_users').insert(add);
+      if (r.error){ say('edit-msg','Saved, but the mailboxes could not be updated: '+r.error.message,false); return; }
+    }
+    for (const id of rem) await db.schema('mail').from('mailbox_users').delete().eq('mailbox_id', id).eq('user_id', editing.id);
+  }
   closeSheet('edit-overlay'); openAdmin();
 };
 
