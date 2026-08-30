@@ -131,6 +131,53 @@
     <input type="text" id="partySearch" placeholder="🔍  Search party…" oninput="renderParties(this.value)">
     <div id="partyList" style="display:flex;flex-direction:column;gap:10px;"></div>
     <div class="muted" style="text-align:center;" id="partyHint"></div>
+    <button class="btn btn-ghost" onclick="openRetailers()">🏪 Party not in this list? Choose from the vendor list →</button>
+  </div>
+</div>
+
+<!-- ============ VENDOR (RETAILER) SELECT ============ -->
+<div class="screen" id="scr-retailers">
+  <header><button class="back" onclick="go('scr-parties')">‹</button><h1>Vendor List</h1></header>
+  <div class="content">
+    <input type="text" id="retailSearch" placeholder="🔍  Search vendor / shop…" oninput="renderRetailers(this.value)">
+    <div id="retailList" style="display:flex;flex-direction:column;gap:10px;"></div>
+    <div class="muted" style="text-align:center;" id="retailHint"></div>
+    <button class="btn btn-primary" onclick="openNewVendor()">＋ Vendor not here? Add &amp; visit</button>
+  </div>
+</div>
+
+<!-- ============ ADD NEW VENDOR ============ -->
+<div class="screen" id="scr-newvendor">
+  <header><button class="back" onclick="go('scr-retailers')">‹</button><h1>Add New Vendor</h1></header>
+  <div class="content">
+    <div class="card">
+      <label>Shop / vendor name *</label>
+      <input type="text" id="nvName" placeholder="e.g. Shree Wines, Panvel">
+      <div style="height:12px"></div>
+      <label>Category</label>
+      <select id="nvCat"></select>
+      <div style="height:12px"></div>
+      <label>Contact person</label>
+      <input type="text" id="nvContact" placeholder="Owner / manager name">
+      <div style="height:12px"></div>
+      <label>Contact number</label>
+      <input type="tel" id="nvPhone" placeholder="10-digit mobile" inputmode="tel">
+      <div style="height:12px"></div>
+      <label>License number</label>
+      <input type="text" id="nvLicense" placeholder="Excise licence no. (if on the board)">
+      <div style="height:12px"></div>
+      <label>Address</label>
+      <textarea id="nvAddress" placeholder="Shop address"></textarea>
+      <div style="height:12px"></div>
+      <label>District</label>
+      <input type="text" id="nvDistrict" placeholder="e.g. Raigad">
+      <div style="height:12px"></div>
+      <label>Area</label>
+      <input type="text" id="nvArea" placeholder="e.g. Panvel">
+    </div>
+    <div class="msg" id="nvMsg"></div>
+    <button class="btn btn-primary" id="nvSaveBtn" onclick="saveNewVendor()">Save vendor &amp; start visit →</button>
+    <div class="muted" style="text-align:center;">The vendor is added to Aurum Nexus under your name and appears in everyone's list from now on.</div>
   </div>
 </div>
 
@@ -147,7 +194,7 @@
     </div>
     <button class="btn btn-ghost" id="retakeBtn" style="display:none" onclick="retake()">↺ Retake selfie</button>
 
-    <div class="card">
+    <div class="card" id="orderCard">
       <label>Order from party <span class="muted">(optional — creates a draft SO in Nexus)</span></label>
       <div id="orderLines"></div>
       <button class="add-line" onclick="addOrderLine()">＋ Add order item</button>
@@ -199,9 +246,13 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const BUCKET = 'visit-selfies';
 
 let me = null;                    // adm.users row
-let parties = [], skus = [];
+let parties = [], skus = [], retailers = [];
+// cur.party is whoever the visit is at: a distributor (kind:'party') from the
+// assigned list, or a retail outlet (kind:'retailer') from the vendor list.
 let cur = { party:null, stream:null, blob:null,
             geo:{lat:null,lon:null,acc:null,ok:false} };
+const RETAILER_CATS = ['Wine Shop (FL-2)','Permit Room / Bar (FL-3)','Beer Shoppe (FL/BR-2)',
+                       'Country Liquor (CL-2)','Club (E)','Supermarket / Mall','Other'];
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -254,9 +305,10 @@ async function loadMasters(){
   const isDir = me.role === 'DIRECTOR';
   let q = db.schema('sales').from('parties').select('id,name,code,city,owner_id').eq('is_active', true).order('name');
   if (!isDir) q = q.eq('owner_id', me.id);
-  const [p, s] = await Promise.all([ q,
-    db.schema('sales').from('skus').select('id,sku_code').eq('is_active', true).order('sku_code') ]);
-  parties = p.data || []; skus = s.data || [];
+  const [p, s, r] = await Promise.all([ q,
+    db.schema('sales').from('skus').select('id,sku_code').eq('is_active', true).order('sku_code'),
+    db.schema('sales').from('retailers').select('id,code,name,category,area,district').eq('status','ACTIVE').order('name') ]);
+  parties = p.data || []; skus = s.data || []; retailers = r.data || [];
   $('partyHint').textContent = parties.length
     ? `${parties.length} part${parties.length===1?'y':'ies'} assigned to you`
     : 'No parties assigned to you yet — ask the Director to set you as owner in Nexus.';
@@ -278,19 +330,81 @@ function renderParties(q){
       const el = document.createElement('div'); el.className = 'vendor';
       el.innerHTML = `<div class="avatar">${esc(p.name[0])}</div>
         <div class="info"><b>${esc(p.name)}</b><span>${esc(p.code)} · ${esc(p.city||'')}</span></div><span style="color:#b8c4d0;font-size:20px;">›</span>`;
-      el.onclick = () => startVisit(p);
+      el.onclick = () => startVisit({ ...p, kind:'party' });
       list.appendChild(el);
     });
+}
+
+/* ================= vendor (retailer) list ================= */
+function openRetailers(){ renderRetailers(''); $('retailSearch').value=''; go('scr-retailers'); }
+function renderRetailers(q){
+  const list = $('retailList'); list.innerHTML = '';
+  const rows = retailers.filter(r =>
+    (r.name+' '+(r.area||'')+' '+(r.district||'')+' '+(r.category||'')+' '+r.code)
+      .toLowerCase().includes(q.toLowerCase()));
+  rows.forEach(r => {
+    const el = document.createElement('div'); el.className = 'vendor';
+    el.innerHTML = `<div class="avatar">🏪</div>
+      <div class="info"><b>${esc(r.name)}</b><span>${esc(r.category||'')}${r.area?' · '+esc(r.area):''}${r.district?' · '+esc(r.district):''}</span></div>
+      <span style="color:#b8c4d0;font-size:20px;">›</span>`;
+    el.onclick = () => startVisit({ id:r.id, name:r.name, code:r.code, kind:'retailer' });
+    list.appendChild(el);
+  });
+  $('retailHint').textContent = rows.length
+    ? `${rows.length} vendor${rows.length===1?'':'s'} on the company list`
+    : (q ? 'No vendor matches — add it with the button below.' : 'The vendor list is empty — add the first one below.');
+}
+
+/* ================= add a new vendor on the spot ================= */
+function openNewVendor(){
+  $('nvCat').innerHTML = RETAILER_CATS.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  ['nvName','nvContact','nvPhone','nvLicense','nvAddress','nvDistrict','nvArea'].forEach(id=>$(id).value='');
+  // carry the search text over — it is usually the shop's name they just typed
+  $('nvName').value = $('retailSearch').value.trim();
+  say('nvMsg',''); go('scr-newvendor');
+}
+async function saveNewVendor(){
+  const name = $('nvName').value.trim();
+  if (!name){ say('nvMsg','The shop / vendor name is needed.',false); return; }
+  const btn = $('nvSaveBtn'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Saving vendor…';
+  try{
+    const { data:rid, error } = await db.schema('sales').rpc('field_add_retailer', {
+      p_name: name,
+      p_category: $('nvCat').value || null,
+      p_contact_person: $('nvContact').value.trim() || null,
+      p_phone: $('nvPhone').value.trim() || null,
+      p_license_no: $('nvLicense').value.trim() || null,
+      p_address: $('nvAddress').value.trim() || null,
+      p_district: $('nvDistrict').value.trim() || null,
+      p_area: $('nvArea').value.trim() || null,
+    });
+    if (error) throw new Error(error.message);
+    // refresh the list so the new vendor is there next time too
+    const { data:r } = await db.schema('sales').from('retailers')
+      .select('id,code,name,category,area,district').eq('status','ACTIVE').order('name');
+    retailers = r || [];
+    const rec = retailers.find(x=>x.id===rid) || { id:rid, name, code:'' };
+    toast('🏪 Vendor saved to Nexus');
+    startVisit({ id:rec.id, name:rec.name, code:rec.code, kind:'retailer' });
+  }catch(e){
+    say('nvMsg', e.message, false);
+  }finally{
+    btn.disabled = false; btn.innerHTML = 'Save vendor &amp; start visit →';
+  }
 }
 
 /* ================= camera & gps ================= */
 let stampTimer = null;
 async function startVisit(p){
   cur.party = p; cur.blob = null;
-  $('visitPartyName').textContent = p.name;
+  $('visitPartyName').textContent = (p.kind==='retailer' ? '🏪 ' : '') + p.name;
   $('shot').style.display='none'; $('cam').style.display='block';
   $('shutterBtn').style.display='block'; $('retakeBtn').style.display='none';
-  $('notes').value=''; $('orderLines').innerHTML=''; addOrderLine();
+  $('notes').value=''; $('orderLines').innerHTML='';
+  // Orders are placed on distributors; a retail-outlet visit records the
+  // check-in and notes, so the order card steps aside.
+  if (p.kind==='retailer'){ $('orderCard').style.display='none'; }
+  else { $('orderCard').style.display='block'; addOrderLine(); }
   say('visitMsg',''); updateSubmit(); go('scr-visit');
   startGeo(); startLiveStamp();
   try{
@@ -348,7 +462,8 @@ function capture(){
 }
 function retake(){ startVisit(cur.party); }
 function stopCam(){ if (cur.stream){ cur.stream.getTracks().forEach(t=>t.stop()); cur.stream=null; } }
-function cancelVisit(){ stopCam(); clearInterval(stampTimer); go('scr-parties'); }
+function cancelVisit(){ stopCam(); clearInterval(stampTimer);
+  go(cur.party && cur.party.kind==='retailer' ? 'scr-retailers' : 'scr-parties'); }
 function updateSubmit(){ $('submitBtn').disabled = !cur.blob; }
 
 /* ================= order lines ================= */
@@ -377,18 +492,20 @@ async function submitVisit(){
     const up = await db.storage.from(BUCKET).upload(path, cur.blob, { contentType:'image/jpeg', upsert:false });
     if (up.error) throw new Error('Selfie upload failed: ' + up.error.message);
 
-    // 2. visit → security-definer RPC (Module 11)
+    // 2. visit → security-definer RPC (Module 11): one for distributor visits
+    //    (can carry an order) and one for retail-outlet visits from the vendor list.
     btn.innerHTML = '<span class="spin"></span>Recording visit…';
-    const lines = collectLines();
-    const { data:visitId, error } = await db.schema('sales').rpc('submit_field_visit', {
-      p_party: cur.party.id,
+    const lines = cur.party.kind==='retailer' ? [] : collectLines();
+    const common = {
       p_selfie_path: path,
       p_lat: cur.geo.ok ? cur.geo.lat : null,
       p_lon: cur.geo.ok ? cur.geo.lon : null,
       p_accuracy_m: cur.geo.ok ? Math.round(cur.geo.acc) : null,
       p_notes: $('notes').value.trim() || null,
-      p_lines: lines,
-    });
+    };
+    const { data:visitId, error } = cur.party.kind==='retailer'
+      ? await db.schema('sales').rpc('submit_retail_visit', { p_retailer: cur.party.id, ...common })
+      : await db.schema('sales').rpc('submit_field_visit', { p_party: cur.party.id, ...common, p_lines: lines });
     if (error){
       await db.storage.from(BUCKET).remove([path]).catch(()=>{});
       throw new Error(error.message);
@@ -420,7 +537,7 @@ async function openReport(){
     const el = document.createElement('div'); el.className = 'visit-item';
     const t = new Date(v.visited_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
     el.innerHTML = `<img alt="selfie" data-path="${esc(v.selfie_path)}">
-      <div class="vi"><b>${esc(v.party)}</b><br>
+      <div class="vi"><b>${v.visit_kind==='RETAILER'?'🏪 ':''}${esc(v.party)}</b><br>
       🕒 ${t} &nbsp; ${v.lat!=null?('📍 '+Number(v.lat).toFixed(4)+', '+Number(v.lon).toFixed(4)):'📍 —'}<br>
       ${v.so_no?('🛒 Order '+esc(v.so_no)+'<br>'):''}
       ${v.notes?('📝 '+esc(v.notes)):'<span class="muted">No notes</span>'}<br>
