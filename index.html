@@ -617,6 +617,20 @@ const SUPABASE_URL      = "https://qkytrfvmamgtyxvivppu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
 /* ============================================================================ */
 
+// Rising-arrows mark for Marketing & Schemes — two navy swooshes with a sky-blue
+// arrow breaking away above them. Drawn inline so it stays crisp at any size and
+// scales with the surrounding text (1.1em), and so no emoji is used twice.
+const ICO_GROWTH =
+  '<svg viewBox="0 0 24 24" role="img" aria-label="Marketing and schemes" ' +
+       'style="width:1.1em;height:1.1em;vertical-align:-0.17em;overflow:visible">' +
+    '<g fill="none" stroke-linecap="round">' +
+      '<path d="M1.8 20.6C5.5 19.5 7.6 16.6 9.4 12.2" stroke="#16306b" stroke-width="2.3"/>' +
+      '<path d="M6.2 21.2C10.2 19.8 12.6 16.2 14.8 11" stroke="#24509b" stroke-width="2.9"/>' +
+      '<path d="M10.8 21.4C15 19.6 17.6 15 19.9 6.2" stroke="#2E9BE0" stroke-width="3.5"/>' +
+    '</g>' +
+    '<path d="M20.9 2.4 23.1 7.8 16.3 6" fill="#2E9BE0"/>' +
+  '</svg>';
+
 const MODULES = [
   {key:'sales',   ico:'🧾', name:'Sales & Orders',   desc:'Distributor orders, approval, dispatch', live:true,  open:()=>openOrders()},
   {key:'party',   ico:'🤝', name:'Party Master & Onboarding', desc:'Distributors, vendors, retailers + applications', live:true,  open:()=>openParties()},
@@ -632,7 +646,7 @@ const MODULES = [
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'calendar',ico:'📅', name:'Calendar',         desc:'Events + task, renewal & PO dates',      live:true,  open:()=>openCalendar()},
   {key:'meetings',ico:'📝', name:'Meetings',         desc:'Agendas, minutes, participants, views',  live:true,  open:()=>openMeetings()},
-  {key:'mkt',     ico:'🎯', name:'Marketing & Schemes', desc:'Budget, spends & retailer schemes',   live:true, mktOnly:true, open:()=>openMkt()},
+  {key:'mkt',     ico:ICO_GROWTH, name:'Marketing & Schemes', desc:'Budget, spends & retailer schemes', live:true, mktOnly:true, open:()=>openMkt()},
   {key:'notif',   ico:'🔔', name:'Notification Centre', desc:'Tasks, emails, to-dos & approvals',  live:true,  open:()=>openNotifCentre()},
   {key:'excise',  ico:'📜', name:'License & Renewal',desc:'Licences, permits, registrations, expiries', live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
