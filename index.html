@@ -3847,7 +3847,7 @@ function acLbl(s){ return AC_STL[s] || s; }
 async function openAcct(){
   const [b, u] = await Promise.all([
     db.schema('acct').from('bank_accounts').select('*').order('name'),
-    db.schema('adm').from('users').select('id, full_name, designation').eq('is_active', true).order('full_name')
+    db.schema('adm').from('people').select('id, full_name, designation, phone, user_id').eq('is_active', true).is('deleted_at', null).order('full_name')
   ]);
   acBanks = b.data || []; acStaff = u.data || [];
   $('ac-appr').style.display = canFinApprove() ? '' : 'none';
@@ -4408,11 +4408,22 @@ async function acctTab(t){
     ]);
     const structBy = {}; (st.data||[]).forEach(s=>structBy[s.staff_id]=s);
     window.__acSlips = sl.data || [];
+    // employees who are paid but have no ERP login
+    const { data: emps } = await db.schema('adm').from('people').select('*').is('user_id', null).is('deleted_at', null).order('full_name');
+    window.__acEmps = emps || [];
     B.innerHTML = `
       ${canFinEdit()?`<div class="row2c">
         <button class="btn ghost sm" onclick="acStructForm()">Set / revise a salary structure</button>
-        <button class="btn gold sm" onclick="acSlipForm()">+ Generate salary slip</button></div>`:''}
+        <button class="btn gold sm" onclick="acSlipForm()">+ Generate salary slip</button></div>
+        <div style="margin-top:8px;"><button class="btn ghost sm" onclick="acEmpForm()">+ Add employee (no ERP login)</button></div>`:''}
       <div id="ac-sal-form"></div>
+      ${(window.__acEmps||[]).length ? `
+      <h4 class="sec" style="margin-top:16px;">Employees on payroll without an ERP login <span style="background:#1a1a2e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${(window.__acEmps||[]).length}</span></h4>
+      <p style="font-size:12px;color:#555;margin:2px 0 8px;">They are paid exactly like everyone else — salary structure, slips and advances — but they cannot sign in to the ERP.</p>
+      <div class="table-scroll"><table><thead><tr><th>Name</th><th>Designation</th><th>Phone</th><th>Active</th><th></th></tr></thead><tbody>
+      ${(window.__acEmps||[]).map(e=>`<tr${e.is_active?'':' class="inactive"'}><td><b>${esc(e.full_name)}</b></td><td>${esc(e.designation||'—')}</td><td>${esc(e.phone||'—')}</td><td>${e.is_active?'✔':'✖'}</td>` +
+        `<td style="white-space:nowrap">${canFinEdit()?`<button class="mini" onclick="acEmpForm('${e.id}')">Edit</button> <button class="mini" onclick="acEmpToggle('${e.id}',${!e.is_active})">${e.is_active?'Disable':'Enable'}</button>`:''}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
       <h4 class="sec" style="margin-top:12px;">Salary slips</h4>
       <div class="table-scroll"><table><thead><tr><th>Slip</th><th>Staff</th><th>Month</th><th class="amount">Gross ₹</th><th class="amount">Deductions ₹</th><th class="amount">Net ₹</th><th>Status</th><th></th></tr></thead><tbody>
       ${(sl.data||[]).map(s=>`<tr><td><b>${esc(s.slip_no)}</b></td><td>${esc(acStaffName(s.staff_id))}</td><td>${s.period}</td>` +
@@ -4899,6 +4910,39 @@ async function acDelEntry(id){
   if (error){ alert('Could not delete: '+error.message); return; }
   acctTab('ledger');
 }
+/* ----- employees paid by the company who have no ERP login ----- */
+function acEmpForm(id){
+  const e = (window.__acEmps||[]).find(x=>x.id===id) || null;
+  $('ac-sal-form').innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">${e?'Edit employee':'Add an employee'}</h3>
+    <p style="font-size:12px;color:#666;margin:0 0 10px;">For someone the company pays who does not need access to the ERP. Once added they appear in the salary structure, salary slip and advance lists like any other staff member.</p>
+    <label>Full name *</label><input id="emp-name" value="${e?esc(e.full_name):''}" placeholder="As it should appear on the salary slip">
+    <div class="row2c"><div><label>Designation</label><input id="emp-desig" value="${e?esc(e.designation||''):''}" placeholder="e.g. Plant helper"></div>
+    <div><label>Phone</label><input id="emp-phone" value="${e?esc(e.phone||''):''}" placeholder="Optional"></div></div>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acEmpSave(${e?`'${e.id}'`:'null'})">${e?'Save changes':'Add employee'}</button>
+    <div id="emp-msg"></div></div>`;
+  $('ac-sal-form').scrollIntoView({behavior:'smooth'});
+  setTimeout(()=>$('emp-name').focus(), 60);
+}
+async function acEmpSave(id){
+  const name = $('emp-name').value.trim();
+  if (!name){ say('emp-msg','Please put in the name.', false); return; }
+  const desig = $('emp-desig').value.trim(), phone = $('emp-phone').value.trim();
+  const { error } = id
+    ? await db.schema('adm').rpc('update_employee', { p_id:id, p_name:name, p_designation:desig, p_phone:phone })
+    : await db.schema('adm').rpc('add_employee',   { p_name:name, p_designation:desig, p_phone:phone });
+  if (error){ say('emp-msg', (id?'Could not save: ':'Could not add: ') + error.message, false); return; }
+  say('emp-msg', id ? 'Saved.' : name + ' has been added to the payroll list.', true);
+  await openAcct(); acctTab('salary');
+}
+async function acEmpToggle(id, on){
+  const e = (window.__acEmps||[]).find(x=>x.id===id);
+  if (!confirm((on?'Put ':'Take ') + (e?e.full_name:'this employee') + (on?' back on the payroll list?':' off the payroll list?\n\nPast slips and advances stay in the books; they simply stop appearing in the lists.'))) return;
+  const { error } = await db.schema('adm').rpc('update_employee', { p_id:id, p_active:on });
+  if (error){ alert('Could not change it: ' + error.message); return; }
+  await openAcct(); acctTab('salary');
+}
+
 /* ----- salary ----- */
 function acStructForm(){
   $('ac-sal-form').innerHTML = `
@@ -5020,7 +5064,9 @@ async function acSlipView(id){
   const row = (l,v)=>`<tr><td>${l}</td><td class="amount">${inr(v)}</td></tr>`;
   $('ac-slip-view').innerHTML = `
     <div class="card" style="margin-top:14px;max-width:520px;">
-      <h3 style="font-size:15px;">${esc(s.slip_no)} · ${esc(acStaffName(s.staff_id))} · ${s.period}</h3>
+      <h3 style="font-size:15px;">${esc(s.slip_no)} · ${s.period}</h3>
+      <p style="margin:2px 0 6px;font-size:13.5px;"><b>${esc(acStaffName(s.staff_id))}</b>${acStaffDesig(s.staff_id)?' <span style="color:#777">— '+esc(acStaffDesig(s.staff_id))+'</span>':''}</p>
+      <button class="mini" onclick="acSlipPrint('${s.id}')">🖨 Print slip</button>
       <table style="margin-top:8px;"><tbody>
       <tr><td colspan="2"><b>Earnings</b></td></tr>${row('Basic',s.basic)}${row('HRA',s.hra)}${row('Allowances',s.allowances)}
       <tr style="border-top:1px solid #ddd"><td><b>Gross</b></td><td class="amount"><b>${inr(s.gross)}</b></td></tr>
@@ -5031,6 +5077,43 @@ async function acSlipView(id){
       <p style="font-size:12px;color:#777;margin-top:8px;">Status: ${s.status}</p></div>`;
   $('ac-slip-view').scrollIntoView({behavior:'smooth'});
 }
+function acStaffDesig(id){ const s = (acStaff||[]).find(x=>x.id===id); return s ? (s.designation||'') : ''; }
+// A proper salary slip on paper — the employee's name and designation at the top.
+async function acSlipPrint(id){
+  const { data: s } = await db.schema('acct').from('salary_slips').select('*').eq('id', id).single();
+  if (!s) return;
+  let name = acStaffName(s.staff_id), desig = acStaffDesig(s.staff_id);
+  if (!name || name === '—'){   // covers someone taken off the payroll list
+    const { data: p } = await db.schema('adm').from('people').select('full_name, designation').eq('id', s.staff_id).maybeSingle();
+    if (p){ name = p.full_name; desig = p.designation || ''; }
+  }
+  const m = v => '₹ ' + inr(v);
+  const line = (l,v) => `<tr><td>${l}</td><td class="amount">${m(v)}</td></tr>`;
+  const monthName = (function(){ const [y,mm] = String(s.period||'').split('-');
+    return mm ? new Date(Number(y), Number(mm)-1, 1).toLocaleDateString('en-IN',{month:'long',year:'numeric'}) : (s.period||''); })();
+  const body = `
+    <h1 style="text-align:center;">AURUM SPIRITS INDIA LIMITED</h1>
+    <h2 style="text-align:center;">Salary slip for ${esc(monthName)}</h2>
+    <table style="margin-bottom:14px;">
+      <tr><th style="width:22%">Employee</th><td><b>${esc(name||'—')}</b></td><th style="width:18%">Slip no.</th><td>${esc(s.slip_no)}</td></tr>
+      <tr><th>Designation</th><td>${esc(desig||'—')}</td><th>Month</th><td>${esc(s.period)}</td></tr>
+    </table>
+    <table>
+      <tr><th colspan="2">Earnings</th><th colspan="2">Deductions</th></tr>
+      <tr><td>Basic</td><td class="amount">${m(s.basic)}</td><td>PF</td><td class="amount">${m(s.pf)}</td></tr>
+      <tr><td>HRA</td><td class="amount">${m(s.hra)}</td><td>Professional tax</td><td class="amount">${m(s.prof_tax)}</td></tr>
+      <tr><td>Allowances</td><td class="amount">${m(s.allowances)}</td><td>TDS</td><td class="amount">${m(s.tds)}</td></tr>
+      <tr><td></td><td></td><td>Other deductions</td><td class="amount">${m(s.other_deductions)}</td></tr>
+      <tr><td></td><td></td><td>Advance recovery</td><td class="amount">${m(s.advance_recovery)}</td></tr>
+      <tr class="tot"><td>Gross</td><td class="amount">${m(s.gross)}</td><td>Total deductions</td><td class="amount">${m(s.total_deductions)}</td></tr>
+      <tr class="tot"><td colspan="3">NET PAY</td><td class="amount">${m(s.net_pay)}</td></tr>
+      <tr><td colspan="4" style="font-size:11.5px;">Rupees ${esc(inrWords(s.net_pay))}</td></tr>
+    </table>
+    <div class="sig"><div>Prepared by</div><div>Approved by</div><div>Employee signature</div></div>
+    <p style="font-size:10.5px;color:#666;margin-top:22px;">Status: ${esc(s.status)} · Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml('Salary slip ' + s.slip_no, body);
+}
+
 /* ----- advances ----- */
 function acAdvForm(){
   $('ac-adv-form').innerHTML = `
