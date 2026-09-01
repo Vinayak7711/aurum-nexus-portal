@@ -4407,6 +4407,7 @@ async function acctTab(t){
       A.from('staff_salary').select('*').eq('is_active', true)
     ]);
     const structBy = {}; (st.data||[]).forEach(s=>structBy[s.staff_id]=s);
+    window.__acSlips = sl.data || [];
     B.innerHTML = `
       ${canFinEdit()?`<div class="row2c">
         <button class="btn ghost sm" onclick="acStructForm()">Set / revise a salary structure</button>
@@ -4433,7 +4434,7 @@ async function acctTab(t){
     const advRow = a => `<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td>` +
         `<td class="amount">${inr(a.amount)}</td><td class="amount">${inr(a.recovered)}</td><td class="amount" style="font-weight:700">${inr(a.outstanding)}</td>` +
         `<td><span style="color:${AC_ST[a.status]};font-weight:600;font-size:12px">${acLbl(a.status)}</span></td>` +
-        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${isDir()?`<button class="mini" title="Move to the other list (salary ⇄ expenses)" onclick="acAdvType('${a.id}','${(a.adv_type||'SALARY')==='EXPENSE'?'SALARY':'EXPENSE'}')">⇄ ${(a.adv_type||'SALARY')==='EXPENSE'?'To salary':'To expenses'}</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`;
+        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${isDir()?`<button class="mini" title="Move to the other list (salary ⇄ expenses)" onclick="acAdvType('${a.id}','${(a.adv_type||'SALARY')==='EXPENSE'?'SALARY':'EXPENSE'}')">⇄ ${(a.adv_type||'SALARY')==='EXPENSE'?'To salary':'To expenses'}</button> <button class="mini" title="Record this advance against a different staff member" onclick="acAdvStaff('${a.id}','${esc(a.staff_name||'')}')">👤 Change staff</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`;
     const advTable = (rows, empty) => `<div class="table-scroll"><table><thead><tr><th>No.</th><th>Staff</th><th>Given</th><th class="amount">Amount ₹</th><th class="amount">Recovered ₹</th><th class="amount">Outstanding ₹</th><th>Status</th><th></th></tr></thead><tbody>` +
         (rows.map(advRow).join('') || `<tr><td colspan="8" style="color:#555">${empty}</td></tr>`) +
         (rows.length ? `<tr style="background:#faf6ea;font-weight:700;"><td colspan="3">Total</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.amount||0),0))}</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.recovered||0),0))}</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.outstanding||0),0))}</td><td colspan="2"></td></tr>` : '') +
@@ -4924,12 +4925,14 @@ async function acSlipForm(){
   const { data: advs } = await A.from('v_advances').select('*').eq('status','APPROVED').gt('outstanding',0);
   const advByStaff = {}; (advs||[]).filter(a=>(a.adv_type||'SALARY')!=='EXPENSE').forEach(a=>{ (advByStaff[a.staff_id] ??= []).push(a); });
   window.__acAdvByStaff = advByStaff;
+  window.__acAdvOutstanding = {}; (advs||[]).forEach(a=>{ window.__acAdvOutstanding[a.id] = Number(a.outstanding||0); });
   $('ac-sal-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Generate salary slip</h3>
     <div class="row2c"><div><label>Staff *</label><select id="sp-staff" onchange="acSlipStaffChange()">${acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('')}</select></div>
     <div><label>Month *</label><input type="month" id="sp-period" value="${monthLabelJS()}"></div></div>
-    <div class="row2c"><div><label>Recover from advance</label><select id="sp-adv"><option value="">— none —</option></select></div>
+    <div class="row2c"><div><label>Recover from advance</label><select id="sp-adv" onchange="acSlipAdvChange()"><option value="">— none —</option></select></div>
     <div><label>Recovery amount ₹</label><input type="number" id="sp-rec" value="0"></div></div>
+    <div id="sp-advnote" style="font-size:12px;color:#777;margin:-6px 0 8px;"></div>
     <label>Extra one-off deduction ₹</label><input type="number" id="sp-extra" value="0">
     <button class="btn gold sm" style="margin-top:10px;" onclick="acSlipGen()">Generate (draft)</button>
     <div id="sp-msg"></div></div>`;
@@ -4939,6 +4942,25 @@ async function acSlipForm(){
 function acSlipStaffChange(){
   const list = (window.__acAdvByStaff||{})[$('sp-staff').value] || [];
   $('sp-adv').innerHTML = '<option value="">— none —</option>' + list.map(a=>`<option value="${a.id}">${esc(a.adv_no)} (outstanding ₹${inr(a.outstanding)})</option>`).join('');
+  if (list.length === 1) $('sp-adv').value = list[0].id;   // the usual case — pick it straight away
+  acSlipAdvChange();
+}
+// Choosing an advance fills the recovery amount in, so a slip can never be
+// generated with an advance selected but nothing actually deducted.
+function acSlipAdvChange(){
+  const note = $('sp-advnote'); if (!note) return;
+  const id = $('sp-adv').value;
+  const list = (window.__acAdvByStaff||{})[$('sp-staff').value] || [];
+  if (!id){
+    $('sp-rec').value = 0;
+    note.innerHTML = list.length
+      ? 'This person has an advance outstanding — pick it above to recover it from this slip.'
+      : 'No advance against salary is outstanding for this person. If the advance was recorded under the wrong name, open the <b>Advances</b> tab and use <b>Change staff</b> on that row.';
+    return;
+  }
+  const out = Number((window.__acAdvOutstanding||{})[id] || 0);
+  $('sp-rec').value = out;
+  note.innerHTML = 'Outstanding on this advance is ₹' + inr(out) + ' — filled in above. Lower it if you want to recover only part of it this month.';
 }
 async function acSlipGen(){
   const { error } = await db.schema('acct').rpc('generate_salary_slip', {
@@ -4966,9 +4988,31 @@ async function acSlipPay(id){
   acctTab('salary');
 }
 async function acSlipDelete(id){
+  const slip = (window.__acSlips||[]).find(x => x.id === id);
+  const paid = slip && slip.status === 'PAID';
+  const rec  = slip ? Number(slip.advance_recovery||0) : 0;
+  if (!confirm('Delete this salary slip?' +
+      (paid ? '\n\nIt is already marked paid, so the bank payment entry it created is removed as well and that money goes back into the bank balance.' : '') +
+      (rec > 0 ? '\n\nThe \u20B9' + inr(rec) + ' recovered from the advance goes back onto that advance as outstanding.' : ''))) return;
   const { error } = await db.schema('acct').rpc('delete_salary_slip', { p_slip: id });
   if (error){ alert('Could not delete: '+error.message); return; }
   acctTab('salary');
+}
+// An advance recorded against the wrong person — or against someone since
+// removed — can be moved to the right staff member so it reaches their slip.
+async function acAdvStaff(id, current){
+  const list = acStaff || [];
+  if (!list.length){ alert('There is no active staff member to move it to.'); return; }
+  const pick = prompt('Move this advance (now against ' + current + ') to which staff member?\n\n' +
+    list.map((s,i)=>(i+1)+'. '+s.full_name+(s.designation?' — '+s.designation:'')).join('\n') +
+    '\n\nType the number:', '');
+  if (pick === null) return;
+  const who = list[Number(pick)-1];
+  if (!who){ alert('That number is not in the list.'); return; }
+  const { error } = await db.schema('acct').rpc('reassign_advance', { p_adv: id, p_staff: who.id });
+  if (error){ alert('Could not move it: ' + error.message); return; }
+  alert('The advance now stands against ' + who.full_name + '. It will appear in the "Recover from advance" list on their next salary slip.');
+  acctTab('adv');
 }
 async function acSlipView(id){
   const { data: s } = await db.schema('acct').from('salary_slips').select('*').eq('id', id).single();
