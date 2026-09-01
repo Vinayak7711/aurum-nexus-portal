@@ -4933,14 +4933,14 @@ async function acEmpSave(id){
     : await db.schema('adm').rpc('add_employee',   { p_name:name, p_designation:desig, p_phone:phone });
   if (error){ say('emp-msg', (id?'Could not save: ':'Could not add: ') + error.message, false); return; }
   say('emp-msg', id ? 'Saved.' : name + ' has been added to the payroll list.', true);
-  await openAcct(); acctTab('salary');
+  await openAcct(); await acctTab('salary');
 }
 async function acEmpToggle(id, on){
   const e = (window.__acEmps||[]).find(x=>x.id===id);
   if (!confirm((on?'Put ':'Take ') + (e?e.full_name:'this employee') + (on?' back on the payroll list?':' off the payroll list?\n\nPast slips and advances stay in the books; they simply stop appearing in the lists.'))) return;
   const { error } = await db.schema('adm').rpc('update_employee', { p_id:id, p_active:on });
   if (error){ alert('Could not change it: ' + error.message); return; }
-  await openAcct(); acctTab('salary');
+  await openAcct(); await acctTab('salary');
 }
 
 /* ----- salary ----- */
