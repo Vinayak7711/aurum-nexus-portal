@@ -3891,16 +3891,18 @@ async function acctTab(t){
 
   if (t === 'appr'){
     if (!canFinApprove()){ B.innerHTML = '<div class="msg err">Pending approvals are visible only to the Director and the Accounts head (finance-approve permission).</div>'; return; }
-    const [entR, pcR, slR, advR, poR, rqR, mkR] = await Promise.all([
+    const [entR, pcR, slR, advR, poR, rqR, mkR, vprR] = await Promise.all([
       A.from('v_entries').select('*').eq('status','PENDING_APPROVAL').order('entry_date',{ascending:false}).limit(300),
       A.from('petty_cash').select('*').in('status',['PENDING','PENDING_APPROVAL']).order('expense_date',{ascending:false}).limit(300),
       A.from('salary_slips').select('*').eq('status','DRAFT').order('period',{ascending:false}).limit(300),
       A.from('v_advances').select('*').eq('status','PENDING_APPROVAL').order('given_on',{ascending:false}).limit(300),
       db.schema('mfg').from('v_po_tracking').select('*').eq('status','PENDING_APPROVAL').order('order_date',{ascending:false}).limit(300),
       db.schema('mfg').from('rm_requests').select('*').eq('status','REQUESTED').order('created_at',{ascending:false}).limit(300),
-      db.schema('sales').from('v_mkt_requests').select('*').eq('status','PENDING_APPROVAL').order('created_at',{ascending:false}).limit(300)
+      db.schema('sales').from('v_mkt_requests').select('*').eq('status','PENDING_APPROVAL').order('created_at',{ascending:false}).limit(300),
+      A.from('vendor_pay_requests').select('*, vendor:vendor_id(name), bank:bank_id(name)').eq('status','PENDING_APPROVAL').order('requested_at',{ascending:false}).limit(300)
     ]);
     const ents = entR.data||[], pcs = pcR.data||[], sls = slR.data||[], advs = advR.data||[], pos = poR.data||[], rqs = rqR.data||[], mks = mkR.data||[];
+    const vprs = (arguments.length, (typeof vprR !== 'undefined' && vprR.data) ? vprR.data : []);
     // PO values (incl tax) + vendor names for material requests
     let poAmt = {};
     if (pos.length && canFin()){
@@ -3916,9 +3918,13 @@ async function acctTab(t){
       const { data: vns } = await db.schema('sales').from('vendors').select('id,name');
       (vns||[]).forEach(v=>venBy[v.id]=v.name);
     }
-    window.__apprData = { ents, pcs, sls, advs, pos, rqs, mks, poAmt, venBy };
+    window.__vpoNames = window.__vpoNames || {};
+    { const ids = [...new Set(vprs.map(r=>r.po_id).filter(Boolean))];
+      if (ids.length){ const { data: vpos } = await db.schema('mfg').from('purchase_orders').select('id,po_no').in('id', ids);
+        (vpos||[]).forEach(p=>{ window.__vpoNames[p.id] = p.po_no; }); } }
+    window.__apprData = { ents, pcs, sls, advs, pos, rqs, mks, poAmt, venBy, vprs };
     window.__pcAll = pcs;   // so the petty voucher printer works from this tab too
-    const total = ents.length + pcs.length + sls.length + advs.length + pos.length + rqs.length + mks.length;
+    const total = ents.length + pcs.length + sls.length + advs.length + pos.length + rqs.length + mks.length + vprs.length;
     const SEC = (title, count, inner) => count ? `<h4 class="sec" style="margin-top:16px;">${title} <span style="background:#b3261e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${count}</span></h4>${inner}` : '';
     const T = (head, rows) => `<div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
     B.innerHTML = `
@@ -3930,6 +3936,11 @@ async function acctTab(t){
           `<td>${esc(e.staff_name||e.party_name||e.payee||'—')}${e.narration?'<br><span style="font-size:11px;color:#777">'+esc((e.narration||'').slice(0,60))+'</span>':''}</td>`+
           `<td>${esc(e.bank_name_label||'—')}</td><td class="amount" style="font-weight:700;color:${e.direction==='IN'?'#1a7f37':'#b3261e'}">${inr(e.amount)}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('entry','${e.id}')" title="See full details">👁 View</button> <button class="mini" onclick="apprPrint('entry','${e.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('entry','${e.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('entry','${e.id}',true)">Reject</button> ${dirDelBtn('acct','entries', e.id, e.entry_no, "acctTab('appr')")}</td></tr>`).join('')))}
+      ${SEC('💳 Vendor payments', vprs.length, T('<th>Request</th><th>Raised</th><th>Vendor</th><th>Against PO</th><th class="amount">Amount ₹</th><th>To be paid by</th><th></th>',
+        vprs.map(r=>`<tr><td><b>${esc(r.req_no)}</b></td><td>${(r.requested_at||'').slice(0,10)}</td><td>${esc(r.vendor?.name||'—')}</td><td>${esc((window.__vpoNames||{})[r.po_id]||'—')}</td>`+
+          `<td class="amount" style="font-weight:700">${inr(r.amount)}</td>`+
+          `<td>${r.mode!=='CASH'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Cash'}${r.remarks?'<br><span style="font-size:11px;color:#777">'+esc(r.remarks)+'</span>':''}</td>`+
+          `<td style="white-space:nowrap"><button class="mini" onclick="acVpApprove('${r.id}',false)">✔ Approve &amp; pay</button> <button class="mini" style="color:#c0392b;" onclick="acVpApprove('${r.id}',true)">Reject</button></td></tr>`).join('')))}
       ${SEC('💵 Petty cash', pcs.length, T('<th>No.</th><th>Date</th><th>Type</th><th>Category</th><th>Paid to</th><th class="amount">Amount ₹</th><th></th>',
         pcs.map(r=>`<tr><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td><td>${r.entry_kind==='TOPUP'?'Top-up':'Expense'}</td><td>${esc(r.category||'—')}</td><td>${esc(r.payee||'—')}</td>`+
           `<td class="amount" style="font-weight:700">${inr(r.amount)}</td>`+
@@ -4332,12 +4343,17 @@ async function acctTab(t){
   }
 
   if (t === 'vdues'){
-    const [{ data: rows, error }, payRes] = await Promise.all([
+    const [{ data: rows, error }, payRes, reqRes] = await Promise.all([
       A.rpc('vendor_outstanding'),
-      A.from('vendor_payments').select('*, vendor:vendor_id(name,code), bank:bank_id(name)').order('created_at',{ascending:false}).limit(100)
+      A.from('vendor_payments').select('*, vendor:vendor_id(name,code), bank:bank_id(name)').order('created_at',{ascending:false}).limit(100),
+      A.from('vendor_pay_requests').select('*, vendor:vendor_id(name,code), bank:bank_id(name)').order('requested_at',{ascending:false}).limit(100)
     ]);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
-    const vds = rows || [], pays = payRes.data || [];
+    const vds = rows || [], pays = payRes.data || [], vreqs = reqRes.data || [];
+    window.__vpoNames = {};
+    { const ids = [...new Set(vreqs.map(r=>r.po_id).filter(Boolean))];
+      if (ids.length){ const { data: pos } = await db.schema('mfg').from('purchase_orders').select('id,po_no').in('id', ids);
+        (pos||[]).forEach(p=>{ window.__vpoNames[p.id] = p.po_no; }); } }
     const totB = vds.reduce((s,r)=>s+Number(r.billed),0), totP = vds.reduce((s,r)=>s+Number(r.paid),0), totO = totB-totP;
     B.innerHTML = `
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
@@ -4345,7 +4361,7 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid so far</div><div style="font-size:20px;font-weight:700;color:#1a7f37">₹ ${inr(totP)}</div></div>
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Outstanding</div><div style="font-size:20px;font-weight:700;color:${totO>0?'#b3261e':'#1a7f37'}">₹ ${inr(totO)}</div></div>
       </div>
-      <p style="font-size:12px;color:#777;margin:0 0 8px;">The moment a PO is placed on a vendor, its bill amount (incl. tax) lands here as that party's due. Record every payment you make — by bank or cash — and the outstanding falls; bank payments post straight into the finance ledger against that bank.</p>
+      <p style="font-size:12px;color:#777;margin:0 0 8px;">The moment a PO is placed on a vendor, its bill amount (incl. tax) lands here as that party's due. Accounts raises a payment against a purchase order and it goes for approval — the approving authority releases it and enters the UTR or cheque details at that moment. Only then is the payment recorded, the outstanding reduced and the bank ledger posted.</p>
       <h4 class="sec">Party-wise outstanding</h4>
       <div class="table-scroll"><table><thead><tr><th>Vendor</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th class="amount"><b>Outstanding ₹</b></th><th></th></tr></thead><tbody>
       ${vds.map(r=>`<tr><td><b>${esc(r.vendor)}</b> <span style="color:#999;font-size:11px;">(${esc(r.code)})</span></td>` +
@@ -4355,6 +4371,22 @@ async function acctTab(t){
         || '<tr><td colspan="5" style="color:#777">No vendor bills yet — dues appear here as soon as a PO is placed.</td></tr>'}
       </tbody></table></div>
       <div id="vd-form"></div>
+      ${vreqs.filter(r=>r.status==='PENDING_APPROVAL').length ? `
+      <h4 class="sec" style="margin-top:16px;">⏳ Waiting for approval <span style="background:#b3261e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${vreqs.filter(r=>r.status==='PENDING_APPROVAL').length}</span></h4>
+      <p style="font-size:12px;color:#555;margin:2px 0 8px;">Nothing has been paid yet. The approving authority releases each one and types the UTR or cheque details then.</p>
+      <div class="table-scroll"><table><thead><tr><th>Request</th><th>Raised</th><th>Vendor</th><th>Against PO</th><th class="amount">Amount ₹</th><th>To be paid by</th><th>Note</th><th></th></tr></thead><tbody>
+      ${vreqs.filter(r=>r.status==='PENDING_APPROVAL').map(r=>`<tr><td><b>${esc(r.req_no)}</b></td><td>${(r.requested_at||'').slice(0,10)}</td>` +
+        `<td>${esc(r.vendor?.name||'—')}</td><td>${esc(window.__vpoNames[r.po_id]||'—')}</td>` +
+        `<td class="amount" style="font-weight:700">${inr(r.amount)}</td>` +
+        `<td>${r.mode!=='CASH'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Cash'}</td>` +
+        `<td style="font-size:12px;color:#777">${esc(r.remarks||'')}</td>` +
+        `<td style="white-space:nowrap">${canFinApprove()?`<button class="mini" style="color:#1a7f37;border-color:#1a7f37;" onclick="acVpApprove('${r.id}',false)">Approve &amp; pay</button> <button class="mini" style="color:#c0392b;border-color:#c0392b;" onclick="acVpApprove('${r.id}',true)">Reject</button>`:'<span style="font-size:11.5px;color:#999">awaiting the approver</span>'}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+      ${vreqs.filter(r=>r.status==='REJECTED').length ? `
+      <h4 class="sec" style="margin-top:16px;">Rejected requests</h4>
+      <div class="table-scroll"><table><thead><tr><th>Request</th><th>Vendor</th><th>Against PO</th><th class="amount">Amount ₹</th><th>Reason</th></tr></thead><tbody>
+      ${vreqs.filter(r=>r.status==='REJECTED').map(r=>`<tr class="inactive"><td><b>${esc(r.req_no)}</b></td><td>${esc(r.vendor?.name||'—')}</td><td>${esc(window.__vpoNames[r.po_id]||'—')}</td><td class="amount">${inr(r.amount)}</td><td style="font-size:12px;color:#777">${esc(r.reject_reason||'—')}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
       <h4 class="sec" style="margin-top:14px;">Payments made</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Vendor</th><th class="amount">Amount ₹</th><th>Paid by</th><th>Ref / note</th><th></th></tr></thead><tbody>
       ${pays.map(p=>`<tr><td><b>${esc(p.pay_no)}</b></td><td>${p.pay_date}</td><td>${esc(p.vendor?.name||'—')}</td>` +
@@ -4668,36 +4700,80 @@ function acPettyVoucher(id){
     <p style="font-size:10.5px;color:#666;margin-top:26px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
   printHtml('Petty cash voucher '+r.pc_no, body);
 }
-function acVendorPayForm(vid, vname, out){
+async function acVendorPayForm(vid, vname, out){
   const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('vd-form').innerHTML = '<div class="card" style="margin-top:12px;max-width:680px;">Loading the purchase orders…</div>';
+  const { data: pos, error } = await db.schema('acct').rpc('vendor_po_options', { p_vendor: vid });
+  if (error){ $('vd-form').innerHTML = `<div class="msg err">Could not load the purchase orders: ${esc(error.message)}</div>`; return; }
+  window.__vpoOpts = pos || [];
+  const poOpts = (pos||[]).map(p=>{
+    const left = Number(p.po_value||0) - Number(p.paid||0) - Number(p.requested||0);
+    return `<option value="${p.po_id}" data-left="${left}">${esc(p.po_no)} · ${p.order_date} · value ₹${inr(p.po_value)}${left>0?` · left ₹${inr(left)}`:' · fully covered'}</option>`;
+  }).join('');
   $('vd-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:680px;"><h2 style="font-size:15px;">Pay ${esc(vname)}</h2>
-      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Outstanding right now: <b style="color:${out>0?'#b3261e':'#1a7f37'}">₹ ${inr(out)}</b>. Bank payments post into the finance ledger automatically.</p>
-      <div class="row2c"><div><label>Amount ₹ *</label><input type="number" id="vp-amt" min="1" step="any" value="${out>0?out:''}"></div>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Outstanding right now: <b style="color:${out>0?'#b3261e':'#1a7f37'}">₹ ${inr(out)}</b>. This is sent for approval — the approving authority releases it and enters the UTR or cheque details then.</p>
+      ${poOpts ? '' : '<div class="msg err" style="margin-bottom:8px;">This vendor has no purchase order to pay against. Place the PO first.</div>'}
+      <label>Against purchase order *</label>
+      <select id="vp-po" onchange="acVpPoChange()">${poOpts || '<option value="">— no purchase orders —</option>'}</select>
+      <div id="vp-ponote" style="font-size:12px;color:#777;margin:4px 0 8px;"></div>
+      <div class="row2c"><div><label>Amount ₹ *</label><input type="number" id="vp-amt" min="1" step="any"></div>
         <div><label>Date</label><input type="date" id="vp-date" value="${calFmt(new Date())}"></div></div>
       <div class="row2c" style="margin-top:8px;">
-        <div><label>Paid by *</label><select id="vp-mode" onchange="$('vp-bank-wrap').style.display=this.value==='CASH'?'none':'';">
-          <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="CASH">Cash</option></select>
-          <span style="font-size:11px;color:#999;">Bank payments post into the finance ledger; cash payments are recorded in this book only.</span></div>
+        <div><label>To be paid by *</label><select id="vp-mode" onchange="$('vp-bank-wrap').style.display=this.value==='CASH'?'none':'';">
+          <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="CASH">Cash</option></select></div>
         <div id="vp-bank-wrap"><label>From bank</label><select id="vp-bank">${bankOpts}</select></div>
       </div>
-      <div class="row2c" style="margin-top:8px;"><div><label>Reference</label><input type="text" id="vp-ref" placeholder="UTR / cheque no. / receipt"></div>
-        <div><label>Note</label><input type="text" id="vp-note" placeholder="e.g. against PO/26-27/0021"></div></div>
-      <button class="btn gold sm" style="margin-top:10px;" onclick="acVendorPay('${vid}')">Record payment</button>
+      <label style="margin-top:8px;">Note for the approver</label><input type="text" id="vp-note" placeholder="e.g. part payment, balance on delivery">
+      <p style="font-size:11.5px;color:#999;margin:8px 0 0;">The UTR / cheque number is not entered here — the person approving the payment fills it in when they release it.</p>
+      <button class="btn gold sm" style="margin-top:10px;" ${poOpts?'':'disabled'} onclick="acVendorPay('${vid}')">Send for approval</button>
       <button class="btn ghost sm" style="margin-top:10px;" onclick="$('vd-form').innerHTML=''">Cancel</button>
       <div id="vp-msg"></div></div>`;
+  acVpPoChange();
   $('vd-form').scrollIntoView({behavior:'smooth'});
+}
+// Picking a PO fills in what is still left on it, so the amount is never guessed.
+function acVpPoChange(){
+  const sel = $('vp-po'); if (!sel) return;
+  const po = (window.__vpoOpts||[]).find(p=>p.po_id === sel.value);
+  const note = $('vp-ponote');
+  if (!po){ if(note) note.textContent = ''; return; }
+  const left = Number(po.po_value||0) - Number(po.paid||0) - Number(po.requested||0);
+  if (note) note.innerHTML = `PO value ₹${inr(po.po_value)} · already paid ₹${inr(po.paid)}` +
+    (Number(po.requested)>0 ? ` · awaiting approval ₹${inr(po.requested)}` : '') +
+    ` · <b>still to pay ₹${inr(left > 0 ? left : 0)}</b>`;
+  if (left > 0) $('vp-amt').value = left;
 }
 async function acVendorPay(vid){
   const amt = Number($('vp-amt').value);
-  if (!(amt > 0)){ say('vp-msg','Enter the amount paid.',false); return; }
+  if (!(amt > 0)){ say('vp-msg','Enter the amount to be paid.',false); return; }
+  const po = $('vp-po').value;
+  if (!po){ say('vp-msg','Choose the purchase order this payment is against.',false); return; }
   const mode = $('vp-mode').value;
-  const { error } = await db.schema('acct').rpc('vendor_pay', {
-    p_vendor: vid, p_amount: amt, p_date: $('vp-date').value || null,
+  const { error } = await db.schema('acct').rpc('vendor_pay_request', {
+    p_vendor: vid, p_po: po, p_amount: amt, p_date: $('vp-date').value || null,
     p_mode: mode, p_bank: mode !== 'CASH' ? $('vp-bank').value : null,
-    p_ref: $('vp-ref').value.trim() || null, p_note: $('vp-note').value.trim() || null });
-  if (error){ say('vp-msg','Could not record the payment: '+error.message,false); return; }
+    p_note: $('vp-note').value.trim() || null });
+  if (error){ say('vp-msg','Could not send it for approval: '+error.message,false); return; }
+  alert('Sent for approval.\n\nNothing has been paid yet — it appears under "Waiting for approval" until the approving authority releases it and enters the UTR or cheque details.');
   acctTab('vdues');
+}
+// The approver releases the payment and records the UTR / cheque details here.
+async function acVpApprove(id, reject){
+  if (reject){
+    const why = prompt('Reject this payment request?\n\nReason (optional):', '');
+    if (why === null) return;
+    const { error } = await db.schema('acct').rpc('vendor_pay_approve', { p_req: id, p_reject: true, p_reason: why || null });
+    if (error){ alert('Could not reject it: ' + error.message); return; }
+    acctTab($('ac-appr').classList.contains('on') ? 'appr' : 'vdues'); return;
+  }
+  const ref = prompt('Release this payment.\n\nEnter the UTR number, or the cheque number and date — this is stored against the payment:', '');
+  if (ref === null) return;
+  if (!ref.trim()){ alert('The UTR or cheque details are needed before a payment can be released.'); return; }
+  const { error } = await db.schema('acct').rpc('vendor_pay_approve', { p_req: id, p_ref: ref.trim() });
+  if (error){ alert('Could not release the payment: ' + error.message); return; }
+  alert('Payment released and recorded. The vendor outstanding has been reduced and the bank ledger posted.');
+  acctTab($('ac-appr').classList.contains('on') ? 'appr' : 'vdues');
 }
 function acExpPendItem(){
   const amt = Number($('ex-amt')?.value) || 0;
