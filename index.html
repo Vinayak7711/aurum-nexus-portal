@@ -3899,7 +3899,7 @@ async function acctTab(t){
       db.schema('mfg').from('v_po_tracking').select('*').eq('status','PENDING_APPROVAL').order('order_date',{ascending:false}).limit(300),
       db.schema('mfg').from('rm_requests').select('*').eq('status','REQUESTED').order('created_at',{ascending:false}).limit(300),
       db.schema('sales').from('v_mkt_requests').select('*').eq('status','PENDING_APPROVAL').order('created_at',{ascending:false}).limit(300),
-      A.from('vendor_pay_requests').select('*, vendor:vendor_id(name), bank:bank_id(name)').eq('status','PENDING_APPROVAL').order('requested_at',{ascending:false}).limit(300)
+      A.from('vendor_pay_requests').select('*').eq('status','PENDING_APPROVAL').order('requested_at',{ascending:false}).limit(300)
     ]);
     const ents = entR.data||[], pcs = pcR.data||[], sls = slR.data||[], advs = advR.data||[], pos = poR.data||[], rqs = rqR.data||[], mks = mkR.data||[];
     const vprs = (arguments.length, (typeof vprR !== 'undefined' && vprR.data) ? vprR.data : []);
@@ -3919,6 +3919,11 @@ async function acctTab(t){
       (vns||[]).forEach(v=>venBy[v.id]=v.name);
     }
     window.__vpoNames = window.__vpoNames || {};
+    window.__vnNames = window.__vnNames || {};
+    if (vprs.length && !Object.keys(window.__vnNames).length){
+      const { data: vns2 } = await db.schema('sales').from('vendors').select('id,name');
+      (vns2||[]).forEach(v=>{ window.__vnNames[v.id] = v.name; });
+    }
     { const ids = [...new Set(vprs.map(r=>r.po_id).filter(Boolean))];
       if (ids.length){ const { data: vpos } = await db.schema('mfg').from('purchase_orders').select('id,po_no').in('id', ids);
         (vpos||[]).forEach(p=>{ window.__vpoNames[p.id] = p.po_no; }); } }
@@ -3937,9 +3942,9 @@ async function acctTab(t){
           `<td>${esc(e.bank_name_label||'—')}</td><td class="amount" style="font-weight:700;color:${e.direction==='IN'?'#1a7f37':'#b3261e'}">${inr(e.amount)}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('entry','${e.id}')" title="See full details">👁 View</button> <button class="mini" onclick="apprPrint('entry','${e.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('entry','${e.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('entry','${e.id}',true)">Reject</button> ${dirDelBtn('acct','entries', e.id, e.entry_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('💳 Vendor payments', vprs.length, T('<th>Request</th><th>Raised</th><th>Vendor</th><th>Against PO</th><th class="amount">Amount ₹</th><th>To be paid by</th><th></th>',
-        vprs.map(r=>`<tr><td><b>${esc(r.req_no)}</b></td><td>${(r.requested_at||'').slice(0,10)}</td><td>${esc(r.vendor?.name||'—')}</td><td>${esc((window.__vpoNames||{})[r.po_id]||'—')}</td>`+
+        vprs.map(r=>`<tr><td><b>${esc(r.req_no)}</b></td><td>${(r.requested_at||'').slice(0,10)}</td><td>${esc((window.__vnNames||{})[r.vendor_id]||'—')}</td><td>${esc((window.__vpoNames||{})[r.po_id]||'—')}</td>`+
           `<td class="amount" style="font-weight:700">${inr(r.amount)}</td>`+
-          `<td>${r.mode!=='CASH'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Cash'}${r.remarks?'<br><span style="font-size:11px;color:#777">'+esc(r.remarks)+'</span>':''}</td>`+
+          `<td>${r.mode!=='CASH'?'🏦 '+esc(acBankName(r.bank_id))+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Cash'}${r.remarks?'<br><span style="font-size:11px;color:#777">'+esc(r.remarks)+'</span>':''}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="acVpApprove('${r.id}',false)">✔ Approve &amp; pay</button> <button class="mini" style="color:#c0392b;" onclick="acVpApprove('${r.id}',true)">Reject</button></td></tr>`).join('')))}
       ${SEC('💵 Petty cash', pcs.length, T('<th>No.</th><th>Date</th><th>Type</th><th>Category</th><th>Paid to</th><th class="amount">Amount ₹</th><th></th>',
         pcs.map(r=>`<tr><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td><td>${r.entry_kind==='TOPUP'?'Top-up':'Expense'}</td><td>${esc(r.category||'—')}</td><td>${esc(r.payee||'—')}</td>`+
@@ -4346,11 +4351,16 @@ async function acctTab(t){
     const [{ data: rows, error }, payRes, reqRes] = await Promise.all([
       A.rpc('vendor_outstanding'),
       A.from('vendor_payments').select('*, vendor:vendor_id(name,code), bank:bank_id(name)').order('created_at',{ascending:false}).limit(100),
-      A.from('vendor_pay_requests').select('*, vendor:vendor_id(name,code), bank:bank_id(name)').order('requested_at',{ascending:false}).limit(100)
+      A.from('vendor_pay_requests').select('*').order('requested_at',{ascending:false}).limit(100)
     ]);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const vds = rows || [], pays = payRes.data || [], vreqs = reqRes.data || [];
     window.__vpoNames = {};
+    window.__vnNames = window.__vnNames || {};
+    if (vreqs.length && !Object.keys(window.__vnNames).length){
+      const { data: vns } = await db.schema('sales').from('vendors').select('id,name');
+      (vns||[]).forEach(v=>{ window.__vnNames[v.id] = v.name; });
+    }
     { const ids = [...new Set(vreqs.map(r=>r.po_id).filter(Boolean))];
       if (ids.length){ const { data: pos } = await db.schema('mfg').from('purchase_orders').select('id,po_no').in('id', ids);
         (pos||[]).forEach(p=>{ window.__vpoNames[p.id] = p.po_no; }); } }
@@ -4376,16 +4386,16 @@ async function acctTab(t){
       <p style="font-size:12px;color:#555;margin:2px 0 8px;">Nothing has been paid yet. The approving authority releases each one and types the UTR or cheque details then.</p>
       <div class="table-scroll"><table><thead><tr><th>Request</th><th>Raised</th><th>Vendor</th><th>Against PO</th><th class="amount">Amount ₹</th><th>To be paid by</th><th>Note</th><th></th></tr></thead><tbody>
       ${vreqs.filter(r=>r.status==='PENDING_APPROVAL').map(r=>`<tr><td><b>${esc(r.req_no)}</b></td><td>${(r.requested_at||'').slice(0,10)}</td>` +
-        `<td>${esc(r.vendor?.name||'—')}</td><td>${esc(window.__vpoNames[r.po_id]||'—')}</td>` +
+        `<td>${esc((window.__vnNames||{})[r.vendor_id]||'—')}</td><td>${esc(window.__vpoNames[r.po_id]||'—')}</td>` +
         `<td class="amount" style="font-weight:700">${inr(r.amount)}</td>` +
-        `<td>${r.mode!=='CASH'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Cash'}</td>` +
+        `<td>${r.mode!=='CASH'?'🏦 '+esc(acBankName(r.bank_id))+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Cash'}</td>` +
         `<td style="font-size:12px;color:#777">${esc(r.remarks||'')}</td>` +
         `<td style="white-space:nowrap">${canFinApprove()?`<button class="mini" style="color:#1a7f37;border-color:#1a7f37;" onclick="acVpApprove('${r.id}',false)">Approve &amp; pay</button> <button class="mini" style="color:#c0392b;border-color:#c0392b;" onclick="acVpApprove('${r.id}',true)">Reject</button>`:'<span style="font-size:11.5px;color:#999">awaiting the approver</span>'}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
       ${vreqs.filter(r=>r.status==='REJECTED').length ? `
       <h4 class="sec" style="margin-top:16px;">Rejected requests</h4>
       <div class="table-scroll"><table><thead><tr><th>Request</th><th>Vendor</th><th>Against PO</th><th class="amount">Amount ₹</th><th>Reason</th></tr></thead><tbody>
-      ${vreqs.filter(r=>r.status==='REJECTED').map(r=>`<tr class="inactive"><td><b>${esc(r.req_no)}</b></td><td>${esc(r.vendor?.name||'—')}</td><td>${esc(window.__vpoNames[r.po_id]||'—')}</td><td class="amount">${inr(r.amount)}</td><td style="font-size:12px;color:#777">${esc(r.reject_reason||'—')}</td></tr>`).join('')}
+      ${vreqs.filter(r=>r.status==='REJECTED').map(r=>`<tr class="inactive"><td><b>${esc(r.req_no)}</b></td><td>${esc((window.__vnNames||{})[r.vendor_id]||'—')}</td><td>${esc(window.__vpoNames[r.po_id]||'—')}</td><td class="amount">${inr(r.amount)}</td><td style="font-size:12px;color:#777">${esc(r.reject_reason||'—')}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
       <h4 class="sec" style="margin-top:14px;">Payments made</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Vendor</th><th class="amount">Amount ₹</th><th>Paid by</th><th>Ref / note</th><th></th></tr></thead><tbody>
