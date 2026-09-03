@@ -409,6 +409,7 @@
       <button class="chip" id="rp-mine" onclick="reportsTab('mine')">My month</button>
       <button class="chip hidden" id="rp-team" onclick="reportsTab('team')">Team</button>
       <button class="chip hidden" id="rp-targets" onclick="reportsTab('targets')">Targets</button>
+      <button class="chip hidden" id="rp-plan" onclick="reportsTab('plan')">🎯 Target plan (FY)</button>
       <span class="fld-tab" style="width:1px;background:#ddd;align-self:stretch;margin:0 4px;"></span>
       <button class="chip fld-tab" id="fld-visits" onclick="fieldTab('visits')">🤳 Field visits</button>
       <button class="chip fld-tab dir-only" id="fld-salesmen" onclick="fieldTab('salesmen')">Salesmen</button>
@@ -698,7 +699,7 @@ const PERM_ACTIONS = ['view','add','edit','admin'];
 const SECTIONS = {
   party:    [['pm-d','Distributors list'],['pm-v','Vendors list'],['pm-r','Retailers list'],
              ['ot-apps','Distributor applications'],['ot-vendors','Register vendor'],['ot-retailers','Register retailer']],
-  reports:  [['rp-today','Today'],['rp-mine','My month'],['rp-team','Team'],['rp-targets','Targets'],
+  reports:  [['rp-today','Today'],['rp-mine','My month'],['rp-team','Team'],['rp-targets','Targets'],['rp-plan','Target plan (FY)'],
              ['fld-visits','Field visits'],['fld-salesmen','Salesmen'],['fld-creds','App credentials']],
   salesrep: [['sr-dist','Distributor-wise (primary)'],['sr-ret','Retailer-wise (secondary)']],
   brand:    [],
@@ -2780,19 +2781,22 @@ async function openReports(){
   // Targets: the Director hands each team leader a total; a leader divides his
   // total among his salesmen — so leaders see this tab too.
   $('rp-targets').classList.toggle('hidden', !(isDir() || teamMembers.length));
+  $('rp-plan').classList.toggle('hidden', !(isDir() || teamMembers.length || !!(me?.permissions_json?.sales?.edit)));
   // Field-visit tabs show for the Director and for anyone with a team reporting to them.
   const canField = isDir() || !!window.__hasReports || teamMembers.length > 0;
   document.querySelectorAll('.fld-tab').forEach(el => el.classList.toggle('hidden', !canField));
   reportsTab('today'); applyDirOnly(); show('reports');
 }
 async function reportsTab(t){
-  for (const k of ['today','mine','team','targets']) $('rp-'+k).classList.toggle('on', k === t);
+  for (const k of ['today','mine','team','targets','plan']) $('rp-'+k).classList.toggle('on', k === t);
   // leaving the field-visit side of this section
   ['visits','salesmen','creds'].forEach(k => $('fld-'+k).classList.remove('on'));
   $('field-body').classList.add('hidden');
   $('reports-body').classList.remove('hidden');
   const B = $('reports-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const S = db.schema('sales');
+
+  if (t === 'plan'){ await plOpen(); return; }
 
   if (t === 'today'){
     const { data: rows, error } = await S.from('v_activity_reports').select('*').eq('user_id', me.id).eq('report_date', todayISO());
@@ -7443,6 +7447,377 @@ function notifGo(route){ const p=$('notif-pop'); if(p) p.classList.add('hidden')
 async function openNotifCentre(){ await notifLoad(); $('notif-centre').innerHTML=`<div style="max-width:720px;">${notifItems.some(n=>!n.is_read)?'<button class="btn ghost sm" onclick="notifMarkAll()">Mark all read</button> ':''}${notifItems.length?'<button class="btn ghost sm" onclick="notifClearAll()" style="color:#c0392b;">🗑 Clear all</button>':''}<div class="card" style="margin-top:10px;padding:0;overflow:hidden;">${notifRender(notifItems)}</div></div>`; show('notif'); }
 
 init();
+
+/* ================= SALES TARGET PLAN (FY cascade) =================
+   Mirrors the Excel working: Setup → Districts → Salesmen → Monthly actuals → Dashboard.
+   Total target → split by district (share %) → split by salesman (share in district)
+   → phased month by month with the seasonality weights, from each district's
+   Active-From month. Actuals come from the order book (party's salesperson),
+   with a manual override per month for sales that were not booked as orders.
+   This is an addition alongside the existing Targets tab — nothing there changes. */
+const PL_MONTHS = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+let PL = { plans:[], plan:null, districts:[], assigns:[], actuals:[], users:[], orders:[], known:[], sub:'dash' };
+function canPlanEdit(){ return isDir() || !!(me?.permissions_json?.sales?.edit); }
+function plFmt(v){ return PL.plan && PL.plan.measure === 'CASES' ? (Math.round(Number(v||0)*100)/100).toLocaleString('en-IN') : '₹ ' + inr(v||0); }
+function plPct(a,b){ return b > 0 ? (Math.round(a/b*1000)/10) + '%' : '—'; }
+function plFyLabel(y){ return 'FY ' + y + '-' + String(y+1).slice(2); }
+function plDefaultFyYear(){ const d = new Date(); return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear()-1; }
+
+async function plOpen(){
+  const B = $('reports-body'); B.innerHTML = '<p style="color:#777">Loading the target plan…</p>';
+  const P = db.schema('plan');
+  const [pl, us] = await Promise.all([
+    P.from('plans').select('*').order('fy_start_year', {ascending:false}),
+    db.schema('adm').from('users').select('id, full_name, designation, reports_to, is_active').is('deleted_at', null).order('full_name')
+  ]);
+  if (pl.error){ B.innerHTML = `<div class="msg err">Could not load the plan: ${esc(pl.error.message)}</div>`; return; }
+  PL.plans = pl.data || []; PL.users = (us.data||[]).filter(u => u.is_active);
+  if (!PL.plan || !PL.plans.some(p => p.id === PL.plan.id)) PL.plan = PL.plans[0] || null;
+  if (!PL.plan){
+    B.innerHTML = `
+      <div class="card" style="max-width:640px;"><h3 style="font-size:15px;">Start the sales target plan</h3>
+      <p style="font-size:12.5px;color:#666;">One plan per financial year. Set the total, divide it by district, then by salesman — the monthly and quarterly targets work themselves out, and actual sales flow in from the order book.</p>
+      ${canPlanEdit() ? `
+      <div class="row2c"><div><label>Financial year starting</label><select id="pl-new-fy">${[0,1,-1].map(k=>{ const y = plDefaultFyYear()+k; return `<option value="${y}">${plFyLabel(y)}</option>`; }).join('')}</select></div>
+        <div><label>Target measured in</label><select id="pl-new-measure"><option value="VALUE">₹ value</option><option value="CASES">Cases</option></select></div></div>
+      <div class="row2c"><div><label>Total annual target *</label><input type="number" id="pl-new-total" min="0" placeholder="e.g. 250000"></div>
+        <div><label>Marketing head / team leader</label><select id="pl-new-head"><option value="">— pick —</option>${PL.users.map(u=>`<option value="${u.id}">${esc(u.full_name)}${u.designation?' — '+esc(u.designation):''}</option>`).join('')}</select></div></div>
+      <button class="btn gold sm" style="margin-top:10px;" onclick="plCreate()">Create plan</button><div id="pl-msg"></div>`
+      : '<p style="font-size:12.5px;color:#b3261e;">No plan has been set up yet — the Director or Sales will create it.</p>'}
+      </div>`;
+    return;
+  }
+  await plLoadPlan();
+}
+async function plCreate(){
+  const y = Number($('pl-new-fy').value), total = Number($('pl-new-total').value);
+  if (!(total > 0)){ say('pl-msg','Put in the total annual target.', false); return; }
+  const { error } = await db.schema('plan').from('plans').insert({
+    fy_label: plFyLabel(y), fy_start_year: y, measure: $('pl-new-measure').value, total_target: total,
+    head_user_id: $('pl-new-head').value || null, created_by: me.id });
+  if (error){ say('pl-msg','Could not create it: '+error.message, false); return; }
+  PL.plan = null; PL.sub = 'setup'; plOpen();
+}
+async function plLoadPlan(){
+  const P = db.schema('plan'), p = PL.plan;
+  const from = p.fy_start_year + '-04-01', to = (p.fy_start_year+1) + '-04-01';
+  const [d, a, ac, oa, kd] = await Promise.all([
+    P.from('districts').select('*').eq('plan_id', p.id).order('sort_no').order('code'),
+    P.from('assignments').select('*').eq('plan_id', p.id).order('sort_no'),
+    P.from('actuals').select('*'),
+    P.rpc('order_actuals', { p_from: from, p_to: to }),
+    P.rpc('known_districts')
+  ]);
+  PL.districts = d.data || []; PL.assigns = a.data || [];
+  const aid = new Set(PL.assigns.map(x => x.id));
+  PL.actuals = (ac.data || []).filter(x => aid.has(x.assignment_id));
+  PL.orders = oa.data || []; PL.known = kd.data || [];
+  plRender();
+}
+
+/* ---------- the cascade (same maths as the workbook) ---------- */
+function plCompute(){
+  const p = PL.plan; const total = Number(p.total_target||0);
+  let W = (Array.isArray(p.weights) ? p.weights : []).map(Number); if (W.length !== 12) W = Array(12).fill(1);
+  const wsum = W.reduce((s,x)=>s+x,0) || 1; W = W.map(x => x/wsum);
+  const monthIdx = ms => { const d = new Date(ms); const m = d.getMonth(); return m >= 3 ? m-3 : m+9; };   // Apr=0 … Mar=11
+  // actual by user by month from the order book
+  const byUser = {};
+  for (const r of PL.orders){ if (!r.user_id) continue; const i = monthIdx(r.month_start); (byUser[r.user_id] ??= Array(12).fill(0))[i] += Number(p.measure==='CASES' ? r.cases : r.value) || 0; }
+  const manual = {}; for (const x of PL.actuals){ (manual[x.assignment_id] ??= {})[x.month_no-1] = Number(x.amount||0); }
+  // district shares: explicit ones first, the rest share what is left equally
+  const D = PL.districts.map(d => ({...d}));
+  const expl = D.filter(d => d.share_pct != null); const explSum = expl.reduce((s,d)=>s+Number(d.share_pct),0)/100;
+  const autoD = D.filter(d => d.share_pct == null);
+  for (const d of D){ d.share = d.share_pct != null ? Number(d.share_pct)/100 : (autoD.length ? Math.max(0, 1-explSum)/autoD.length : 0); d.target = total * d.share; }
+  // salesmen under each district
+  const A = PL.assigns.map(a => ({...a}));
+  for (const d of D){
+    const mine = A.filter(a => a.district_id === d.id);
+    const ex = mine.filter(a => a.share_pct != null); const exSum = ex.reduce((s,a)=>s+Number(a.share_pct),0)/100;
+    const au = mine.filter(a => a.share_pct == null);
+    const from = Math.max(1, Math.min(12, Number(d.active_from||1))) - 1;
+    const div = W.slice(from).reduce((s,x)=>s+x,0) || 1;
+    for (const a of mine){
+      a.share = a.share_pct != null ? Number(a.share_pct)/100 : (au.length ? Math.max(0,1-exSum)/au.length : 0);
+      a.annual = d.target * a.share;
+      a.months = W.map((w,i) => i < from ? 0 : a.annual * w / div);
+      a.quarters = [0,3,6,9].map(q => a.months.slice(q,q+3).reduce((s,x)=>s+x,0));
+      const auto = a.user_id ? (byUser[a.user_id] || Array(12).fill(0)) : Array(12).fill(0);
+      a.actualSrc = W.map((_,i) => (manual[a.id] && manual[a.id][i] != null) ? 'manual' : 'orders');
+      a.actuals = W.map((_,i) => (manual[a.id] && manual[a.id][i] != null) ? manual[a.id][i] : auto[i]);
+      a.actual = a.actuals.reduce((s,x)=>s+x,0);
+      a.actualQ = [0,3,6,9].map(q => a.actuals.slice(q,q+3).reduce((s,x)=>s+x,0));
+      a.districtName = d.name; a.districtCode = d.code;
+    }
+    d.assigns = mine; d.allocated = mine.reduce((s,a)=>s+a.annual,0); d.variance = d.target - d.allocated;
+    d.actual = mine.reduce((s,a)=>s+a.actual,0);
+    d.months = W.map((_,i) => mine.reduce((s,a)=>s+a.months[i],0));
+    d.actualM = W.map((_,i) => mine.reduce((s,a)=>s+a.actuals[i],0));
+  }
+  const allocatedD = D.reduce((s,d)=>s+d.target,0), allocatedS = A.reduce((s,a)=>s+a.annual,0);
+  const companyM = W.map(w => total*w), actualM = W.map((_,i) => A.reduce((s,a)=>s+a.actuals[i],0));
+  const actual = actualM.reduce((s,x)=>s+x,0);
+  return { W, D, A, total, allocatedD, allocatedS, unallocated: total-allocatedD, companyM, actualM, actual, achv: total>0?actual/total:0, gap: total-actual };
+}
+function plUserName(id){ const u = PL.users.find(x=>x.id===id); return u ? u.full_name : ''; }
+function plAssignName(a){ return a.user_id ? (plUserName(a.user_id) || '(user)') : (a.person_name || '—'); }
+
+/* ---------- rendering ---------- */
+function plRender(){
+  const B = $('reports-body'); const C = plCompute(); const p = PL.plan; const edit = canPlanEdit();
+  const tabs = [['dash','📊 Dashboard'],['setup','⚙️ Setup'],['districts','🗺️ District targets'],['team','👥 Team & salesman targets'],['actuals','📈 Monthly actuals'],['org','🏢 Org structure']];
+  let h = `
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+      <label style="margin:0;">Plan</label>
+      <select onchange="PL.plan = PL.plans.find(x=>x.id===this.value); plLoadPlan();" style="max-width:220px;">${PL.plans.map(x=>`<option value="${x.id}" ${x.id===p.id?'selected':''}>${esc(x.fy_label)} · ${x.measure==='CASES'?'cases':'₹'}${x.status!=='ACTIVE'?' ('+x.status.toLowerCase()+')':''}</option>`).join('')}</select>
+      ${edit ? `<button class="mini" onclick="plNewPlanPrompt()">+ New year</button>` : ''}
+      <span style="flex:1"></span>
+      <span style="font-size:12px;color:#777;">Head: <b>${esc(plUserName(p.head_user_id)||'—')}</b> · Total ${plFmt(C.total)}</span>
+    </div>
+    <div class="subtabs" style="margin-bottom:10px;">${tabs.map(([k,l])=>`<button class="chip ${PL.sub===k?'on':''}" onclick="PL.sub='${k}';plRender()">${l}</button>`).join('')}</div>
+    <div id="pl-body"></div>`;
+  B.innerHTML = h;
+  const body = $('pl-body');
+  if (PL.sub === 'setup') body.innerHTML = plSetupHtml(C, edit);
+  else if (PL.sub === 'districts') body.innerHTML = plDistrictsHtml(C, edit);
+  else if (PL.sub === 'team') body.innerHTML = plTeamHtml(C, edit);
+  else if (PL.sub === 'actuals') body.innerHTML = plActualsHtml(C, edit);
+  else if (PL.sub === 'org') body.innerHTML = plOrgHtml(C);
+  else body.innerHTML = plDashHtml(C);
+}
+const plTile = (l,v,c) => `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11.5px;color:#777">${l}</div><div style="font-size:18px;font-weight:700;${c?'color:'+c:''}">${v}</div></div>`;
+
+function plDashHtml(C){
+  const p = PL.plan;
+  return `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+      ${plTile('Total annual target', plFmt(C.total))}
+      ${plTile('Allocated to districts', plFmt(C.allocatedD), Math.abs(C.unallocated)>0.5?'#b3261e':'#1a7f37')}
+      ${plTile('Allocated to salesmen', plFmt(C.allocatedS), Math.abs(C.allocatedS-C.total)>0.5?'#b8860b':'#1a7f37')}
+      ${plTile('Actual YTD', plFmt(C.actual), '#1a7f37')}
+      ${plTile('Achievement', plPct(C.actual, C.total))}
+      ${plTile('Gap to target', plFmt(C.gap), C.gap>0?'#b3261e':'#1a7f37')}
+    </div>
+    <p style="font-size:12px;color:#777;margin:0 0 10px;">${esc(p.fy_label)} · Head: ${esc(plUserName(p.head_user_id)||'—')} · ${C.D.length} district${C.D.length===1?'':'s'} · ${C.A.length} salesm${C.A.length===1?'an':'en'}. Actuals come from the order book (orders of parties whose salesperson is that salesman), month by month, plus anything typed in under Monthly actuals.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <div><h4 class="sec">District-wise</h4>
+    <div class="table-scroll"><table><thead><tr><th>District</th><th class="amount">Annual target</th><th class="amount">Actual YTD</th><th>Achv</th><th class="amount">Gap</th></tr></thead><tbody>
+    ${C.D.map(d=>`<tr><td><b>${esc(d.code)}</b> ${esc(d.name)}</td><td class="amount">${plFmt(d.target)}</td><td class="amount" style="color:#1a7f37">${plFmt(d.actual)}</td><td>${plPct(d.actual,d.target)}</td><td class="amount" style="color:${d.target-d.actual>0?'#b3261e':'#1a7f37'}">${plFmt(d.target-d.actual)}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#777">No districts yet — add them under District targets.</td></tr>'}
+    ${C.D.length?`<tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td class="amount">${plFmt(C.allocatedD)}</td><td class="amount">${plFmt(C.actual)}</td><td>${plPct(C.actual,C.allocatedD)}</td><td class="amount">${plFmt(C.allocatedD-C.actual)}</td></tr>`:''}
+    </tbody></table></div></div>
+    <div><h4 class="sec">Month-wise (company)</h4>
+    <div class="table-scroll"><table><thead><tr><th>Month</th><th class="amount">Target</th><th class="amount">Actual</th><th>Achv</th></tr></thead><tbody>
+    ${PL_MONTHS.map((m,i)=>`<tr><td>${m}${i%3===2?' <span style="color:#999;font-size:10.5px">Q'+((i+1)/3)+' end</span>':''}</td><td class="amount">${plFmt(C.companyM[i])}</td><td class="amount" style="color:#1a7f37">${plFmt(C.actualM[i])}</td><td>${plPct(C.actualM[i],C.companyM[i])}</td></tr>`).join('')}
+    <tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td class="amount">${plFmt(C.total)}</td><td class="amount">${plFmt(C.actual)}</td><td>${plPct(C.actual,C.total)}</td></tr>
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:12px;">Quarter-wise (company)</h4>
+    <div class="table-scroll"><table><thead><tr><th>Quarter</th><th class="amount">Target</th><th class="amount">Actual</th><th>Achv</th></tr></thead><tbody>
+    ${[0,1,2,3].map(q=>{ const t=C.companyM.slice(q*3,q*3+3).reduce((s,x)=>s+x,0), a=C.actualM.slice(q*3,q*3+3).reduce((s,x)=>s+x,0);
+      return `<tr><td>Q${q+1} (${PL_MONTHS[q*3]}–${PL_MONTHS[q*3+2]})</td><td class="amount">${plFmt(t)}</td><td class="amount" style="color:#1a7f37">${plFmt(a)}</td><td>${plPct(a,t)}</td></tr>`; }).join('')}
+    </tbody></table></div></div></div>`;
+}
+
+function plSetupHtml(C, edit){
+  const p = PL.plan; const W = (Array.isArray(p.weights)&&p.weights.length===12) ? p.weights.map(Number) : Array(12).fill(1);
+  const wsum = W.reduce((s,x)=>s+x,0)||1;
+  const ro = edit ? '' : 'disabled';
+  return `
+    <div class="card" style="max-width:760px;">
+      <h3 style="font-size:15px;">Setup &amp; assumptions — ${esc(p.fy_label)}</h3>
+      <div class="row2c">
+        <div><label>Total annual sales target (${p.measure==='CASES'?'cases':'₹'}) *</label><input type="number" id="pl-total" value="${Number(p.total_target)}" ${ro} onchange="plSavePlan({total_target:Number(this.value)||0})"></div>
+        <div><label>Marketing head / team leader</label><select id="pl-head" ${ro} onchange="plSavePlan({head_user_id:this.value||null})"><option value="">— none —</option>${PL.users.map(u=>`<option value="${u.id}" ${u.id===p.head_user_id?'selected':''}>${esc(u.full_name)}${u.designation?' — '+esc(u.designation):''}</option>`).join('')}</select></div>
+      </div>
+      <div class="row2c">
+        <div><label>Measured in</label><select ${ro} onchange="plSavePlan({measure:this.value})"><option value="VALUE" ${p.measure==='VALUE'?'selected':''}>₹ value</option><option value="CASES" ${p.measure==='CASES'?'selected':''}>Cases</option></select></div>
+        <div><label>Status</label><select ${ro} onchange="plSavePlan({status:this.value})">${['DRAFT','ACTIVE','CLOSED'].map(s=>`<option ${p.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      </div>
+      <label>Notes</label><input type="text" value="${esc(p.notes||'')}" ${ro} onchange="plSavePlan({notes:this.value||null})">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 6px;">
+        ${plTile('Districts', C.D.length)} ${plTile('Salesmen', C.A.length)}
+        ${plTile('Allocated to districts', plFmt(C.allocatedD))}
+        ${plTile('Unallocated', plFmt(C.unallocated), Math.abs(C.unallocated)>0.5?'#b3261e':'#1a7f37')}
+      </div>
+    </div>
+    <div class="card" style="max-width:760px;margin-top:12px;">
+      <h3 style="font-size:15px;">Monthly seasonality / phasing</h3>
+      <p style="font-size:12px;color:#666;margin:2px 0 8px;">Weights decide how each annual target is spread across the year. Equal weights = 1/12 each month. Type any numbers — they are scaled to 100% automatically.</p>
+      <div class="table-scroll"><table><thead><tr><th>Month</th><th>Weight</th><th>Share</th><th class="amount">Company monthly target</th></tr></thead><tbody>
+      ${PL_MONTHS.map((m,i)=>`<tr><td>${m}</td><td><input type="number" step="any" min="0" value="${W[i]}" ${ro} style="width:90px;" onchange="plSaveWeight(${i}, this.value)"></td><td>${(W[i]/wsum*100).toFixed(2)}%</td><td class="amount">${plFmt(C.companyM[i])}</td></tr>`).join('')}
+      <tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td>${wsum}</td><td>100%</td><td class="amount">${plFmt(C.total)}</td></tr>
+      </tbody></table></div>
+      ${edit?`<button class="mini" style="margin-top:8px;" onclick="plSavePlan({weights:[1,1,1,1,1,1,1,1,1,1,1,1]})">Reset to equal months</button>`:''}
+    </div>`;
+}
+async function plSavePlan(patch){
+  const { error } = await db.schema('plan').from('plans').update(patch).eq('id', PL.plan.id);
+  if (error){ alert('Could not save: ' + error.message); return; }
+  Object.assign(PL.plan, patch); plRender();
+}
+async function plSaveWeight(i, v){
+  const W = (Array.isArray(PL.plan.weights)&&PL.plan.weights.length===12) ? PL.plan.weights.map(Number) : Array(12).fill(1);
+  W[i] = Math.max(0, Number(v)||0); await plSavePlan({ weights: W });
+}
+async function plNewPlanPrompt(){
+  const y = prompt('Financial year starting (e.g. 2027 for FY 2027-28):', String(plDefaultFyYear()+1));
+  if (y === null) return; const yy = Number(y); if (!(yy > 2000)) { alert('Enter a year like 2027.'); return; }
+  const total = Number(prompt('Total annual target for ' + plFyLabel(yy) + ':', String(PL.plan ? PL.plan.total_target : '')) || 0);
+  const copy = PL.plan && confirm('Copy this year\'s districts, salesmen and weights into ' + plFyLabel(yy) + '?');
+  const { data, error } = await db.schema('plan').from('plans').insert({ fy_label: plFyLabel(yy), fy_start_year: yy, measure: PL.plan?PL.plan.measure:'VALUE', total_target: total, head_user_id: PL.plan?PL.plan.head_user_id:null, weights: PL.plan?PL.plan.weights:undefined, created_by: me.id }).select().single();
+  if (error){ alert('Could not create it: ' + error.message); return; }
+  if (copy){
+    for (const d of PL.districts){
+      const { data: nd } = await db.schema('plan').from('districts').insert({ plan_id: data.id, code: d.code, name: d.name, share_pct: d.share_pct, active_from: d.active_from, sort_no: d.sort_no }).select().single();
+      if (nd) for (const a of PL.assigns.filter(x=>x.district_id===d.id))
+        await db.schema('plan').from('assignments').insert({ plan_id: data.id, district_id: nd.id, user_id: a.user_id, person_name: a.person_name, area: a.area, leader_user_id: a.leader_user_id, share_pct: a.share_pct, sort_no: a.sort_no });
+    }
+  }
+  PL.plan = null; PL.sub = 'setup'; plOpen();
+}
+
+function plDistrictsHtml(C, edit){
+  const ro = edit ? '' : 'disabled';
+  const known = PL.known.filter(k => !C.D.some(d => d.name.toLowerCase() === k.name.toLowerCase()));
+  return `
+    <p style="font-size:12px;color:#666;margin:0 0 8px;">Total to allocate: <b>${plFmt(C.total)}</b>. Leave <i>Share %</i> blank and the district takes an equal slice of whatever is not fixed; type a number to fix it. The salesman column fills itself from the Team tab. <i>Active from</i> is the month the district starts — its salesmen's targets are spread over the months from then on.</p>
+    <div class="table-scroll"><table><thead><tr><th>Code</th><th>District</th><th>Salesmen</th><th>Share %</th><th class="amount">Annual target</th><th class="amount">Allocated to salesmen</th><th class="amount">Variance</th><th class="amount">Actual YTD</th><th>Achv</th><th>Active from</th><th></th></tr></thead><tbody>
+    ${C.D.map(d=>`<tr>
+      <td><b>${esc(d.code)}</b></td>
+      <td><input type="text" value="${esc(d.name)}" ${ro} style="min-width:140px;" onchange="plSaveDistrict('${d.id}',{name:this.value.trim()})"></td>
+      <td style="font-size:12px;">${d.assigns.map(a=>esc(plAssignName(a))).join(', ') || '<span style="color:#b3261e">not assigned</span>'}</td>
+      <td><input type="number" step="any" min="0" max="100" value="${d.share_pct==null?'':Number(d.share_pct)}" placeholder="${(d.share*100).toFixed(2)} auto" ${ro} style="width:90px;" onchange="plSaveDistrict('${d.id}',{share_pct:this.value===''?null:Number(this.value)})"></td>
+      <td class="amount" style="font-weight:600">${plFmt(d.target)}</td>
+      <td class="amount">${plFmt(d.allocated)}</td>
+      <td class="amount" style="color:${Math.abs(d.variance)>0.5?'#b3261e':'#1a7f37'}">${plFmt(d.variance)}</td>
+      <td class="amount" style="color:#1a7f37">${plFmt(d.actual)}</td>
+      <td>${plPct(d.actual,d.target)}</td>
+      <td><select ${ro} onchange="plSaveDistrict('${d.id}',{active_from:Number(this.value)})">${PL_MONTHS.map((m,i)=>`<option value="${i+1}" ${Number(d.active_from)===i+1?'selected':''}>${m}</option>`).join('')}</select></td>
+      <td>${edit?`<button class="mini" style="color:#c0392b;border-color:#c0392b;" onclick="plDelDistrict('${d.id}','${esc(d.name)}')">Remove</button>`:''}</td></tr>`).join('') || '<tr><td colspan="11" style="color:#777">No districts yet.</td></tr>'}
+    ${C.D.length?`<tr style="background:#faf6ea;font-weight:700;"><td colspan="3">Total</td><td>${(C.D.reduce((s,d)=>s+d.share,0)*100).toFixed(2)}%</td><td class="amount">${plFmt(C.allocatedD)}</td><td class="amount">${plFmt(C.allocatedS)}</td><td class="amount">${plFmt(C.allocatedD-C.allocatedS)}</td><td class="amount">${plFmt(C.actual)}</td><td>${plPct(C.actual,C.allocatedD)}</td><td colspan="2"></td></tr>`:''}
+    </tbody></table></div>
+    ${Math.abs(C.unallocated)>0.5?`<p style="font-size:12px;color:#b3261e;margin:6px 0 0;">Check: ${plFmt(C.unallocated)} of the total is not allocated to any district (shares total ${(C.D.reduce((s,d)=>s+d.share,0)*100).toFixed(2)}%).</p>`:''}
+    ${edit?`
+    <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:14px;">Add a district</h3>
+      <div class="row2c"><div><label>District name *</label><input type="text" id="pl-d-name" list="pl-d-known" placeholder="Type, or pick one already on the party master"><datalist id="pl-d-known">${known.map(k=>`<option value="${esc(k.name)}">${k.parties} part${k.parties===1?'y':'ies'}</option>`).join('')}</datalist></div>
+        <div><label>Active from</label><select id="pl-d-from">${PL_MONTHS.map((m,i)=>`<option value="${i+1}">${m}</option>`).join('')}</select></div></div>
+      <button class="btn gold sm" style="margin-top:8px;" onclick="plAddDistrict()">Add district</button><div id="pl-d-msg"></div></div>`:''}`;
+}
+async function plAddDistrict(){
+  const name = $('pl-d-name').value.trim(); if (!name){ say('pl-d-msg','Type the district name.', false); return; }
+  if (PL.districts.some(d => d.name.toLowerCase() === name.toLowerCase())){ say('pl-d-msg','That district is already in the plan.', false); return; }
+  const n = PL.districts.length + 1; const code = 'D-' + String(n).padStart(2,'0');
+  const { error } = await db.schema('plan').from('districts').insert({ plan_id: PL.plan.id, code, name, active_from: Number($('pl-d-from').value)||1, sort_no: n });
+  if (error){ say('pl-d-msg','Could not add it: '+error.message, false); return; }
+  plLoadPlan();
+}
+async function plSaveDistrict(id, patch){
+  if (patch.name === '') { alert('The district needs a name.'); plRender(); return; }
+  const { error } = await db.schema('plan').from('districts').update(patch).eq('id', id);
+  if (error){ alert('Could not save: ' + error.message); return; }
+  Object.assign(PL.districts.find(d=>d.id===id), patch); plRender();
+}
+async function plDelDistrict(id, name){
+  const n = PL.assigns.filter(a=>a.district_id===id).length;
+  if (!confirm('Remove ' + name + ' from this plan?' + (n ? '\n\nIts ' + n + ' salesman row' + (n===1?'':'s') + ' and their monthly actuals go with it.' : ''))) return;
+  const { error } = await db.schema('plan').from('districts').delete().eq('id', id);
+  if (error){ alert('Could not remove it: ' + error.message); return; }
+  plLoadPlan();
+}
+
+function plTeamHtml(C, edit){
+  const ro = edit ? '' : 'disabled';
+  const userOpts = sel => `<option value="">— type a name instead —</option>` + PL.users.map(u=>`<option value="${u.id}" ${u.id===sel?'selected':''}>${esc(u.full_name)}${u.designation?' — '+esc(u.designation):''}</option>`).join('');
+  const leaderOpts = sel => `<option value="">— head —</option>` + PL.users.map(u=>`<option value="${u.id}" ${u.id===sel?'selected':''}>${esc(u.full_name)}</option>`).join('');
+  return `
+    <p style="font-size:12px;color:#666;margin:0 0 8px;">Each row is one salesman in one district. Pick an ERP user (their actual sales then come from the orders of parties they own) or just type a name. <i>Reports to</i> is their team leader — blank means the marketing head. Leave <i>Share %</i> blank to split the district's target equally among its salesmen.</p>
+    <div class="table-scroll"><table><thead><tr><th>#</th><th>District</th><th>Area / beat</th><th>Salesman</th><th>Reports to</th><th>Share in district</th><th class="amount">Annual target</th>${[1,2,3,4].map(q=>`<th class="amount">Q${q}</th>`).join('')}${PL_MONTHS.map(m=>`<th class="amount" style="font-size:11px;">${m}</th>`).join('')}<th class="amount">Actual YTD</th><th>Achv</th><th></th></tr></thead><tbody>
+    ${C.A.map((a,i)=>`<tr>
+      <td>${i+1}</td>
+      <td><select ${ro} onchange="plSaveAssign('${a.id}',{district_id:this.value})">${C.D.map(d=>`<option value="${d.id}" ${d.id===a.district_id?'selected':''}>${esc(d.code)} ${esc(d.name)}</option>`).join('')}</select></td>
+      <td><input type="text" value="${esc(a.area||'')}" ${ro} style="min-width:110px;" onchange="plSaveAssign('${a.id}',{area:this.value.trim()||null})"></td>
+      <td><select ${ro} onchange="plSaveAssign('${a.id}',{user_id:this.value||null})" style="min-width:150px;">${userOpts(a.user_id)}</select>${!a.user_id?`<input type="text" value="${esc(a.person_name||'')}" placeholder="Name" ${ro} style="margin-top:4px;min-width:150px;" onchange="plSaveAssign('${a.id}',{person_name:this.value.trim()||null})">`:''}</td>
+      <td><select ${ro} onchange="plSaveAssign('${a.id}',{leader_user_id:this.value||null})">${leaderOpts(a.leader_user_id)}</select></td>
+      <td><input type="number" step="any" min="0" max="100" value="${a.share_pct==null?'':Number(a.share_pct)}" placeholder="${(a.share*100).toFixed(2)} auto" ${ro} style="width:90px;" onchange="plSaveAssign('${a.id}',{share_pct:this.value===''?null:Number(this.value)})"></td>
+      <td class="amount" style="font-weight:700">${plFmt(a.annual)}</td>
+      ${a.quarters.map(q=>`<td class="amount">${plFmt(q)}</td>`).join('')}
+      ${a.months.map(m=>`<td class="amount" style="font-size:11.5px;color:#555">${plFmt(m)}</td>`).join('')}
+      <td class="amount" style="color:#1a7f37">${plFmt(a.actual)}</td><td>${plPct(a.actual,a.annual)}</td>
+      <td>${edit?`<button class="mini" style="color:#c0392b;border-color:#c0392b;" onclick="plDelAssign('${a.id}')">Remove</button>`:''}</td></tr>`).join('') || `<tr><td colspan="26" style="color:#777">No salesmen yet${C.D.length?'':' — add districts first'}.</td></tr>`}
+    ${C.A.length?`<tr style="background:#faf6ea;font-weight:700;"><td colspan="6">Total</td><td class="amount">${plFmt(C.allocatedS)}</td>${[0,1,2,3].map(q=>`<td class="amount">${plFmt(C.A.reduce((s,a)=>s+a.quarters[q],0))}</td>`).join('')}${PL_MONTHS.map((_,i)=>`<td class="amount" style="font-size:11.5px">${plFmt(C.A.reduce((s,a)=>s+a.months[i],0))}</td>`).join('')}<td class="amount">${plFmt(C.actual)}</td><td>${plPct(C.actual,C.allocatedS)}</td><td></td></tr>`:''}
+    </tbody></table></div>
+    ${edit && C.D.length ? `
+    <div class="card" style="margin-top:12px;max-width:760px;"><h3 style="font-size:14px;">Add a salesman to a district</h3>
+      <div class="row2c"><div><label>District *</label><select id="pl-a-district">${C.D.map(d=>`<option value="${d.id}">${esc(d.code)} ${esc(d.name)}</option>`).join('')}</select></div>
+        <div><label>Area / beat</label><input type="text" id="pl-a-area" placeholder="e.g. Kalyan–Dombivli"></div></div>
+      <div class="row2c"><div><label>Salesman (ERP user)</label><select id="pl-a-user">${userOpts('')}</select></div>
+        <div><label>…or name (if not an ERP user)</label><input type="text" id="pl-a-name" placeholder="Name"></div></div>
+      <div class="row2c"><div><label>Reports to (team leader)</label><select id="pl-a-leader">${leaderOpts(PL.plan.head_user_id||'')}</select></div>
+        <div><label>Share in district % (blank = equal)</label><input type="number" id="pl-a-share" step="any" min="0" max="100" placeholder="auto"></div></div>
+      <button class="btn gold sm" style="margin-top:8px;" onclick="plAddAssign()">Add salesman</button><div id="pl-a-msg"></div></div>` : ''}`;
+}
+async function plAddAssign(){
+  const user_id = $('pl-a-user').value || null, name = $('pl-a-name').value.trim() || null;
+  if (!user_id && !name){ say('pl-a-msg','Pick an ERP user or type a name.', false); return; }
+  const district_id = $('pl-a-district').value;
+  if (PL.assigns.some(a => a.district_id===district_id && user_id && a.user_id===user_id)){ say('pl-a-msg','That salesman is already in this district.', false); return; }
+  const share = $('pl-a-share').value;
+  const { error } = await db.schema('plan').from('assignments').insert({ plan_id: PL.plan.id, district_id, user_id, person_name: user_id?null:name, area: $('pl-a-area').value.trim()||null,
+    leader_user_id: $('pl-a-leader').value || PL.plan.head_user_id || null, share_pct: share===''?null:Number(share), sort_no: PL.assigns.length+1 });
+  if (error){ say('pl-a-msg','Could not add: '+error.message, false); return; }
+  plLoadPlan();
+}
+async function plSaveAssign(id, patch){
+  const { error } = await db.schema('plan').from('assignments').update(patch).eq('id', id);
+  if (error){ alert('Could not save: ' + error.message); return; }
+  Object.assign(PL.assigns.find(a=>a.id===id), patch);
+  if ('user_id' in patch || 'district_id' in patch) plLoadPlan(); else plRender();
+}
+async function plDelAssign(id){
+  const a = PL.assigns.find(x=>x.id===id);
+  if (!confirm('Remove ' + plAssignName(a) + ' from this plan?')) return;
+  const { error } = await db.schema('plan').from('assignments').delete().eq('id', id);
+  if (error){ alert('Could not remove: ' + error.message); return; }
+  plLoadPlan();
+}
+
+function plActualsHtml(C, edit){
+  const ro = edit ? '' : 'disabled';
+  return `
+    <p style="font-size:12px;color:#666;margin:0 0 8px;">Figures come from the <b>order book</b> automatically (orders of the parties each salesman owns, month of the order date, ${PL.plan.measure==='CASES'?'cases':'order value'}). Where a sale was not booked as an order, type the month's figure in — a typed figure replaces the order-book figure for that month and is shown in blue. Clear the box to go back to the order book.</p>
+    <div class="table-scroll"><table><thead><tr><th>#</th><th>District</th><th>Salesman</th>${PL_MONTHS.map(m=>`<th class="amount">${m}</th>`).join('')}<th class="amount">Total actual</th><th class="amount">Annual target</th><th>Achv</th><th class="amount">Gap</th></tr></thead><tbody>
+    ${C.A.map((a,i)=>`<tr><td>${i+1}</td><td>${esc(a.districtCode)} ${esc(a.districtName)}</td><td><b>${esc(plAssignName(a))}</b>${a.user_id?'':'<br><span style="font-size:10.5px;color:#999">no ERP user — type figures</span>'}</td>
+      ${a.actuals.map((v,m)=>`<td class="amount"><input type="number" step="any" min="0" value="${a.actualSrc[m]==='manual'?v:''}" placeholder="${Math.round(v*100)/100}" title="${a.actualSrc[m]==='manual'?'Typed in':'From the order book'}" ${ro} style="width:88px;text-align:right;${a.actualSrc[m]==='manual'?'color:#1c2455;font-weight:600;':''}" onchange="plSaveActual('${a.id}',${m+1},this.value)"></td>`).join('')}
+      <td class="amount" style="font-weight:700;color:#1a7f37">${plFmt(a.actual)}</td><td class="amount">${plFmt(a.annual)}</td><td>${plPct(a.actual,a.annual)}</td><td class="amount" style="color:${a.annual-a.actual>0?'#b3261e':'#1a7f37'}">${plFmt(a.annual-a.actual)}</td></tr>`).join('') || '<tr><td colspan="19" style="color:#777">No salesmen in the plan yet.</td></tr>'}
+    ${C.A.length?`<tr style="background:#faf6ea;font-weight:700;"><td colspan="3">Total</td>${C.actualM.map(v=>`<td class="amount">${plFmt(v)}</td>`).join('')}<td class="amount">${plFmt(C.actual)}</td><td class="amount">${plFmt(C.allocatedS)}</td><td>${plPct(C.actual,C.allocatedS)}</td><td class="amount">${plFmt(C.allocatedS-C.actual)}</td></tr>`:''}
+    </tbody></table></div>`;
+}
+async function plSaveActual(assignment_id, month_no, v){
+  const P = db.schema('plan');
+  const { error } = (v === '' || v == null)
+    ? await P.from('actuals').delete().eq('assignment_id', assignment_id).eq('month_no', month_no)
+    : await P.from('actuals').upsert({ assignment_id, month_no, amount: Number(v)||0 }, { onConflict: 'assignment_id,month_no' });
+  if (error){ alert('Could not save: ' + error.message); return; }
+  PL.actuals = PL.actuals.filter(x => !(x.assignment_id===assignment_id && x.month_no===month_no));
+  if (v !== '' && v != null) PL.actuals.push({ assignment_id, month_no, amount: Number(v)||0 });
+  plRender();
+}
+
+function plOrgHtml(C){
+  const head = plUserName(PL.plan.head_user_id) || 'Marketing head';
+  const leaders = {}; for (const a of C.A){ const k = a.leader_user_id || '__head'; (leaders[k] ??= []).push(a); }
+  const block = (title, rows, tgt, act) => `<div class="card" style="margin:8px 0 0 24px;"><div style="font-weight:700;">${title}</div>
+    <div style="font-size:12px;color:#777;margin:2px 0 6px;">${rows.length} salesm${rows.length===1?'an':'en'} · target ${plFmt(tgt)} · actual ${plFmt(act)} · ${plPct(act,tgt)}</div>
+    ${rows.map(a=>`<div style="margin-left:22px;padding:4px 0;border-top:1px solid #f0ead8;font-size:13px;">👤 <b>${esc(plAssignName(a))}</b> — ${esc(a.districtCode)} ${esc(a.districtName)}${a.area?' · '+esc(a.area):''} <span style="color:#777">· target ${plFmt(a.annual)} · actual ${plFmt(a.actual)} · ${plPct(a.actual,a.annual)}</span></div>`).join('')}</div>`;
+  return `
+    <p style="font-size:12px;color:#666;margin:0 0 8px;">Marketing head → team leaders → salesmen (one district each, or several). Who reports to whom is set on the Team tab.</p>
+    <div class="card"><div style="font-weight:700;font-size:15px;">🏢 ${esc(head)} — Marketing head</div>
+      <div style="font-size:12px;color:#777;">${C.D.length} districts · ${C.A.length} salesmen · target ${plFmt(C.total)} · actual ${plFmt(C.actual)} · ${plPct(C.actual,C.total)}</div>
+      ${Object.entries(leaders).map(([k,rows])=>{ const t = rows.reduce((s,a)=>s+a.annual,0), ac = rows.reduce((s,a)=>s+a.actual,0);
+        return block(k==='__head' ? '↳ Reporting directly to the head' : '👔 ' + esc(plUserName(k)||'Team leader') + ' — team leader', rows, t, ac); }).join('') || '<p style="font-size:12px;color:#777;margin:8px 0 0;">No salesmen yet.</p>'}
+    </div>`;
+}
+
 </script>
 </body>
 <!-- deploy: publish v18 modules 14-17 -->
