@@ -592,7 +592,8 @@
     </div>
     <label>Email</label><input type="text" id="pe-email">
     <label>Salesperson (owner)</label><select id="pe-owner"></select>
-    <label>Territory</label><select id="pe-territory"></select>
+    <label>Territory</label><select id="pe-territory" onchange="peTerrChange()"></select>
+    <input type="text" id="pe-territory-new" class="hidden" placeholder="Type the new territory, e.g. Panvel to Pen" style="margin-top:6px;">
     <div class="switch"><input type="checkbox" id="pe-active" checked><span>Active</span></div>
     <div class="row2" style="margin-top:16px;">
       <button class="btn ghost" onclick="closeSheet('party-overlay')">Cancel</button>
@@ -1577,21 +1578,41 @@ function openPartyEdit(p, kind){
   $('pe-gstin').value = p?.gstin||''; $('pe-contact').value = p?.contact_person||'';
   $('pe-phone').value = p?.phone||''; $('pe-email').value = p?.email||'';
   $('pe-active').checked = p ? p.is_active : true;
-  $('pe-territory').innerHTML = '<option value="">\u2014 none \u2014</option>' + (M.terr||[]).filter(t=>t.is_active || (p&&p.territory_id===t.id)).map(t=>`<option value="${t.id}" ${p&&p.territory_id===t.id?'selected':''}>${esc(t.name)}${t.is_active?'':' (inactive)'}</option>`).join('');
+  $('pe-territory').innerHTML = '<option value="">\u2014 none \u2014</option>' +
+    (M.terr||[]).filter(t=>t.is_active || (p&&p.territory_id===t.id)).map(t=>`<option value="${t.id}" ${p&&p.territory_id===t.id?'selected':''}>${esc(t.name)}${t.is_active?'':' (inactive)'}</option>`).join('') +
+    '<option value="__new__">\u2795 Add a new territory\u2026</option>';
+  $('pe-territory-new').value = '';
+  peTerrChange();
   const owners = isDir() ? M.users : [{id:me.id, full_name:me.full_name}];
   $('pe-owner').innerHTML = owners.map(u=>`<option value="${u.id}" ${p&&p.owner_id===u.id?'selected':(!p&&u.id===me.id?'selected':'')}>${esc(u.full_name)}</option>`).join('');
   say('pe-msg','');
   $('party-overlay').classList.remove('hidden');
 }
+// Choosing "Add a new territory…" opens a box to type one that is not on the list.
+function peTerrChange(){
+  const box = $('pe-territory-new'); if (!box) return;
+  const adding = $('pe-territory').value === '__new__';
+  box.classList.toggle('hidden', !adding);
+  if (adding) setTimeout(()=>box.focus(), 40);
+}
 $('btn-save-party').onclick = async () => {
   const name = $('pe-name').value.trim();
   if (!name){ say('pe-msg','Name is required.',false); return; }
+  // a territory typed in by hand is created first, then used like any other
+  let terrId = $('pe-territory').value || null;
+  if (terrId === '__new__'){
+    const tname = $('pe-territory-new').value.trim();
+    if (!tname){ say('pe-msg','Please type the new territory name, or pick one from the list.',false); return; }
+    const { data: newId, error: tErr } = await db.schema('sales').rpc('add_territory', { p_name: tname });
+    if (tErr){ say('pe-msg','Could not add that territory: '+tErr.message,false); return; }
+    terrId = newId;
+  }
   const patch = {
     name, city: $('pe-city').value.trim()||null, credit_days: Number($('pe-credit').value)||0,
     license_no: $('pe-license').value.trim()||null, gstin: $('pe-gstin').value.trim()||null,
     contact_person: $('pe-contact').value.trim()||null, phone: $('pe-phone').value.trim()||null,
     email: $('pe-email').value.trim()||null, owner_id: $('pe-owner').value, is_active: $('pe-active').checked,
-    territory_id: $('pe-territory').value || null,
+    territory_id: terrId,
     party_type: $('pe-type') ? $('pe-type').value : 'DISTRIBUTOR'
   };
   let error;
@@ -1603,7 +1624,7 @@ $('btn-save-party').onclick = async () => {
     ({ error } = await db.schema('sales').from('parties').insert({ ...patch, code, state_id:'MH', created_by: me.id }));
   }
   if (error){ say('pe-msg','Save failed: '+error.message,false); return; }
-  closeSheet('party-overlay'); openParties();
+  closeSheet('party-overlay'); openParties();   // reloads the masters, so a new territory shows at once
 };
 
 /* ================= BRANDS & SKUs ================= */
