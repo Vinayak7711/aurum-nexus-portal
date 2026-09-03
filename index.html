@@ -7588,6 +7588,56 @@ function plRender(){
 }
 const plTile = (l,v,c) => `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11.5px;color:#777">${l}</div><div style="font-size:18px;font-weight:700;${c?'color:'+c:''}">${v}</div></div>`;
 
+
+/* ---------- the two dashboard charts (inline SVG, same numbers as the tables) ---------- */
+const PL_C_TGT = '#2f5aa8', PL_C_ACT = '#b8860b';
+function plNice(max){ if (max <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(max))); const f = max/p; const n = f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10; return n*p; }
+function plShort(v){ const a = Math.abs(v); if (a >= 1e7) return (v/1e7).toFixed(1).replace(/\.0$/,'')+' Cr'; if (a >= 1e5) return (v/1e5).toFixed(1).replace(/\.0$/,'')+' L'; if (a >= 1e3) return (v/1e3).toFixed(1).replace(/\.0$/,'')+' K'; return String(Math.round(v)); }
+function plTip(el, html){ let t = document.getElementById('pl-tip'); if (!t){ t = document.createElement('div'); t.id='pl-tip'; t.style.cssText='position:fixed;z-index:9999;background:#1a1a2e;color:#fff;font-size:12px;padding:6px 9px;border-radius:6px;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:260px;'; document.body.appendChild(t); }
+  if (!html){ t.style.display='none'; return; } t.innerHTML = html; t.style.display='block';
+  const r = el.getBoundingClientRect(); t.style.left = Math.min(window.innerWidth-270, r.left + r.width/2) + 'px'; t.style.top = (r.top - 8 - t.offsetHeight) + 'px'; }
+function plLegend(){ return `<div style="display:flex;gap:16px;justify-content:center;font-size:12px;color:#555;margin-top:6px;">
+  <span><span style="display:inline-block;width:18px;height:3px;background:${PL_C_TGT};vertical-align:middle;border-radius:2px;"></span> Target</span>
+  <span><span style="display:inline-block;width:18px;height:3px;background:${PL_C_ACT};vertical-align:middle;border-radius:2px;"></span> Actual</span></div>`; }
+
+// Monthly: company target vs actual, Apr..Mar — a two-line chart
+function plMonthlyChart(C){
+  const W = 640, H = 260, L = 56, R = 16, T = 18, B = 34;
+  const max = plNice(Math.max(...C.companyM, ...C.actualM, 1) * 1.08);
+  const x = i => L + (W-L-R) * (i + 0.5) / 12, y = v => T + (H-T-B) * (1 - v/max);
+  const ticks = [0,0.25,0.5,0.75,1].map(f => f*max);
+  const path = arr => arr.map((v,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)).join(' ');
+  const pts = (arr, col, label) => arr.map((v,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="4" fill="${col}" stroke="#fff" stroke-width="2"><title>${PL_MONTHS[i]} · ${label} ${plFmt(v)}</title></circle>`).join('');
+  return `<div class="card" style="padding:12px;"><div style="font-weight:700;font-size:14px;text-align:center;">Monthly: Target vs Actual</div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Monthly target versus actual">
+      ${ticks.map(t=>`<line x1="${L}" x2="${W-R}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="#e6e2d8" stroke-width="1"/><text x="${L-8}" y="${(y(t)+4).toFixed(1)}" text-anchor="end" font-size="11" fill="#777">${plShort(t)}</text>`).join('')}
+      ${PL_MONTHS.map((m,i)=>`<text x="${x(i).toFixed(1)}" y="${H-12}" text-anchor="middle" font-size="11" fill="#555">${m}</text>`).join('')}
+      <path d="${path(C.companyM)}" fill="none" stroke="${PL_C_TGT}" stroke-width="2.5" stroke-linejoin="round"/>
+      <path d="${path(C.actualM)}" fill="none" stroke="${PL_C_ACT}" stroke-width="2.5" stroke-linejoin="round"/>
+      ${pts(C.companyM, PL_C_TGT, 'target')}${pts(C.actualM, PL_C_ACT, 'actual')}
+      ${PL_MONTHS.map((m,i)=>`<rect x="${(x(i)-(W-L-R)/24).toFixed(1)}" y="${T}" width="${((W-L-R)/12).toFixed(1)}" height="${H-T-B}" fill="transparent"
+         onmousemove="plTip(this,'<b>${m}</b><br>Target ${plFmt(C.companyM[i]).replace(/'/g,'')}<br>Actual ${plFmt(C.actualM[i]).replace(/'/g,'')} · ${plPct(C.actualM[i],C.companyM[i])}')" onmouseleave="plTip(null)"/>`).join('')}
+    </svg>${plLegend()}</div>`;
+}
+// District: annual target vs actual YTD — grouped bars
+function plDistrictChart(C){
+  const n = C.D.length; if (!n) return '';
+  const W = 640, H = 260, L = 56, R = 16, T = 18, B = 44;
+  const max = plNice(Math.max(...C.D.map(d=>d.target), ...C.D.map(d=>d.actual), 1) * 1.08);
+  const gw = (W-L-R)/n, bw = Math.min(28, gw*0.32), y = v => T + (H-T-B) * (1 - v/max);
+  const ticks = [0,0.25,0.5,0.75,1].map(f => f*max);
+  const bar = (cx, v, col, tip) => { const h = Math.max(0, y(0)-y(v)); return `<rect x="${(cx-bw/2).toFixed(1)}" y="${y(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="${col}" onmousemove="plTip(this,'${tip}')" onmouseleave="plTip(null)"/>`; };
+  const lbl = name => name.length > 14 ? name.slice(0,13)+'…' : name;
+  return `<div class="card" style="padding:12px;"><div style="font-weight:700;font-size:14px;text-align:center;">District: Target vs Actual</div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="District annual target versus actual year to date">
+      ${ticks.map(t=>`<line x1="${L}" x2="${W-R}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="#e6e2d8" stroke-width="1"/><text x="${L-8}" y="${(y(t)+4).toFixed(1)}" text-anchor="end" font-size="11" fill="#777">${plShort(t)}</text>`).join('')}
+      ${C.D.map((d,i)=>{ const cx = L + gw*(i+0.5); const tipT = `<b>${esc(d.name).replace(/'/g,'')}</b><br>Annual target ${plFmt(d.target).replace(/'/g,'')}`, tipA = `<b>${esc(d.name).replace(/'/g,'')}</b><br>Actual YTD ${plFmt(d.actual).replace(/'/g,'')} · ${plPct(d.actual,d.target)}`;
+        return bar(cx - bw/2 - 1, d.target, PL_C_TGT, tipT) + bar(cx + bw/2 + 1, d.actual, PL_C_ACT, tipA) +
+          `<text x="${cx.toFixed(1)}" y="${H-26}" text-anchor="middle" font-size="11" fill="#555">${esc(d.code)}</text><text x="${cx.toFixed(1)}" y="${H-12}" text-anchor="middle" font-size="10.5" fill="#777">${esc(lbl(d.name))}</text>`; }).join('')}
+      <line x1="${L}" x2="${W-R}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="#bbb" stroke-width="1"/>
+    </svg>${plLegend()}</div>`;
+}
+
 function plDashHtml(C){
   const p = PL.plan;
   return `
@@ -7600,6 +7650,7 @@ function plDashHtml(C){
       ${plTile('Gap to target', plFmt(C.gap), C.gap>0?'#b3261e':'#1a7f37')}
     </div>
     <p style="font-size:12px;color:#777;margin:0 0 10px;">${esc(p.fy_label)} · Head: ${esc(plUserName(p.head_user_id)||'—')} · ${C.D.length} district${C.D.length===1?'':'s'} · ${C.A.length} salesm${C.A.length===1?'an':'en'}. Actuals come from the order book (orders of parties whose salesperson is that salesman), month by month, plus anything typed in under Monthly actuals.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">${plMonthlyChart(C)}${plDistrictChart(C)}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
     <div><h4 class="sec">District-wise</h4>
     <div class="table-scroll"><table><thead><tr><th>District</th><th class="amount">Annual target</th><th class="amount">Actual YTD</th><th>Achv</th><th class="amount">Gap</th></tr></thead><tbody>
