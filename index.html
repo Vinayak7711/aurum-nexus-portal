@@ -336,6 +336,7 @@
       <button class="chip" id="mt-batches" onclick="mfgTab('batches')">Batches &amp; QC</button>
       <button class="chip" id="mt-report" onclick="mfgTab('report')">Production report</button>
       <button class="chip" id="mt-rm" onclick="mfgTab('rm')">Raw material</button>
+      <button class="chip" id="mt-incoming" onclick="mfgTab('incoming')">📦 Incoming RM — receive &amp; QC</button>
       <button class="chip" id="pd-targets" onclick="prodTab('targets')">🎯 Targets &amp; completion</button>
       <button class="chip" id="pd-log" onclick="prodTab('log')">Update log</button>
     </div>
@@ -1946,7 +1947,7 @@ async function saveMcActual(structId){
 // targets tab, and an unawaited FG load would land in the body afterwards.
 async function openMfg(){ await loadMasters(); await mfgTab('fg'); show('mfg'); }
 async function mfgTab(which){
-  ['fg','batches','report','rm'].forEach(k => $('mt-'+k).classList.toggle('on', k===which));
+  ['fg','batches','report','rm','incoming'].forEach(k => $('mt-'+k).classList.toggle('on', k===which));
   ['targets','log'].forEach(k => $('pd-'+k).classList.remove('on'));   // the targets half steps aside
   $('prod-body').innerHTML = '';
   const B = $('mfg-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
@@ -2023,6 +2024,11 @@ async function mfgTab(which){
         || '<tr><td colspan="6" style="color:#777">No production recorded yet.</td></tr>'}
       </tbody></table></div>`;
     prodRepRender();
+    return;
+  }
+  if (which === 'incoming'){
+    if (!rmItems.length){ const { data: ri } = await MF.from('rm_items').select('*').eq('is_active', true).order('code'); rmItems = ri || []; }
+    B.innerHTML = await incomingRmHtml("mfgTab('incoming')") + '<div id="po-recv"></div><div id="po-msg"></div>';
     return;
   }
   if (which === 'rm'){
@@ -3111,6 +3117,70 @@ async function rmQuickAdd(backTab){
   const sel = $(backTab==='new' ? 'pol-item' : 'rql-item');
   if (sel && newId) sel.value = newId;
 }
+function canRecvRm(){ return canFinEdit() || canMfgAdd(); }
+// Incoming raw material — every open PO with what the vendor has dispatched, what is still to
+// be dispatched, what is on the way and what has already been received. Shared by
+// Purchase → Receipts & QC and Manufacturing → Incoming RM.
+async function incomingRmHtml(afterJs){
+  const G = db.schema('mfg');
+  const { data: rows, error } = await G.from('v_po_incoming').select('*').order('dispatched_at', {ascending:false, nullsFirst:false}).order('order_date', {ascending:false});
+  if (error) return `<div class="msg err">Could not load incoming material: ${esc(error.message)}</div>`;
+  const all = (rows||[]).filter(r => (r.category||'RM') === 'RM');
+  const disp = all.filter(r => r.status !== 'PLACED');
+  const placed = all.filter(r => r.status === 'PLACED');
+  const q = v => { const n = Number(v||0); return Number.isInteger(n) ? n : n.toFixed(2); };
+  const recvBtn = r => canRecvRm() ? `<button class="mini" style="font-weight:700;color:#0b57d0" onclick="poReceiveForm('${r.id}','${esc(r.po_no)}', ${esc(JSON.stringify(afterJs||''))})">Receive…</button>` : '';
+  const row = r => `<tr><td><b>${esc(r.po_no)}</b>${r.bill_to_mmc?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;">→ MMC</span>':''}</td>` +
+    `<td>${esc(r.vendor_name||'—')}</td>` +
+    `<td style="white-space:nowrap">${r.last_dispatch_date || (r.dispatched_at ? String(r.dispatched_at).slice(0,10) : '—')}${r.dispatch_refs?'<br><span style="font-size:11px;color:#777">'+esc(r.dispatch_refs)+'</span>':''}</td>` +
+    `<td class="amount">${q(r.ordered_qty)}</td>` +
+    `<td class="amount">${q(r.dispatched_qty)}</td>` +
+    `<td class="amount" style="font-weight:700;color:${Number(r.in_transit_qty)>0?'#0b57d0':'#777'}">${q(r.in_transit_qty)}</td>` +
+    `<td class="amount" style="color:${Number(r.awaiting_dispatch_qty)>0?'#b3261e':'#777'}">${q(r.awaiting_dispatch_qty)}</td>` +
+    `<td class="amount">${q(r.received_qty)}</td>` +
+    `<td><span style="color:${PO_COL[r.status]||'#333'};font-weight:600">${PO_LABEL[r.status]||r.status}</span></td>` +
+    `<td style="white-space:nowrap"><button class="mini" onclick="poView('${r.id}')">👁 View</button> ${recvBtn(r)}</td></tr>`;
+  const head = `<thead><tr><th>PO</th><th>Vendor</th><th>Dispatched on / LR</th><th class="amount">Ordered</th><th class="amount">Dispatched</th><th class="amount">To receive (in transit)</th><th class="amount">Pending at vendor</th><th class="amount">Received</th><th>Status</th><th></th></tr></thead>`;
+  return `
+    <h4 class="sec">Incoming raw material — dispatched by vendor, to be received &amp; inspected</h4>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Every purchase order the vendor has marked as dispatched (fully or partly). <b>To receive</b> is what is on the way; <b>Pending at vendor</b> is what the vendor has not yet dispatched. Click <b>Receive…</b> to record the material that actually arrived and its quality inspection — an order can be received in as many lots as the vendor sends.</p>
+    <div class="table-scroll"><table>${head}<tbody>${disp.map(row).join('') || '<tr><td colspan="10" style="color:#777">Nothing dispatched and waiting — when Accounts marks a PO as dispatched it appears here.</td></tr>'}</tbody></table></div>
+    <details style="margin:10px 0 14px;"><summary style="cursor:pointer;font-size:12.5px;color:#555;">Ordered but not yet dispatched by the vendor (${placed.length})</summary>
+    <div class="table-scroll" style="margin-top:6px;"><table>${head}<tbody>${placed.map(row).join('') || '<tr><td colspan="10" style="color:#777">None.</td></tr>'}</tbody></table></div></details>`;
+}
+// Vendor dispatch — full or part of the order. Accounts / Director.
+async function poDispatchForm(id, poNo){
+  const G = db.schema('mfg');
+  const { data: ls, error } = await G.from('v_po_line_status').select('*').eq('po_id', id);
+  if (error){ say('po-msg','Could not load: '+error.message,false); return; }
+  const q = v => { const n = Number(v||0); return Number.isInteger(n) ? n : n.toFixed(2); };
+  $('po-recv').innerHTML = `
+    <h4 class="sec" style="margin-top:16px;">Vendor dispatch against ${esc(poNo)}</h4>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Enter what the vendor has actually sent. Leave the full balance to mark the whole order dispatched, or reduce a line for a part dispatch — the remainder stays as <b>pending at vendor</b> and can be marked dispatched later.</p>
+    <div class="table-scroll"><table><thead><tr><th>Material</th><th class="amount">Ordered</th><th class="amount">Already dispatched</th><th class="amount">Received</th><th style="width:140px;">Dispatching now</th></tr></thead><tbody>
+    ${(ls||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};const bal=Number(l.awaiting_dispatch_qty);
+      return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${q(l.ordered_qty)}</td><td class="amount">${q(l.dispatched_qty)}</td><td class="amount">${q(l.received_qty)}</td>` +
+        `<td><input type="number" class="dsp-qty" data-item="${l.rm_item_id}" min="0" max="${bal}" step="any" value="${bal>0?q(bal):''}" ${bal>0?'':'disabled placeholder="fully dispatched"'} style="width:120px;"></td></tr>`;}).join('')}
+    </tbody></table></div>
+    <div class="row2c" style="margin-top:8px;">
+      <div><label>Dispatch date</label><input type="date" id="dsp-date" value="${calFmt(new Date())}"></div>
+      <div><label>LR / docket / vehicle no.</label><input type="text" id="dsp-ref" placeholder="e.g. LR 4521, MH-04-AB-1234"></div>
+    </div>
+    <label>Note</label><input type="text" id="dsp-note" placeholder="Transporter, expected arrival, anything the receiver should know">
+    <button class="btn gold" style="margin-top:10px;" onclick="poDispatchSave('${id}')">Mark dispatched</button>
+    <div id="dsp-msg"></div>`;
+  $('po-recv').scrollIntoView({behavior:'smooth'});
+}
+async function poDispatchSave(id){
+  const lines = [];
+  document.querySelectorAll('.dsp-qty').forEach(inp => { const q = Number(inp.value); if (q > 0) lines.push({ rm_item_id: inp.dataset.item, qty: q }); });
+  if (!lines.length){ say('dsp-msg','Enter a dispatched quantity on at least one line.',false); return; }
+  const { error } = await db.schema('mfg').rpc('po_dispatch', {
+    p_po: id, p_lines: lines, p_date: $('dsp-date').value || null,
+    p_ref: $('dsp-ref').value.trim() || null, p_note: $('dsp-note').value.trim() || null });
+  if (error){ say('dsp-msg','Could not record the dispatch: '+error.message,false); return; }
+  purchaseTab('pos');
+}
 const PO_COL = { PENDING_APPROVAL:'#b3261e', PLACED:'#b8860b', DISPATCHED:'#0b57d0', PARTIAL:'#b8860b', RECEIVED:'#1a7f37', CANCELLED:'#777' };
 const PO_LABEL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 async function purchaseTab(t){
@@ -3128,6 +3198,8 @@ async function purchaseTab(t){
             (fl||[]).forEach(f => { mmcBy[f.id] = f.bill_to_mmc; if (f.payment_terms) termsBy[f.id] = f.payment_terms; catBy[f.id] = f.category || 'RM'; }); } catch(e){ /* badge optional */ }
     }
     const posShown = window.poCatFilter ? pos.filter(p => (catBy[p.id]||'RM') === window.poCatFilter) : pos;
+    let incBy = {};
+    try { const { data: inc } = await G.from('v_po_incoming').select('id, dispatched_qty, awaiting_dispatch_qty, in_transit_qty'); (inc||[]).forEach(r => incBy[r.id] = r); } catch(e){}
     let amounts = {};
     if (canFin() && (pos||[]).length){
       const { data: lines } = await G.from('po_lines').select('id, po_id').in('po_id', pos.map(p=>p.id));
@@ -3146,15 +3218,16 @@ async function purchaseTab(t){
         <option value="OFFICE" ${window.poCatFilter==='OFFICE'?'selected':''}>Office &amp; admin only</option>
         <option value="SERVICES" ${window.poCatFilter==='SERVICES'?'selected':''}>Services only</option>
         <option value="OTHER" ${window.poCatFilter==='OTHER'?'selected':''}>Other only</option></select></div>
-      <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered / dispatched / received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
       ${posShown.map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}<br>${poCatTag(p.id, catBy[p.id])}</td><td>${esc(p.vendor_name||'—')}${termsBy[p.id]?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(termsBy[p.id].slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
-        `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
+        `<td style="white-space:nowrap">${Number(p.ordered_qty)} / <span style="color:#0b57d0" title="Dispatched by vendor">${Number((incBy[p.id]||{}).dispatched_qty ?? (p.status==='PLACED'?0:p.ordered_qty))}</span> / ${Number(p.received_qty)}${Number((incBy[p.id]||{}).awaiting_dispatch_qty||0)>0 && p.status!=='PLACED' ? `<br><span style="font-size:11px;color:#b3261e">${Number(incBy[p.id].awaiting_dispatch_qty)} pending at vendor</span>` : ''}</td>` +
         (canFin() ? `<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>` : '') +
         `<td><span style="color:${PO_COL[p.status]||'#333'};font-weight:600">${PO_LABEL[p.status]||p.status}</span></td>` +
         `<td><button class="mini" onclick="poView('${p.id}')" title="See the full order — before or after approval">👁 View</button> ${(p.status!=='PENDING_APPROVAL' ? `<button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ` : '') +
               (p.status==='PENDING_APPROVAL' && canFinApprove() ? `<button class="mini" onclick="poApprove('${p.id}')">Approve</button> ` : '') +
               (canFinEdit() ? (p.status==='PENDING_APPROVAL' ? `<button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
-              (p.status==='PLACED' ? `<button class="mini" onclick="poDispatch('${p.id}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
+              (p.status==='PLACED' ? `<button class="mini" onclick="poDispatchForm('${p.id}','${esc(p.po_no)}')">Mark dispatched</button> <button class="mini" onclick="poCancel('${p.id}')">Cancel</button> ` : '') +
+              (['DISPATCHED','PARTIAL'].includes(p.status) && Number((incBy[p.id]||{}).awaiting_dispatch_qty||0) > 0 ? `<button class="mini" onclick="poDispatchForm('${p.id}','${esc(p.po_no)}')" title="Vendor has sent part of the order — record the next lot">Dispatch more…</button> ` : '') +
               (['PLACED','DISPATCHED','PARTIAL'].includes(p.status) ? `<button class="mini" onclick="poReceiveForm('${p.id}','${esc(p.po_no)}')">Receive…</button>` : '') : '')} ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "purchaseTab('pos')")}</td></tr>`).join('')
         || '<tr><td colspan="8" style="color:#777">No open purchase orders — place one from the New PO tab, or see finished ones in PO history.</td></tr>'}
       </tbody></table></div>
@@ -3300,8 +3373,9 @@ async function purchaseTab(t){
     const poBy = {}; (pos||[]).forEach(p => poBy[p.id] = p);
     const uName = uid => { const u = (allUsers||[]).find(x=>x.id===uid); return u ? (u.full_name||u.email||'—') : '—'; };
     const AP = { YES:['Yes — as per PO','#1a7f37'], PARTIAL:['Partly','#b8860b'], NO:['No — deviation','#b3261e'] };
-    B.innerHTML = `
-      <h4 class="sec">Incoming raw-material receipts &amp; quality inspection</h4>
+    const incoming = await incomingRmHtml("purchaseTab('grn')");
+    B.innerHTML = incoming + `<div id="po-recv"></div><div id="po-msg"></div>
+      <h4 class="sec">Receipts recorded &amp; quality inspections</h4>
       <p style="font-size:12px;color:#555;">Every receipt recorded against a PO, with the receiver's inspection: whether the material and quantity match the PO, the inspection report, and quality remarks. Recorded from a PO's “Receive…” action.</p>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>As per PO</th><th>Qty OK</th><th>Inspection report</th><th>Quality remarks</th><th>Received by</th><th></th></tr></thead><tbody>
       ${(insp||[]).map(r=>{const po=poBy[r.po_id]||{};const ap=AP[r.as_per_po]||[r.as_per_po,'#333'];
@@ -3434,11 +3508,11 @@ async function poHistRun(){
       ${canFin()?`<div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Value received ₹ (incl. tax)</div><div style="font-size:20px;font-weight:700;">₹ ${inr(totVal)}</div></div>`:''}
       <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Cancelled</div><div style="font-size:20px;font-weight:700;color:#777">${rows.length-recd.length}</div></div>
     </div>
-    <div class="table-scroll"><table><thead><tr><th>PO</th><th>Party</th><th>Order date</th><th>Received on</th><th>Qty (ordered/received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
+    <div class="table-scroll"><table><thead><tr><th>PO</th><th>Party</th><th>Order date</th><th>Received on</th><th>Qty (ordered / dispatched / received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
     ${rows.map(p=>{const mt=meta[p.id]||{};
       return `<tr><td><b>${esc(p.po_no)}</b>${mt.bill_to_mmc?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor billed & delivered directly to MMC — material belongs to Aurum">→ MMC</span>':''}<br>${poCatTag(p.id, mt.category, 'hist')}</td>` +
         `<td>${esc(p.vendor_name||'—')}${mt.payment_terms?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(String(mt.payment_terms).slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${mt.received_at?String(mt.received_at).slice(0,10):'—'}</td>` +
-        `<td>${Number(p.ordered_qty)} / ${Number(p.received_qty)}</td>` +
+        `<td style="white-space:nowrap">${Number(p.ordered_qty)} / <span style="color:#0b57d0" title="Dispatched by vendor">${Number((incBy[p.id]||{}).dispatched_qty ?? (p.status==='PLACED'?0:p.ordered_qty))}</span> / ${Number(p.received_qty)}${Number((incBy[p.id]||{}).awaiting_dispatch_qty||0)>0 && p.status!=='PLACED' ? `<br><span style="font-size:11px;color:#b3261e">${Number(incBy[p.id].awaiting_dispatch_qty)} pending at vendor</span>` : ''}</td>` +
         (canFin()?`<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>`:'') +
         `<td><span style="color:${p.status==='RECEIVED'?'#1a7f37':'#777'};font-weight:600">${p.status}</span></td>` +
         `<td><button class="mini" onclick="poView('${p.id}')" title="See the full order">👁 View</button> <button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "poHistRun()")}</td></tr>`;}).join('')
@@ -3730,20 +3804,23 @@ async function poSetCat(id, cat, after){
   if (error){ alert('Could not change the category: '+error.message); return; }
   if (after === 'hist') poHistRun(); else purchaseTab('pos');
 }
-async function poDispatch(id){
-  const { error } = await db.schema('mfg').rpc('po_set_status', { p_po: id, p_status: 'DISPATCHED' });
-  if (error){ say('po-msg','Could not update: '+error.message,false); return; }
-  purchaseTab('pos');
-}
+async function poDispatch(id, poNo){ return poDispatchForm(id, poNo || ''); }
 async function poCancel(id){
   const { error } = await db.schema('mfg').rpc('po_set_status', { p_po: id, p_status: 'CANCELLED' });
   if (error){ say('po-msg','Could not cancel: '+error.message,false); return; }
   purchaseTab('pos');
 }
-async function poReceiveForm(id, poNo){
+async function poReceiveForm(id, poNo, afterJs){
+  window.__recvAfter = afterJs || "purchaseTab('grn')";
   const G = db.schema('mfg');
+  if (!rmItems.length){ const { data: ri } = await G.from('rm_items').select('*').eq('is_active', true).order('code'); rmItems = ri || []; }
   const { data: lines } = await G.from('po_lines').select('*').eq('po_id', id);
   const { data: recd } = await G.from('rm_receipts').select('rm_item_id, qty').eq('po_id', id);
+  const { data: lst } = await G.from('v_po_line_status').select('*').eq('po_id', id);
+  const lstBy = {}; (lst||[]).forEach(l => lstBy[l.rm_item_id] = l);
+  const anyDispatchRows = (lst||[]).some(l => Number(l.dispatched_qty) > 0 && Number(l.dispatched_qty) < Number(l.ordered_qty)) || (lst||[]).some(l => Number(l.awaiting_dispatch_qty) > 0);
+  const { data: dsp } = await G.from('po_dispatches').select('dispatch_date, ref_no, remarks, qty, rm_item_id').eq('po_id', id).order('dispatch_date');
+  const qf = v => { const n = Number(v||0); return Number.isInteger(n) ? n : n.toFixed(2); };
   let mmcPO = false, reqPO = false;
   try { const { data: pr } = await G.from('purchase_orders').select('bill_to_mmc').eq('id', id).maybeSingle(); mmcPO = !!(pr && pr.bill_to_mmc); } catch(e){}
   try { const { data: rq } = await G.from('rm_requests').select('id').eq('po_id', id).limit(1); reqPO = !!(rq && rq.length); } catch(e){}
@@ -3753,11 +3830,15 @@ async function poReceiveForm(id, poNo){
     <h4 class="sec" style="margin-top:16px;">Receive against ${esc(poNo)}</h4>
     ${mmcPO ? '<div class="msg ok" style="margin:6px 0;">This PO is billed &amp; delivered <b>directly to MMC</b> — so “Received at” below is preset to MMC. The material remains Aurum property; it will show under <b>At MMC (custody)</b>.</div>' : ''}
     ${!mmcPO && reqPO ? '<div class="msg ok" style="margin:6px 0;">This PO fulfils a <b>production material request</b> — so “Received at” below is preset to <b>MMC</b>: on recording, the request closes and the stock lands under <b>At MMC (custody)</b> for production. Change it to the company store if the material actually stayed with the office.</div>' : ''}
-    <div class="table-scroll"><table><thead><tr><th>Material</th><th class="amount">Ordered</th><th class="amount">Received</th><th class="amount">Pending</th><th style="width:130px;">Receive now</th></tr></thead><tbody>
-    ${(lines||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};const got=recdBy[l.rm_item_id]||0;const pend=Number(l.qty)-got;
-      return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${Number(l.qty)}</td><td class="amount">${got}</td><td class="amount">${pend}</td>` +
-        `<td><input type="number" class="rcv-qty" data-item="${l.rm_item_id}" min="0" max="${pend}" step="any" placeholder="0" style="width:110px;"></td></tr>`;}).join('')}
+    ${(dsp||[]).length ? `<div style="font-size:12px;color:#555;margin:4px 0 8px;"><b>Vendor dispatches:</b> ${(dsp||[]).map(d=>{const i=rmItems.find(x=>x.id===d.rm_item_id)||{};return esc(d.dispatch_date)+' — '+esc(i.code||'?')+' × '+qf(d.qty)+(d.ref_no?' ('+esc(d.ref_no)+')':'')+(d.remarks?' · '+esc(d.remarks):'');}).join('; ')}</div>` : ''}
+    <div class="table-scroll"><table><thead><tr><th>Material</th><th class="amount">Ordered</th><th class="amount">Dispatched by vendor</th><th class="amount">Pending at vendor<br><span style="font-weight:normal;font-size:10px;color:#999">(not yet dispatched)</span></th><th class="amount">Received so far</th><th class="amount">To receive<br><span style="font-weight:normal;font-size:10px;color:#999">(in transit)</span></th><th style="width:130px;">Receive now</th></tr></thead><tbody>
+    ${(lines||[]).map(l=>{const i=rmItems.find(x=>x.id===l.rm_item_id)||{};const st=lstBy[l.rm_item_id]||{};const got=recdBy[l.rm_item_id]||0;const pend=Number(l.qty)-got;
+      const dspq = st.dispatched_qty!=null ? Number(st.dispatched_qty) : Number(l.qty); const atVendor = st.awaiting_dispatch_qty!=null ? Number(st.awaiting_dispatch_qty) : 0;
+      const transit = st.in_transit_qty!=null ? Number(st.in_transit_qty) : pend;
+      return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${qf(l.qty)}</td><td class="amount">${qf(dspq)}</td><td class="amount" style="color:${atVendor>0?'#b3261e':'#777'}">${qf(atVendor)}</td><td class="amount">${qf(got)}</td><td class="amount" style="font-weight:700;color:${transit>0?'#0b57d0':'#777'}">${qf(transit)}</td>` +
+        `<td><input type="number" class="rcv-qty" data-item="${l.rm_item_id}" min="0" max="${pend}" step="any" placeholder="0" value="${transit>0?qf(transit):''}" style="width:110px;"></td></tr>`;}).join('')}
     </tbody></table></div>
+    <p style="font-size:11.5px;color:#777;margin:4px 0 0;">“Receive now” is pre-filled with the quantity in transit — correct it to what actually arrived. Anything still pending at the vendor stays on the order and can be received in a later lot.</p>
     <div class="row2c" style="margin-top:8px;">
       <div><label>Received at *</label><select id="rcv-dest">
         <option value="STORE" ${toMMC?'':'selected'}>Company / office store</option>
@@ -3819,7 +3900,7 @@ async function poReceiveSave(id){
     const { error: fErr } = await db.schema('mfg').from('rm_issues').insert(rows);
     if (fErr){ say('rcv-msg','Receipt saved, but the stock could not be moved to MMC custody: '+fErr.message+' — move it from Manufacturing @ MMC → Raw material instead.', false); return; }
   }
-  purchaseTab('grn');
+  try { eval(window.__recvAfter || "purchaseTab('grn')"); } catch(e){ purchaseTab('grn'); }
 }
 async function reqClose(id){
   if (!confirm('Close this material request? It will be marked FULFILLED and disappear from the open list.')) return;
