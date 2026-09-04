@@ -282,12 +282,14 @@
     </div>
     <div id="onb-body" class="hidden"></div>
     <div id="pm-sec-d">
+    <div class="pm-add hidden" style="margin:0 0 8px;"><button class="btn gold sm" onclick="openPartyEdit(null,'DISTRIBUTOR')">＋ Add distributor</button> <span style="font-size:11.5px;color:#777;">Formal applications (signed form) go through <b>Distributor applications</b>; use this for a direct entry.</span></div>
     <div class="table-scroll"><table>
       <thead><tr><th>Code</th><th>Name</th><th>District</th><th>Territory</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows"></tbody>
     </table></div>
     </div>
     <div id="pm-sec-v" class="hidden">
+    <div class="pm-add hidden" style="margin:0 0 8px;"><button class="btn gold sm" onclick="onbTab('vendors')">＋ Register vendor</button></div>
     <div class="table-scroll"><table>
       <thead><tr><th>Code</th><th>Name</th><th>District</th><th>GSTIN</th><th>Contact</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows-v"></tbody>
@@ -765,10 +767,29 @@ function show(view){
   for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
+  if (view === 'home' && me && me.id) refreshMe();   // pick up permission changes the Director made since sign-in
   window.scrollTo(0,0);
+}
+let __refreshingMe = false;
+async function refreshMe(){
+  if (__refreshingMe) return; __refreshingMe = true;
+  try {
+    const { data } = await db.schema('adm').from('users').select('*').eq('id', me.id).single();
+    if (data && (JSON.stringify(data.permissions_json||{}) !== JSON.stringify(me.permissions_json||{}) || data.role !== me.role || data.is_active !== me.is_active)){
+      me = data; drawModules(); applyDirOnly();
+    }
+  } catch(e){} finally { __refreshingMe = false; }
 }
 function closeSheet(id){ $(id).classList.add('hidden'); }
 function isDir(){ return me && me.role === 'DIRECTOR'; }
+// Party Master rights as ticked in the Control Panel ('party' row); Sales-admin keeps its old powers.
+function canPartyAct(a){
+  if (isDir()) return true;
+  const pj = (me && me.permissions_json) || {};
+  const p = pj.party || {};
+  return !!(p[a] || p.admin || (pj.sales||{}).admin);
+}
+function canPartyWrite(){ return canPartyAct('add') || canPartyAct('edit'); }
 function applyDirOnly(){
   document.querySelectorAll('.dir-only').forEach(el => el.classList.toggle('hidden', !isDir()));
 }
@@ -898,6 +919,16 @@ async function saveNewPassword(){
 db.auth.onAuthStateChange((event) => { if (event === 'SIGNED_IN' && !me) init(); });
 
 /* ---------------- home ---------------- */
+// A module row in the Control Panel grid saved with every box unticked is stored as
+// {view:false} and hidden for that person. Rows never saved stay visible, as before.
+const PERM_GRID_SKIP = ['control','rates','reports','purchase','mail','calendar','meetings','notif'];
+function modTicked(key){
+  if (isDir()) return true;
+  if (PERM_GRID_SKIP.includes(key) || key === 'acct') return true;   // Accounting follows the Finance boxes
+  const p = ((me && me.permissions_json) || {})[key];
+  if (!p) return true;                                   // never decided for this person — visible, as before
+  return !(p.view === false && !p.add && !p.edit && !p.admin);   // explicitly switched off in the Control Panel
+}
 function drawModules(){
   const grid = $('module-grid'); grid.innerHTML = '';
   for (const m of MODULES){
@@ -907,6 +938,7 @@ function drawModules(){
     if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS())) continue;
     if (m.fieldOnly && !(isDir() || window.__hasReports)) continue;
     if (m.docsOnly && !(isDir() || me?.permissions_json?.docs?.view || me?.permissions_json?.docs?.add || me?.permissions_json?.docs?.edit)) continue;
+    if (!modTicked(m.key)) continue;       // the Director has left every box for this module unticked
     if (!secAnyAllowed(m.key)) continue;   // every tab inside was taken away — hide the module itself
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
@@ -1276,6 +1308,12 @@ $('btn-save-user').onclick = async () => {
   document.querySelectorAll('#permgrid input[type=checkbox]').forEach(cb=>{
     if (cb.checked){ (perms[cb.dataset.mod] ??= {})[cb.dataset.act] = true; }
   });
+  // a module left with nothing ticked is switched OFF for this person (view:false) — so
+  // unticking everything really hides it, instead of silently meaning "no opinion"
+  for (const m of MODULES){
+    if (PERM_GRID_SKIP.includes(m.key) || m.key === 'acct') continue;
+    if (!perms[m.key]) perms[m.key] = { view: false };
+  }
   // section (tab) visibility — stored per module as sec:{tabId:true/false}
   const secOf = {};
   document.querySelectorAll('#secgrid input[type=checkbox]').forEach(cb=>{
@@ -1505,8 +1543,17 @@ async function openOrderDetail(id){
 }
 
 /* ================= PARTIES ================= */
+function pmCanEdit(p){
+  if (canPartyAct('edit')) return true;
+  const sp = (me && me.permissions_json && me.permissions_json.sales) || {};
+  return !!(sp.edit && p && p.owner_id === me.id);   // a salesman may edit his own parties
+}
 async function openParties(){
   await loadMasters();
+  if (canPartyWrite() && !M.users.length){
+    const u = await db.schema('adm').from('users').select('id, full_name').eq('is_active', true).is('deleted_at', null).order('full_name');
+    M.users = u.data||[];
+  }
   const tbD = $('party-rows'), tbV = $('party-rows-v'); tbD.innerHTML = ''; tbV.innerHTML = '';
   const ownerName = id => (M.users.find(u=>u.id===id)||{}).full_name || (id===me.id?'me':'—');
   let nD = 0, nV = 0;
@@ -1518,16 +1565,16 @@ async function openParties(){
       nV++;
       tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td><td>${esc(p.gstin||'—')}</td>` +
         `<td>${esc(p.contact_person||p.phone||'—')}</td><td>${p.is_active?'✔':'✖'}</td>` +
-        `<td style="white-space:nowrap"><button class="mini btn-edit">Edit</button> ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
-      tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
+        `<td style="white-space:nowrap">${pmCanEdit(p)?'<button class="mini btn-edit">Edit</button>':''} ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
+      if (tr.querySelector('.btn-edit')) tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
       tbV.appendChild(tr);
     } else {
       nD++;
       const tname = ((M.terr||[]).find(t=>t.id===p.territory_id)||{}).name;
       tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td><td>${esc(tname||'—')}</td>` +
         `<td>${esc(ownerName(p.owner_id))}</td><td>${p.is_active?'✔':'✖'}</td>` +
-        `<td style="white-space:nowrap"><button class="mini btn-edit">Edit</button> ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
-      tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
+        `<td style="white-space:nowrap">${pmCanEdit(p)?'<button class="mini btn-edit">Edit</button>':''} ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
+      if (tr.querySelector('.btn-edit')) tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
       tbD.appendChild(tr);
     }
   }
@@ -1553,8 +1600,9 @@ async function openParties(){
     $('party-count-r').textContent = nR;
     if (!nR) tbR.innerHTML = '<tr><td colspan="8" style="color:#777">No retailers yet — add them in Onboarding &amp; Vendors → 🏪 Retailers.</td></tr>';
   } catch(e){ tbR.innerHTML = '<tr><td colspan="8" style="color:#777">Retailer list is not available to you.</td></tr>'; }
-  // Onboarding (registration) tabs are for Directors; everyone sees the lists.
-  document.querySelectorAll('.onb-tab').forEach(el => el.classList.toggle('hidden', !isDir()));
+  // Onboarding (registration) tabs: Directors and anyone given add/edit on Party Master; everyone sees the lists.
+  document.querySelectorAll('.onb-tab').forEach(el => el.classList.toggle('hidden', !canPartyWrite()));
+  document.querySelectorAll('.pm-add').forEach(el => el.classList.toggle('hidden', !canPartyAct('add')));
   if (!$('onb-body').classList.contains('hidden')) { /* stay on the onboarding tab */ }
   else pmShow(['d','v','r'].find(k => $('pm-'+k).classList.contains('on')) || 'd');
   show('parties');
@@ -1585,7 +1633,9 @@ function openPartyEdit(p, kind){
     '<option value="__new__">\u2795 Add a new territory\u2026</option>';
   $('pe-territory-new').value = '';
   peTerrChange();
-  const owners = isDir() ? M.users : [{id:me.id, full_name:me.full_name}];
+  let owners = (isDir() || canPartyAct('edit')) && M.users.length ? M.users.slice() : [{id:me.id, full_name:me.full_name}];
+  if (p && p.owner_id && !owners.some(u=>u.id===p.owner_id)) owners.push({id:p.owner_id, full_name:'(current owner)'});
+  if (!owners.some(u=>u.id===me.id)) owners.push({id:me.id, full_name:me.full_name||me.email});
   $('pe-owner').innerHTML = owners.map(u=>`<option value="${u.id}" ${p&&p.owner_id===u.id?'selected':(!p&&u.id===me.id?'selected':'')}>${esc(u.full_name)}</option>`).join('');
   say('pe-msg','');
   $('party-overlay').classList.remove('hidden');
