@@ -3144,6 +3144,24 @@ async function reportsTab(t){
       if (!leaderIds.length) html += '<p style="font-size:12px;color:#b3261e;">No one has a team yet — set each salesman\'s "Reports to" in the Control Panel first.</p>';
     }
 
+    // ---- assign a target straight to one salesman (leader → his team; Director → anyone) ----
+    const myChain = isDir() ? (users||[]).filter(u => u.id !== me.id) : (window.__teamAll || []);
+    if (myChain.length){
+      html += `
+      <div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Assign a target to a salesman</h2>
+        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Pick one of ${isDir()?'the salespeople':'the salesmen who report to you'} and give him a target for a month (or a quarter). It appears at once as <b>My monthly target</b> in his field app, and under “All targets &amp; progress” below. Assigning again for the same period replaces the earlier figure.</p>
+        <div class="row2c">
+          <div><label>Salesman *</label><select id="at-user">${myChain.map(u=>`<option value="${u.id}">${esc(u.full_name)}${u.designation?' — '+esc(u.designation):''}${u.reports_to && u.reports_to!==me.id && byId[u.reports_to]?' (under '+esc(byId[u.reports_to].full_name)+')':''}</option>`).join('')}</select></div>
+          <div><label>Period type</label><select id="at-type" onchange="atPeriodKind()"><option value="MONTH">Monthly</option><option value="QUARTER">Quarterly</option></select></div>
+        </div>
+        <div class="row2c">
+          <div><label>Period *</label><input type="month" id="at-month" value="${monthLabelJS()}"><input type="text" id="at-quarter" class="hidden" value="${quarterLabelJS()}" placeholder="e.g. ${quarterLabelJS()}"></div>
+          <div><label>Target (cases) *</label><input type="number" id="at-cases" min="0" placeholder="e.g. 120"></div>
+        </div>
+        <button class="btn gold sm" style="margin-top:10px;" onclick="atSave()">Assign target</button>
+        <div id="at-msg"></div></div>`;
+    }
+
     // ---- the leader's own splitting desk ----
     const myTeam = teamMembers || [];
     if (myTeam.length && !isDir()){
@@ -3248,6 +3266,24 @@ function tgSplitSum(total){
   const el = $('sp-left'); if (!el) return;
   el.textContent = total - sum;
   el.style.color = sum > total ? '#b3261e' : (sum === total ? '#1a7f37' : '#1c2455');
+}
+function atPeriodKind(){
+  const q = $('at-type') && $('at-type').value === 'QUARTER';
+  if ($('at-month')) $('at-month').classList.toggle('hidden', q);
+  if ($('at-quarter')) $('at-quarter').classList.toggle('hidden', !q);
+}
+async function atSave(){
+  const uid = $('at-user').value, ty = $('at-type').value;
+  const per = ty === 'MONTH' ? ($('at-month').value || '').trim() : ($('at-quarter').value || '').trim().toUpperCase();
+  const cases = Number($('at-cases').value);
+  if (!uid){ say('at-msg','Choose the salesman.',false); return; }
+  if (!per){ say('at-msg','Choose the period.',false); return; }
+  if (!($('at-cases').value !== '' && cases >= 0)){ say('at-msg','Enter the target in cases.',false); return; }
+  const { error } = await db.schema('sales').rpc('assign_target', { p_user: uid, p_type: ty, p_period: per, p_cases: cases });
+  if (error){ say('at-msg','Could not assign: '+error.message,false); return; }
+  const name = $('at-user').selectedOptions[0]?.textContent || 'the salesman';
+  await reportsTab('targets');
+  if ($('at-msg')) say('at-msg', `Target of ${cases} cases for ${per} assigned to ${name}.`, true);
 }
 async function tgSplitSave(ty, per, total){
   const boxes = [...document.querySelectorAll('.sp-box')];
