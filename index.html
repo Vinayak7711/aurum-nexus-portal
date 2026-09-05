@@ -732,6 +732,22 @@ function secAnyAllowed(modKey){
   if (!list || !list.length) return true;
   return list.some(([id]) => secAllowed(modKey, id));
 }
+// "Explicit" ticks: once the Director has saved a section map for a module, a ticked
+// tab is shown even where an older role rule (Director-only, team-leader-only,
+// finance-only) would have hidden it. What the tab then shows is still decided
+// by the data rules — the tick opens the door, it does not hand over the data.
+function secExplicit(modKey, tabId){
+  if (!me || isDir()) return false;
+  const sec = ((me.permissions_json || {})[modKey] || {}).sec;
+  return !!(sec && typeof sec === 'object' && sec[tabId] === true);
+}
+function secAnyExplicit(modKey){
+  const list = SECTIONS[modKey];
+  if (!list || !list.length) return false;
+  return list.some(([id]) => secExplicit(modKey, id));
+}
+// Tabs that are Director-only by default (shown unticked for staff until the Director ticks them).
+const DIR_ONLY_TABS = ['kt-all','fld-salesmen','fld-creds','rt-rates','rt-struct','rt-out','rt-cm'];
 let __secBusy = false;
 function applySections(modKey){
   const list = SECTIONS[modKey];
@@ -741,6 +757,7 @@ function applySections(modKey){
     const el = $(id); if (!el) continue;
     const ok = secAllowed(modKey, id);
     if (!ok){ el.classList.add('hidden'); continue; }   // denied here; other rules may hide it too
+    if (secExplicit(modKey, id)){ el.classList.remove('hidden'); if (el.style.display === 'none') el.style.display = ''; }   // ticked by the Director — overrides role-based hiding
     if (!el.classList.contains('hidden')){ firstVisible = firstVisible || el; if (el.classList.contains('on')) active = el; }
   }
   // if the tab they are standing on is not theirs to see, move them to the first one that is
@@ -932,13 +949,14 @@ function modTicked(key){
 function drawModules(){
   const grid = $('module-grid'); grid.innerHTML = '';
   for (const m of MODULES){
-    if (m.dirOnly && !isDir()) continue;
-    if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view)) continue;
-    if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit)) continue;
-    if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS())) continue;
-    if (m.fieldOnly && !(isDir() || window.__hasReports)) continue;
-    if (m.docsOnly && !(isDir() || me?.permissions_json?.docs?.view || me?.permissions_json?.docs?.add || me?.permissions_json?.docs?.edit)) continue;
-    if (!modTicked(m.key)) continue;       // the Director has left every box for this module unticked
+    const forced = m.key !== 'control' && secAnyExplicit(m.key);   // the Director ticked a section of it for this person
+    if (m.dirOnly && !isDir() && !forced) continue;
+    if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view) && !forced) continue;
+    if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit) && !forced) continue;
+    if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS()) && !forced) continue;
+    if (m.fieldOnly && !(isDir() || window.__hasReports) && !forced) continue;
+    if (m.docsOnly && !(isDir() || me?.permissions_json?.docs?.view || me?.permissions_json?.docs?.add || me?.permissions_json?.docs?.edit) && !forced) continue;
+    if (!modTicked(m.key) && !forced) continue;   // the Director has left every box for this module unticked
     if (!secAnyAllowed(m.key)) continue;   // every tab inside was taken away — hide the module itself
     const el = document.createElement('div');
     el.className = 'mod' + (m.live ? '' : ' soon');
@@ -1286,7 +1304,9 @@ function openEdit(u){
   for (const m of MODULES){
     const list = SECTIONS[m.key];
     if (!list || !list.length) continue;
-    const sec = ((u.permissions_json||{})[m.key]||{}).sec || {};
+    const secSaved = ((u.permissions_json||{})[m.key]||{}).sec;
+    const sec = secSaved || {};
+    const defOn = id => secSaved ? sec[id] !== false : !(u.role !== 'DIRECTOR' && (DIR_ONLY_TABS.includes(id) || m.dirOnly));
     sg.insertAdjacentHTML('beforeend',
       `<div style="border:1px solid #e6e0d2;border-radius:8px;padding:8px 10px;margin-bottom:8px;">
          <div style="font-size:12.5px;font-weight:700;margin-bottom:4px;">${m.ico} ${esc(m.name)}
@@ -1294,7 +1314,7 @@ function openEdit(u){
            <a href="#" onclick="secAll('${m.key}',false);return false;" style="font-weight:normal;font-size:11px;color:#b3261e;margin-left:6px;">none</a></div>
          <div style="display:flex;gap:12px;flex-wrap:wrap;">` +
       list.map(([id,label])=>`<label style="font-weight:normal;font-size:12px;display:flex;gap:4px;align-items:center;">
-           <input type="checkbox" class="secbox-${m.key}" data-secmod="${m.key}" data-sec="${id}" ${sec[id]===false?'':'checked'}>${esc(label)}</label>`).join('') +
+           <input type="checkbox" class="secbox-${m.key}" data-secmod="${m.key}" data-sec="${id}" ${defOn(id)?'checked':''}>${esc(label)}</label>`).join('') +
       '</div></div>');
   }
   // ---- company mailboxes this person may send from ----
@@ -1319,10 +1339,10 @@ $('btn-save-user').onclick = async () => {
   document.querySelectorAll('#secgrid input[type=checkbox]').forEach(cb=>{
     (secOf[cb.dataset.secmod] ??= {})[cb.dataset.sec] = cb.checked;
   });
+  // Saved in full (true/false per tab) so that every tick is explicit: a ticked tab is
+  // shown to this person even where a role rule used to hide it; an unticked one is hidden.
   for (const [mod, sec] of Object.entries(secOf)){
-    const allOn = Object.values(sec).every(Boolean);
-    if (allOn){ if (perms[mod]) delete perms[mod].sec; }          // nothing restricted — keep it clean
-    else (perms[mod] ??= {}).sec = sec;
+    (perms[mod] ??= {}).sec = sec;
   }
   const patch = {
     full_name: $('edit-fullname').value.trim() || editing.full_name,
@@ -1855,11 +1875,11 @@ async function ratesTab(which){
       html += `<tr><td><b>${esc(s.sku_code)}</b></td>
         <td class="amount">${r?inr(r.rate_per_case):'<span style="color:#b3382c">not set</span>'}</td>
         <td>${r?r.effective_from:'—'}</td>
-        <td><div style="display:flex;gap:6px;">
+        <td>${isDir()?`<div style="display:flex;gap:6px;">
           <input type="number" id="nr-${s.id}" placeholder="₹/case" style="padding:7px;font-size:12px;">
           <input type="date" id="nd-${s.id}" style="padding:7px;font-size:12px;">
           <button class="mini" onclick="saveRate('${s.id}')">Set</button>
-        </div></td></tr>`;
+        </div>`:'<span style="font-size:11px;color:#999">set by the Director</span>'}</td></tr>`;
     }
     B.innerHTML = html + '</tbody></table></div><div id="rates-msg"></div>';
   }
@@ -4152,7 +4172,7 @@ async function acctTab(t){
   // Money owed TO us by distributors — the mirror image of Vendor dues. Same
   // screen the Director sees under Rates → Outstanding, reading the same views.
   if (t === 'recv'){
-    if (!canFin()){ B.innerHTML = '<div class="msg err">Distributor dues are visible to the Director and to Accounts (finance-view permission).</div>'; return; }
+    if (!canFin() && !secExplicit('acct','ac-recv')){ B.innerHTML = '<div class="msg err">Distributor dues are visible to the Director and to Accounts (finance-view permission).</div>'; return; }
     await recvLoad('acct-body');
     return;
   }
@@ -7309,7 +7329,7 @@ async function fieldTab(t){
   $('field-body').classList.remove('hidden');
   const B=$('field-body');
   if(t==='visits') return fieldLoadVisits();
-  if(t==='salesmen'){ if(!isDir()){ B.innerHTML='<div class="card" style="color:#777">Salesmen are managed by the Director only.</div>'; return; } return fieldLoadSalesmen(); }
+  if(t==='salesmen'){ if(!isDir()) return fieldLoadSalesmenRO(); return fieldLoadSalesmen(); }
   if(t==='creds'){ if(!isDir()){ B.innerHTML='<div class="card" style="color:#777">App credentials are issued by the Director only.</div>'; return; } return fieldLoadCreds(); }
 }
 async function salesmanApi(payload){
@@ -7318,6 +7338,17 @@ async function salesmanApi(payload){
   const j = await r.json().catch(()=>({error:'Bad response'}));
   if(!r.ok) throw new Error(j.error||'Failed');
   return j;
+}
+// Read-only view of the field salesmen for staff the Director has allowed onto this tab.
+async function fieldLoadSalesmenRO(){
+  const B=$('field-body'); B.innerHTML='<p style="color:#777">Loading…</p>';
+  const { data, error } = await db.schema('adm').from('users').select('id, full_name, phone, app_login_id, is_active, reports_to').not('app_login_id','is',null).is('deleted_at', null).order('full_name');
+  if (error){ B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`; return; }
+  const lead = id => { const u=(data||[]).find(x=>x.id===id); return u?u.full_name:'—'; };
+  B.innerHTML = `<p style="font-size:12px;color:#777;margin:0 0 8px;">Field-app salesmen. Adding salesmen, passwords and party assignments are done by the Director.</p>
+    <div class="table-scroll"><table><thead><tr><th>Name</th><th>Login ID</th><th>Phone</th><th>Reports to</th><th>Status</th></tr></thead><tbody>` +
+    ((data||[]).map(s=>`<tr${s.is_active?'':' style="opacity:.5"'}><td><b>${esc(s.full_name)}</b></td><td>${esc(s.app_login_id||'—')}</td><td>${esc(s.phone||'—')}</td><td>${esc(lead(s.reports_to))}</td><td>${s.is_active?'Active':'Disabled'}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#777">No salesmen yet.</td></tr>') +
+    '</tbody></table></div>';
 }
 async function fieldLoadSalesmen(){
   const B=$('field-body'); B.innerHTML='<p style="color:#777">Loading…</p>';
