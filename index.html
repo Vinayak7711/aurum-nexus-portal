@@ -2984,15 +2984,24 @@ async function ssSave(){
   srReload();
 }
 async function openReports(){
-  const { data: tm } = await db.schema('adm').from('users').select('id, full_name, designation').eq('reports_to', me.id).eq('is_active', true);
-  teamMembers = tm || [];
-  $('rp-team').classList.toggle('hidden', !(isDir() || teamMembers.length));
+  // Team = everyone who reports to me directly (for dividing targets) and, for viewing,
+  // the whole chain below me (a salesman under one of my leaders is still my team).
+  const { data: allU } = await db.schema('adm').from('users').select('id, full_name, designation, reports_to').eq('is_active', true).is('deleted_at', null);
+  const byLeader = {}; (allU||[]).forEach(u => { if (u.reports_to) (byLeader[u.reports_to] ??= []).push(u); });
+  teamMembers = (byLeader[me.id] || []).map(u => ({ id:u.id, full_name:u.full_name, designation:u.designation }));
+  const chain = []; const seen = new Set([me.id]);
+  const walk = id => (byLeader[id]||[]).forEach(u => { if (!seen.has(u.id)){ seen.add(u.id); chain.push(u); walk(u.id); } });
+  walk(me.id);
+  window.__teamAll = chain;
+  window.__hasReports = window.__hasReports || chain.length > 0;
+  const hasTeam = teamMembers.length || chain.length;
+  $('rp-team').classList.toggle('hidden', !(isDir() || hasTeam));
   // Targets: the Director hands each team leader a total; a leader divides his
   // total among his salesmen — so leaders see this tab too.
-  $('rp-targets').classList.toggle('hidden', !(isDir() || teamMembers.length));
-  $('rp-plan').classList.toggle('hidden', !(isDir() || teamMembers.length || !!(me?.permissions_json?.sales?.edit)));
+  $('rp-targets').classList.toggle('hidden', !(isDir() || hasTeam));
+  $('rp-plan').classList.toggle('hidden', !(isDir() || hasTeam || !!(me?.permissions_json?.sales?.edit)));
   // Field-visit tabs show for the Director and for anyone with a team reporting to them.
-  const canField = isDir() || !!window.__hasReports || teamMembers.length > 0;
+  const canField = isDir() || !!window.__hasReports || hasTeam > 0;
   document.querySelectorAll('.fld-tab').forEach(el => el.classList.toggle('hidden', !canField));
   reportsTab('today'); applyDirOnly(); show('reports');
 }
