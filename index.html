@@ -4554,6 +4554,16 @@ async function acctTab(t){
     const monthTot = rows.filter(r=>String(r.exp_date).slice(0,7)===ym).reduce((s,r)=>s+Number(r.amount),0);
     const CATS_EXP = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'];
     const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+    // open expense advances — bills can be booked against them instead of paying afresh
+    let advOpen = [];
+    try { const { data: av } = await A.from('v_advances').select('*').eq('adv_type','EXPENSE').eq('status','APPROVED').order('given_on');
+          advOpen = (av||[]).filter(a => Number(a.outstanding) > 0); } catch(e){}
+    window.__exAdvs = advOpen;
+    const advOpts = advOpen.map(a=>`<option value="${a.id}">${esc(a.adv_no)} — ${esc(a.staff_name||'')} — outstanding ₹ ${inr(a.outstanding)}</option>`).join('');
+    const advBy = {}; advOpen.forEach(a => advBy[a.id] = a); (rows||[]).forEach(r => { if (r.advance_id && !advBy[r.advance_id]) advBy[r.advance_id] = null; });
+    window.__exAdvNo = {};
+    try { const ids = [...new Set(rows.filter(r=>r.advance_id).map(r=>r.advance_id))];
+          if (ids.length){ const { data: an } = await A.from('advances').select('id, adv_no').in('id', ids); (an||[]).forEach(a => window.__exAdvNo[a.id] = a.adv_no); } } catch(e){}
     B.innerHTML = `
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Expenses this month</div><div style="font-size:20px;font-weight:700;">₹ ${inr(monthTot)}</div></div>
@@ -4563,7 +4573,12 @@ async function acctTab(t){
       <div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Post an expense</h2>
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there.</p>
         <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
-          <div><label>Category *</label><select id="ex-cat">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}</select></div></div>
+          <div><label>Category *</label><select id="ex-cat" onchange="acExpCatChange()">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}<option value="__ADV__">⇄ Settle staff expense advance (bills against advance given)</option></select></div></div>
+        <div id="ex-adv-wrap" class="hidden" style="margin-top:8px;border:1px solid #e6d9b0;background:#fdf9ee;border-radius:8px;padding:10px;">
+          <div class="row2c"><div><label>Advance to settle *</label><select id="ex-adv" onchange="acExpAdvPick()">${advOpts || '<option value="">— no open expense advances —</option>'}</select></div>
+            <div><label>Expense head *</label><select id="ex-head">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}</select></div></div>
+          <div id="ex-adv-note" style="font-size:12px;color:#7a6a4a;margin-top:6px;">No money moves — the bill is booked under the expense head above and reduces the staff member's outstanding advance. Each bill can be less than the advance; settle it in as many bills as needed.</div>
+        </div>
         <div class="row2c" style="margin-top:8px;"><div><label>Supplier invoice no.</label><input type="text" id="ex-inv" placeholder="As printed on the supplier's bill"></div>
           <div><label>Department</label><select id="ex-dept"><option value="">— none / general —</option>${['Office / Admin','Accounts','Sales','Marketing','Production / MMC','Purchase','HR','Director'].map(d=>`<option>${d}</option>`).join('')}</select></div></div>
         <h4 class="sec" style="margin-top:12px;">Bill items <span style="font-weight:normal;font-size:11px;color:#999">— one line per item; each can have its own HSN &amp; GST</span></h4>
@@ -4577,7 +4592,7 @@ async function acctTab(t){
           <div><label>Paid to</label><input type="text" id="ex-payee" placeholder="Who received the money"></div></div>
         <div id="ex-calc" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
         <label style="margin-top:8px;display:block;">Details</label><input type="text" id="ex-desc" placeholder="What this expense was for">
-        <div class="row2c" style="margin-top:8px;">
+        <div class="row2c" id="ex-paid-wrap" style="margin-top:8px;">
           <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='PETTY'?'none':'';">
             <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="PETTY">Petty cash box</option></select></div>
           <div id="ex-bank-wrap"><label>Bank account</label><select id="ex-bank">${bankOpts}</select></div>
@@ -4592,7 +4607,7 @@ async function acctTab(t){
         `<td class="amount" style="color:#1a7f37">${Number(r.gst_amount)>0?inr(r.gst_amount)+'<br><span style="font-size:10.5px;">'+((r.items&&r.items.length)?'(itemised)':'('+Number(r.gst_rate)+'%'+(r.hsn_code?' · HSN '+esc(r.hsn_code):'')+')')+'</span>':'—'}</td>` +
         `<td class="amount" style="color:#b8860b">${Number(r.tds_amount)>0?inr(r.tds_amount)+'<br><span style="font-size:10.5px;">('+Number(r.tds_rate)+'%)</span>':'—'}</td>` +
         `<td class="amount" style="font-weight:600;color:#b3261e">${inr(r.amount)}</td>` +
-        `<td>${r.mode!=='PETTY'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':'')}</td>` +
+        `<td>${r.mode==='ADVANCE'?'👤 Staff advance <span style="font-size:10.5px;color:#7a6a4a;font-weight:600;">('+esc((window.__exAdvNo||{})[r.advance_id]||'settled')+')</span>':(r.mode!=='PETTY'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':''))}</td>` +
         `<td style="white-space:nowrap"><button class="mini" onclick="acExpVoucher('${r.id}')" title="Print or save a PDF voucher for your physical records">🖨 Voucher</button> ${dirDelBtn('acct','expenses', r.id, r.exp_no, "acctTab('exp')")}</td></tr>`).join('')
         || '<tr><td colspan="10" style="color:#777">No expenses recorded yet.</td></tr>'}
       </tbody></table></div>`;
@@ -4643,7 +4658,7 @@ async function acctTab(t){
     const advRow = a => `<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${a.given_on}</td>` +
         `<td class="amount">${inr(a.amount)}</td><td class="amount">${inr(a.recovered)}</td><td class="amount" style="font-weight:700">${inr(a.outstanding)}</td>` +
         `<td><span style="color:${AC_ST[a.status]};font-weight:600;font-size:12px">${acLbl(a.status)}</span></td>` +
-        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${isDir()?`<button class="mini" title="Move to the other list (salary ⇄ expenses)" onclick="acAdvType('${a.id}','${(a.adv_type||'SALARY')==='EXPENSE'?'SALARY':'EXPENSE'}')">⇄ ${(a.adv_type||'SALARY')==='EXPENSE'?'To salary':'To expenses'}</button> <button class="mini" title="Record this advance against a different staff member" onclick="acAdvStaff('${a.id}','${esc(a.staff_name||'')}')">👤 Change staff</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`;
+        `<td style="white-space:nowrap">${a.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acAdvApprove('${a.id}',false)">Approve &amp; pay</button> <button class="mini" onclick="acAdvApprove('${a.id}',true)">Reject</button> `:''}${(a.adv_type||'SALARY')==='EXPENSE'&&a.status==='APPROVED'&&Number(a.outstanding)>0&&canFinEdit()?`<button class="mini" style="color:#0b57d0;font-weight:600" title="Book the staff member's bills against this advance" onclick="acExpSettle('${a.id}')">🧾 Settle by bill</button> `:''}${isDir()?`<button class="mini" title="Move to the other list (salary ⇄ expenses)" onclick="acAdvType('${a.id}','${(a.adv_type||'SALARY')==='EXPENSE'?'SALARY':'EXPENSE'}')">⇄ ${(a.adv_type||'SALARY')==='EXPENSE'?'To salary':'To expenses'}</button> <button class="mini" title="Record this advance against a different staff member" onclick="acAdvStaff('${a.id}','${esc(a.staff_name||'')}')">👤 Change staff</button> `:''}${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('adv')")}</td></tr>`;
     const advTable = (rows, empty) => `<div class="table-scroll"><table><thead><tr><th>No.</th><th>Staff</th><th>Given</th><th class="amount">Amount ₹</th><th class="amount">Recovered ₹</th><th class="amount">Outstanding ₹</th><th>Status</th><th></th></tr></thead><tbody>` +
         (rows.map(advRow).join('') || `<tr><td colspan="8" style="color:#555">${empty}</td></tr>`) +
         (rows.length ? `<tr style="background:#faf6ea;font-weight:700;"><td colspan="3">Total</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.amount||0),0))}</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.recovered||0),0))}</td><td class="amount">${inr(rows.reduce((s,a)=>s+Number(a.outstanding||0),0))}</td><td colspan="2"></td></tr>` : '') +
@@ -4793,7 +4808,7 @@ function inrWords(n){
 function acExpVoucher(id){
   const r = (window.__expRows||[]).find(x=>x.id===id);
   if (!r){ alert('Open the Expenses tab again and retry.'); return; }
-  const paidFrom = r.mode!=='PETTY' ? ('Bank — '+(r.bank?.name||'')+' ('+r.mode+')') : ('Petty cash box'+(r.petty?' — '+r.petty.pc_no+' ('+acLbl(r.petty.status)+')':''));
+  const paidFrom = r.mode==='ADVANCE' ? ('Settled against staff expense advance'+((window.__exAdvNo||{})[r.advance_id]?' '+window.__exAdvNo[r.advance_id]:'')+' — no fresh payment') : (r.mode!=='PETTY' ? ('Bank — '+(r.bank?.name||'')+' ('+r.mode+')') : ('Petty cash box'+(r.petty?' — '+r.petty.pc_no+' ('+acLbl(r.petty.status)+')':'')));
   const body = `
     <h1 style="text-align:center;">AURUM SPIRITS INDIA LIMITED</h1>
     <h2 style="text-align:center;">EXPENSE VOUCHER</h2>
@@ -4956,6 +4971,26 @@ function acExpCalc(){
     (gst > 0 ? ` + GST ₹ ${inr(gst)}` : '') + (rate > 0 ? ` − TDS ${rate}% (₹ ${inr(tds)})` : '') +
     ` = <b>Paid ₹ ${inr(paid)}</b> <span style="color:#999">· GST & TDS show in Purchase Tax</span>`;
 }
+function acExpCatChange(){
+  const adv = $('ex-cat') && $('ex-cat').value === '__ADV__';
+  if ($('ex-adv-wrap')) $('ex-adv-wrap').classList.toggle('hidden', !adv);
+  if ($('ex-paid-wrap')) $('ex-paid-wrap').classList.toggle('hidden', adv);
+  if (adv) acExpAdvPick();
+}
+function acExpAdvPick(){
+  const a = (window.__exAdvs||[]).find(x => x.id === ($('ex-adv') ? $('ex-adv').value : ''));
+  if (a && $('ex-payee') && !$('ex-payee').value.trim()) $('ex-payee').value = a.staff_name || '';
+  if ($('ex-adv-note')) $('ex-adv-note').innerHTML = a
+    ? `Settling <b>${esc(a.adv_no)}</b> given to <b>${esc(a.staff_name||'')}</b> on ${a.given_on} — outstanding <b>₹ ${inr(a.outstanding)}</b>. No money moves: the bill is booked under the expense head above and reduces this outstanding. A bill larger than the outstanding is refused; settle in as many bills as needed.`
+    : 'No money moves — the bill is booked under the expense head above and reduces the staff member\'s outstanding advance.';
+}
+// From the Advances tab: open the expense form with this advance preselected.
+async function acExpSettle(advId){
+  await acctTab('exp');
+  if ($('ex-cat')){ $('ex-cat').value = '__ADV__'; acExpCatChange(); }
+  if ($('ex-adv')){ $('ex-adv').value = advId; acExpAdvPick(); }
+  const card = $('ex-cat'); if (card) card.scrollIntoView({behavior:'smooth', block:'center'});
+}
 async function acExpenseAdd(){
   const items = [...(window.__exItems||[])];
   const p = acExpPendItem(); if (p) items.push(p);
@@ -4963,6 +4998,20 @@ async function acExpenseAdd(){
   if (items.some(it=>it.gst_rate < 0 || it.gst_rate > 100)){ say('ex-msg','GST % must be between 0 and 100.',false); return; }
   const rate = Number($('ex-tds')?.value) || 0;
   if (rate < 0 || rate >= 100){ say('ex-msg','TDS % must be between 0 and 100.',false); return; }
+  if ($('ex-cat').value === '__ADV__'){
+    const advId = $('ex-adv') ? $('ex-adv').value : '';
+    if (!advId){ say('ex-msg','Choose the advance this bill settles — there is no open expense advance to settle.',false); return; }
+    const { error: aErr } = await db.schema('acct').rpc('expense_settle_advance', {
+      p_advance: advId, p_date: $('ex-date').value || null, p_category: $('ex-head').value,
+      p_items: items, p_tds_rate: rate, p_dept: $('ex-dept')?.value || null,
+      p_invoice: $('ex-inv')?.value.trim() || null,
+      p_payee: $('ex-payee').value.trim() || null, p_desc: $('ex-desc').value.trim() || null });
+    if (aErr){ say('ex-msg','Could not settle: '+aErr.message,false); return; }
+    window.__exItems = [];
+    await acctTab('exp');
+    say('ex-msg','Bill booked against the advance — the outstanding advance has come down by the bill amount (see the Advances tab).', true);
+    return;
+  }
   const mode = $('ex-mode').value;
   const { error } = await db.schema('acct').rpc('expense_add', {
     p_date: $('ex-date').value || null, p_category: $('ex-cat').value,
