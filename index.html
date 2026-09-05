@@ -340,7 +340,7 @@
       <button class="chip" id="mt-rm" onclick="mfgTab('rm')">Raw material</button>
       <button class="chip" id="mt-incoming" onclick="mfgTab('incoming')">📦 Incoming RM — receive &amp; QC</button>
       <button class="chip" id="pd-targets" onclick="prodTab('targets')">🎯 Targets &amp; completion</button>
-      <button class="chip" id="pd-log" onclick="prodTab('log')">Update log</button>
+      <button class="chip" id="pd-log" onclick="prodTab('log')">🏭 Factory order list</button>
     </div>
     <div id="mfg-body"></div>
     <div id="prod-body"></div>
@@ -707,7 +707,7 @@ const SECTIONS = {
   salesrep: [['sr-dist','Distributor-wise (primary)'],['sr-ret','Retailer-wise (secondary)']],
   brand:    [],
   mfg:      [['mt-fg','FG stock'],['mt-batches','Batches & QC'],['mt-report','Production report'],['mt-rm','Raw material'],
-             ['pd-targets','Targets & completion'],['pd-log','Update log']],
+             ['pd-targets','Targets & completion'],['pd-log','Factory order list']],
   tasks:    [['kt-my','My tasks'],['kt-all','All tasks'],['kt-duties','Duties']],
   mkt:      [['mk-budget','Budget & utilisation'],['mk-spend','Spends'],['mk-requests','Budget requests'],['mk-schemes','Scheme master']],
   purchase: [['pu-pos','Purchase orders'],['pu-new','New PO'],['pu-req','Material requests'],
@@ -2123,6 +2123,138 @@ async function mfgTab(which){
 // Production now lives inside Manufacturing — this keeps every old entry point
 // (menus, links, deep links) working by opening the merged section on its tab.
 async function openProd(){ await openMfg(); await prodTab('targets'); }
+
+/* ---- Factory order list (Manufacturing → Factory order list) ----
+   Every approved distributor order as the factory sees it: what to fill, for whom,
+   at which MMC, with the production-side indent no., status and transporter quotes. */
+const FO_STATUS = { NOT_FILLED:['Not filled','#b3261e'], FILLED:['Filled','#b8860b'], IN_PRODUCTION:['In production','#0b57d0'], READY:['Ready for dispatch','#1a7f37'], DISPATCHED:['Dispatched','#555'] };
+const foWhen = ts => ts ? new Date(ts).toLocaleString('en-IN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+function foCanEdit(){ return isDir() || canMfgAdd() || !!(me?.permissions_json?.mfg?.edit) || canFinEdit(); }
+function foShowMoney(){ return isDir() || canFin(); }
+function foPackLabel(l){ return `${l.size_ml} ML ${esc(l.material||'')}`.trim(); }
+function foDetailsHtml(o){
+  const lines = o.lines || [];
+  const packs = []; lines.forEach(l => { const k = foPackLabel(l); if (!packs.includes(k)) packs.push(k); });
+  const brands = []; lines.forEach(l => { const k = l.brand || l.sku_code; if (!brands.includes(k)) brands.push(k); });
+  const cell = (b, pk) => lines.filter(l => (l.brand||l.sku_code)===b && foPackLabel(l)===pk).reduce((a,l)=>a+Number(l.cases||0),0);
+  const colTot = pk => lines.filter(l => foPackLabel(l)===pk).reduce((a,l)=>a+Number(l.cases||0),0);
+  const money = foShowMoney();
+  let h = `<table style="font-size:11.5px;border-collapse:collapse;min-width:260px;"><thead><tr><th style="padding:2px 6px;">Sr.</th><th style="padding:2px 6px;">Product</th>${packs.map(pk=>`<th style="padding:2px 6px;text-align:right;">${pk}</th>`).join('')}</tr></thead><tbody>`;
+  brands.forEach((b,i) => { h += `<tr><td style="padding:2px 6px;">${i+1}</td><td style="padding:2px 6px;"><b>${esc(b)}</b></td>${packs.map(pk=>`<td style="padding:2px 6px;text-align:right;">${cell(b,pk)||0}</td>`).join('')}</tr>`; });
+  h += `<tr style="border-top:1px solid #ccc;"><td></td><td style="padding:2px 6px;"><b>Total cases</b></td>${packs.map(pk=>`<td style="padding:2px 6px;text-align:right;"><b>${colTot(pk)}</b></td>`).join('')}</tr>`;
+  h += `</tbody></table>`;
+  const row = (k,v) => `<tr><th style="text-align:left;padding:2px 6px;font-weight:600;white-space:nowrap;">${k}</th><td style="padding:2px 6px;text-align:right;">${v}</td></tr>`;
+  h += `<table style="font-size:11.5px;border-collapse:collapse;margin-top:4px;">` +
+    row('Total cases', Number(o.total_cases||0)) +
+    (money ? row('Total case amount', '₹ '+inr(o.gross_total)) + row('Gross total', '<b>₹ '+inr(o.gross_total)+'</b>') +
+      (Number(o.total_excise)>0 ? row('Total excise', '₹ '+inr(o.total_excise)) : '') + (Number(o.total_vat)>0 ? row('Total VAT', '₹ '+inr(o.total_vat)) : '') : '') +
+    `</table>`;
+  return h;
+}
+function foListHtml(list, err){
+  const edit = foCanEdit(), money = foShowMoney();
+  const head = `<thead><tr><th>Sr.</th><th>Date</th><th>Order no.</th><th>Distributor (mobile) — district</th><th>MMC</th><th>Order details</th><th class="amount">Total case qty</th>${money?'<th class="amount">Gross total ₹</th>':''}<th>Indent no.</th><th>Status</th><th>Approved time</th><th>Transporter quotes</th><th>Action</th></tr></thead>`;
+  const rows = list.map((o,i) => {
+    const st = FO_STATUS[o.factory_status] || [o.factory_status,'#333'];
+    const quotes = Array.isArray(o.quotes) ? o.quotes : [];
+    const best = quotes.length ? Math.min(...quotes.map(q=>Number(q.amount||0))) : null;
+    return `<tr id="fo-row-${o.id}">
+      <td>${i+1}</td>
+      <td style="white-space:nowrap">${o.order_date}<br><span style="font-size:10.5px;color:#777">${foWhen(o.created_at).slice(11)}</span></td>
+      <td><b>${esc(o.so_no)}</b><br><span style="font-size:10.5px;color:${o.status==='DISPATCHED'||o.status==='DELIVERED'?'#1a7f37':'#0b57d0'}">${esc(o.status)}</span>${o.invoice_no?'<br><span style="font-size:10.5px;color:#777">Inv '+esc(o.invoice_no)+'</span>':''}</td>
+      <td>${esc(o.party_name)}${o.party_phone?' <span style="color:#777">('+esc(o.party_phone)+')</span>':''}${o.party_district?'<br><span style="font-size:11px;color:#555">— '+esc(o.party_district)+'</span>':''}</td>
+      <td>${esc(o.mmc_name||'—')}</td>
+      <td>${foDetailsHtml(o)}</td>
+      <td class="amount"><b>${Number(o.total_cases||0)}</b></td>
+      ${money?`<td class="amount">${inr(o.gross_total)}</td>`:''}
+      <td>${edit ? `<input type="text" value="${esc(o.indent_no||'')}" placeholder="Indent no." style="width:110px;padding:5px 7px;font-size:12px;" onchange="foSetIndent('${o.id}', this.value)">` : (esc(o.indent_no)||'—')}</td>
+      <td>${edit ? `<select style="width:auto;padding:5px 7px;font-size:12px;color:${st[1]};font-weight:600;" onchange="foSetStatus('${o.id}', this.value)">${Object.entries(FO_STATUS).map(([k,v])=>`<option value="${k}" ${k===o.factory_status?'selected':''}>${v[0]}</option>`).join('')}</select>` : `<span style="color:${st[1]};font-weight:600">${st[0]}</span>`}</td>
+      <td style="white-space:nowrap">${foWhen(o.approved_at)}${o.approved_by_name?'<br><span style="font-size:10.5px;color:#777">by '+esc(o.approved_by_name)+'</span>':''}</td>
+      <td style="text-align:center"><button class="mini" style="font-weight:700;color:${quotes.length?'#b3261e':'#777'};font-size:14px;" title="Transporter quotes" onclick="foQuotes('${o.id}')">${quotes.length}</button>${best!=null?'<br><span style="font-size:10.5px;color:#555">best ₹ '+inr(best)+'</span>':''}</td>
+      <td style="white-space:nowrap"><button class="mini" onclick="foView('${o.id}')" title="View / print the factory order">🔍 View</button> <button class="mini" onclick="foPrint('${o.id}')" title="Print">🖨</button> ${edit?`<button class="mini" onclick="foQuotes('${o.id}')" title="Transporter quotes">🚚</button>`:''}</td>
+    </tr>`;
+  }).join('');
+  window.__foRows = list;
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <h4 class="sec" style="margin:0;">Factory order list</h4>
+      <label style="font-size:12px;color:#555;display:flex;gap:6px;align-items:center;font-weight:normal;"><input type="checkbox" ${window.__foAll?'checked':''} onchange="window.__foAll=this.checked;prodTab('log')"> also show orders awaiting approval / cancelled</label>
+    </div>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Every approved distributor order, as the factory needs it: quantities by pack size, the MMC that fills it, the indent number, the factory status and the transporter quotes collected for it. Indent no. and status are saved as you type or change them.</p>
+    ${err ? `<div class="msg err">${esc(err)}</div>` : ''}
+    <div class="table-scroll"><table>${head}<tbody>${rows || `<tr><td colspan="13" style="color:#777">No approved orders yet — orders appear here the moment they are approved in Sales &amp; Orders.</td></tr>`}</tbody></table></div>
+    <div id="fo-panel"></div><div id="fo-msg"></div>`;
+}
+async function foSetIndent(id, v){
+  const { error } = await db.schema('mfg').rpc('factory_order_set', { p_order: id, p_indent: v || '' });
+  say('fo-msg', error ? 'Could not save the indent no.: '+error.message : 'Indent no. saved.', !error);
+}
+async function foSetStatus(id, v){
+  const { error } = await db.schema('mfg').rpc('factory_order_set', { p_order: id, p_status: v });
+  if (error){ say('fo-msg','Could not change the status: '+error.message,false); return; }
+  say('fo-msg','Status saved.', true);
+}
+function foQuotes(id){
+  const o = (window.__foRows||[]).find(x=>x.id===id); if (!o) return;
+  const quotes = Array.isArray(o.quotes) ? o.quotes : [];
+  const edit = foCanEdit();
+  $('fo-panel').innerHTML = `
+    <div class="card" style="margin-top:14px;max-width:720px;"><h2 style="font-size:15px;">Transporter quotes — ${esc(o.so_no)} <span style="font-weight:normal;font-size:12px;color:#777">${esc(o.party_name)} · ${Number(o.total_cases||0)} cases</span></h2>
+    <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>#</th><th>Transporter</th><th class="amount">Quote ₹</th><th>Note</th><th>Taken on</th><th></th></tr></thead><tbody>
+    ${quotes.map((q,i)=>`<tr><td>${i+1}</td><td><b>${esc(q.transporter)}</b></td><td class="amount">${inr(q.amount)}</td><td>${esc(q.note||'—')}</td><td style="font-size:11px;color:#777">${esc(q.on||'')}${q.by?' · '+esc(q.by):''}</td><td>${edit?`<button class="mini" onclick="foQuoteDel('${o.id}',${i})">Remove</button>`:''}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">No quotes yet.</td></tr>'}
+    </tbody></table></div>
+    ${edit ? `<h4 class="sec" style="margin-top:12px;">Add a quote</h4>
+    <div class="row2c"><div><label>Transporter *</label><input type="text" id="fq-name" placeholder="Transporter / vehicle owner"></div><div><label>Quote ₹ *</label><input type="number" id="fq-amt" min="0" step="any"></div></div>
+    <label style="margin-top:8px;display:block;">Note</label><input type="text" id="fq-note" placeholder="Vehicle type, loading, validity…">
+    <div style="margin-top:10px;"><button class="btn gold sm" onclick="foQuoteAdd('${o.id}')">Add quote</button> <button class="btn ghost sm" onclick="$('fo-panel').innerHTML=''">Close</button></div>` : `<div style="margin-top:10px;"><button class="btn ghost sm" onclick="$('fo-panel').innerHTML=''">Close</button></div>`}
+    <div id="fq-msg"></div></div>`;
+  $('fo-panel').scrollIntoView({behavior:'smooth', block:'center'});
+}
+async function foQuoteAdd(id){
+  const name = $('fq-name').value.trim(), amt = Number($('fq-amt').value);
+  if (!name){ say('fq-msg','Enter the transporter name.',false); return; }
+  if (!(amt >= 0) || $('fq-amt').value === ''){ say('fq-msg','Enter the quoted amount.',false); return; }
+  const { error } = await db.schema('mfg').rpc('factory_quote_add', { p_order: id, p_transporter: name, p_amount: amt, p_note: $('fq-note').value.trim() || null });
+  if (error){ say('fq-msg','Could not add: '+error.message,false); return; }
+  await prodTab('log'); foQuotes(id);
+}
+async function foQuoteDel(id, idx){
+  if (!confirm('Remove this quote?')) return;
+  const { error } = await db.schema('mfg').rpc('factory_quote_del', { p_order: id, p_idx: idx });
+  if (error){ say('fq-msg','Could not remove: '+error.message,false); return; }
+  await prodTab('log'); foQuotes(id);
+}
+function foOrderHtml(o){
+  const st = FO_STATUS[o.factory_status] || [o.factory_status,'#333'];
+  const quotes = Array.isArray(o.quotes) ? o.quotes : [];
+  return `<h1 style="text-align:center;">AURUM SPIRITS INDIA LIMITED</h1><h2 style="text-align:center;">FACTORY ORDER — ${esc(o.so_no)}</h2>
+    <table style="margin-top:10px;">
+      <tr><th style="width:30%;">Order date</th><td>${o.order_date} ${foWhen(o.created_at).slice(11)}</td></tr>
+      <tr><th>Distributor</th><td>${esc(o.party_name)}${o.party_phone?' ('+esc(o.party_phone)+')':''}${o.party_district?' — '+esc(o.party_district):''}</td></tr>
+      <tr><th>MMC</th><td>${esc(o.mmc_name||'—')}</td></tr>
+      <tr><th>Order status</th><td>${esc(o.status)}${o.approved_at?' · approved '+foWhen(o.approved_at)+(o.approved_by_name?' by '+esc(o.approved_by_name):''):''}</td></tr>
+      <tr><th>Indent no.</th><td>${esc(o.indent_no)||'—'}</td></tr>
+      <tr><th>Factory status</th><td>${st[0]}</td></tr>
+      ${o.remarks?`<tr><th>Remarks</th><td>${esc(o.remarks)}</td></tr>`:''}
+    </table>
+    <h3 style="margin-top:12px;">Order details</h3>
+    <table><thead><tr><th>#</th><th>Brand</th><th>SKU</th><th>Pack</th><th class="amount">Btls/case</th><th class="amount">Cases</th>${foShowMoney()?'<th class="amount">Rate/case ₹</th><th class="amount">Amount ₹</th>':''}</tr></thead><tbody>
+    ${(o.lines||[]).map((l,i)=>`<tr><td>${i+1}</td><td>${esc(l.brand||'')}</td><td>${esc(l.sku_code)}</td><td>${foPackLabel(l)}</td><td class="amount">${l.units_per_case}</td><td class="amount">${Number(l.cases)}</td>${foShowMoney()?`<td class="amount">${inr(l.rate)}</td><td class="amount">${inr(l.amount)}</td>`:''}</tr>`).join('')}
+    <tr class="tot"><td colspan="5"><b>Total</b></td><td class="amount"><b>${Number(o.total_cases||0)}</b></td>${foShowMoney()?`<td></td><td class="amount"><b>${inr(o.gross_total)}</b></td>`:''}</tr>
+    </tbody></table>
+    ${foShowMoney() && (Number(o.total_excise)>0 || Number(o.total_vat)>0) ? `<p style="font-size:12px;">Total excise: ₹ ${inr(o.total_excise)} · Total VAT: ₹ ${inr(o.total_vat)}</p>` : ''}
+    ${quotes.length ? `<h3 style="margin-top:12px;">Transporter quotes</h3><table><thead><tr><th>#</th><th>Transporter</th><th class="amount">Quote ₹</th><th>Note</th><th>Taken on</th></tr></thead><tbody>${quotes.map((q,i)=>`<tr><td>${i+1}</td><td>${esc(q.transporter)}</td><td class="amount">${inr(q.amount)}</td><td>${esc(q.note||'—')}</td><td>${esc(q.on||'')}</td></tr>`).join('')}</tbody></table>` : ''}
+    <p style="font-size:10.5px;color:#666;margin-top:26px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+}
+function foView(id){
+  const o = (window.__foRows||[]).find(x=>x.id===id); if (!o) return;
+  $('fo-panel').innerHTML = `<div class="card" style="margin-top:14px;max-width:820px;">${foOrderHtml(o)}<div style="margin-top:10px;"><button class="btn ghost sm" onclick="foPrint('${o.id}')">🖨 Print</button> <button class="btn ghost sm" onclick="$('fo-panel').innerHTML=''">Close</button></div></div>`;
+  $('fo-panel').scrollIntoView({behavior:'smooth', block:'start'});
+}
+function foPrint(id){
+  const o = (window.__foRows||[]).find(x=>x.id===id); if (!o) return;
+  printHtml('Factory order '+o.so_no, foOrderHtml(o));
+}
 async function prodTab(t){
   ['targets','log'].forEach(k => $('pd-'+k).classList.toggle('on', k===t));
   ['fg','batches','report','rm'].forEach(k => $('mt-'+k).classList.remove('on'));
@@ -2173,17 +2305,18 @@ async function prodTab(t){
   }
 
   if (t === 'log'){
+    const { data: fo, error: fErr } = await MF.rpc('factory_orders', { p_all: !!window.__foAll });
     const { data, error } = await MF.from('prod_updates')
       .select('*, target:target_id(period, sku_id)').order('created_at', {ascending:false}).limit(100);
-    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    if (fErr && error){ B.innerHTML = `<div class="msg err">${esc(fErr.message)}</div>`; return; }
     const skuCode = id => { const s = M.skus.find(x=>x.id===id); return s ? s.sku_code : '—'; };
-    B.innerHTML = `
-      <h4 class="sec">Completion updates (latest first)</h4>
-      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Month</th><th>SKU</th><th class="amount">Completed cases</th><th>Note</th></tr></thead><tbody>
+    B.innerHTML = foListHtml(fErr ? [] : (fo||[]), fErr ? fErr.message : null) + `
+      <details style="margin-top:18px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:#555;">Completion updates log (${(data||[]).length})</summary>
+      <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Date</th><th>Month</th><th>SKU</th><th class="amount">Completed cases</th><th>Note</th></tr></thead><tbody>
       ${(data||[]).map(u=>`<tr><td>${u.as_on}</td><td><b>${esc(u.target?.period||'—')}</b></td><td>${esc(skuCode(u.target?.sku_id))}</td>` +
         `<td class="amount"><b>${inr(u.completed_cases)}</b></td><td>${esc(u.note||'—')}</td></tr>`).join('')
         || '<tr><td colspan="5" style="color:#777">No completion updates yet.</td></tr>'}
-      </tbody></table></div>`;
+      </tbody></table></div></details>`;
     return;
   }
 }
