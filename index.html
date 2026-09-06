@@ -2074,11 +2074,12 @@ async function waSetupCheck(){
     const ok = c.token && c.phone_id && c.verify_token;
     const ph = waStatus.phone;
     const d = waStatus.drive || {};
+    const connectBtn = `<button class="mini" onclick="waDriveConnect()">${d.ok?'Re-connect':'Connect'} Google Drive</button>`;
     const driveLine = d.ok
-      ? `☁ Google Drive connected — media and monthly archives go to <b>${esc(d.root||'WhatsApp data')}</b> <button class="mini" onclick="waArchive()">Archive finished months to Drive now</button>`
-      : `<span style="color:#b3261e;">☁ Google Drive (vinayaks7711@gmail.com) not connected yet — ${esc(d.error||'')}${waStatus.sa_email?' · share the folder “WhatsApp data” with <b>'+esc(waStatus.sa_email)+'</b>':''}. WhatsApp files stay on Meta's servers until this is done.</span>`;
+      ? `☁ Google Drive connected — media and monthly archives go to <b>${esc(d.root||'WhatsApp data')}</b> <button class="mini" onclick="waArchive()">Archive finished months to Drive now</button> ${connectBtn}`
+      : `<span style="color:#b3261e;">☁ Google Drive not connected — ${esc(d.error||'')}.</span> ${(!waStatus.oauth_client||!waStatus.oauth_secret)?'<span style="font-size:11.5px;color:#777;">(needs the Google OAuth client ID in WhatsApp settings and the GDRIVE_OAUTH_CLIENT_SECRET secret in Supabase)</span>':connectBtn} <span style="font-size:11.5px;color:#777;">Sign in with <b>vinayaks7711@gmail.com</b> — files go only to the folder “WhatsApp data” in that Drive.</span>`;
     if (ok && ph && !waStatus.error){
-      $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · add the WA_WABA_ID secret to send templates'}<br><span style="font-size:12px;">${driveLine}</span><div id="wa-arch-msg"></div></div>`;
+      $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · set the WhatsApp Business Account ID in settings to send templates'}<br><span style="font-size:12px;">${driveLine}</span><div id="wa-arch-msg"></div></div>`;
       return;
     }
     const miss = ['token','phone_id','verify_token','waba_id','drive'].filter(k=>!c[k]).map(k=>({token:'WA_TOKEN secret',phone_id:'Phone number ID',verify_token:'Verify token',waba_id:'WhatsApp Business Account ID',drive:'GDRIVE_SA_JSON secret'})[k]);
@@ -2088,7 +2089,7 @@ async function waSetupCheck(){
         <li>In Meta Business → WhatsApp → <b>API setup</b>, note the <b>Phone number ID</b> and the <b>WhatsApp Business Account ID</b>, and create a permanent <b>System User access token</b> with <i>whatsapp_business_messaging</i> and <i>whatsapp_business_management</i>.</li>
         <li>Enter the <b>Phone number ID</b>, <b>WhatsApp Business Account ID</b> and a <b>verify token</b> (any word you choose) in the box below — they are saved in the ERP. Only the access token is a real secret: in Supabase → Edge Functions → <b>Secrets</b> add <code>WA_TOKEN</code> (optional <code>WA_APP_SECRET</code> from the Meta app for signature checks).</li>
         <li>In the Meta app → WhatsApp → <b>Configuration → Webhook</b>: Callback URL <code>${esc(waStatus.webhook_url||'')}</code>, Verify token = the same word as below, then subscribe to the <b>messages</b> field.</li>
-        <li><b>Google Drive storage — vinayaks7711@gmail.com</b> (WhatsApp files never sit on the ERP server): (a) signed in to Google as <b>vinayaks7711@gmail.com</b>, open <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> → create a project → <i>APIs &amp; Services → Enable</i> the <b>Google Drive API</b> → <i>IAM &amp; Admin → Service accounts → Create</i> → open it → <i>Keys → Add key → JSON</i>; paste the whole downloaded JSON file as the secret <code>GDRIVE_SA_JSON</code>. (b) In <a href="https://drive.google.com/" target="_blank" rel="noopener">drive.google.com</a> (same Gmail) create a folder named exactly <b>WhatsApp data</b> and <i>Share</i> it as Editor with the service account's e-mail${waStatus.sa_email?' — <b>'+esc(waStatus.sa_email)+'</b>':' (shown here once the secret is saved)'}. The ERP finds the folder by that name; photos, documents and voice notes go to <i>WhatsApp data / Media / &lt;number&gt;</i> as they arrive and each finished month's chat to <i>WhatsApp data / Archive</i> — nowhere else.</li>
+        <li><b>Google Drive storage — vinayaks7711@gmail.com</b> (WhatsApp files never sit on the ERP server): in <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud → APIs &amp; Services → Credentials</a> create an <b>OAuth client ID</b> (Web application) with redirect URI <code>${esc((waStatus.webhook_url||'').replace('wa-webhook','wa-gdrive-auth'))}?action=callback</code>; put the <b>Client ID</b> in the settings box below and the <b>Client secret</b> in Supabase as <code>GDRIVE_OAUTH_CLIENT_SECRET</code>. Then press <b>Connect Google Drive</b> and sign in as vinayaks7711@gmail.com. Photos, documents and voice notes go to <i>WhatsApp data / Media / &lt;number&gt;</i> as they arrive and each finished month's chat to <i>WhatsApp data / Archive</i> — nowhere else.</li>
         <li>Give your staff access in Control Panel → Users → <b>💬 WhatsApp Business</b> row (view = read only; add/edit = may reply).</li>
       </ol>
       <div id="wa-settings-box" style="margin-top:8px;"></div>
@@ -2098,7 +2099,7 @@ async function waSetupCheck(){
   } catch(e){ $('wa-setup').innerHTML = `<div class="msg err">Could not reach the WhatsApp service: ${esc(e.message)}</div>`; }
 }
 // Director-editable WhatsApp settings (non-secret): stored in wa.settings, read by the edge functions
-const WA_SETTING_KEYS = [['WA_PHONE_ID','Phone number ID','from Meta app → WhatsApp → API Setup'],['WA_WABA_ID','WhatsApp Business Account ID','same page'],['WA_VERIFY_TOKEN','Verify token','any word; type the same in Meta → Configuration → Webhook']];
+const WA_SETTING_KEYS = [['WA_PHONE_ID','Phone number ID','from Meta app → WhatsApp → API Setup'],['WA_WABA_ID','WhatsApp Business Account ID','same page'],['WA_VERIFY_TOKEN','Verify token','any word; type the same in Meta → Configuration → Webhook'],['GDRIVE_OAUTH_CLIENT_ID','Google OAuth client ID','Google Cloud → Credentials (ends with .apps.googleusercontent.com)']];
 async function waSettingsForm(){
   const box = $('wa-settings-box'); if (!box || !isDir()) return;
   let cur = {};
@@ -2109,6 +2110,11 @@ async function waSettingsForm(){
       ${WA_SETTING_KEYS.map(([k,l,h])=>`<label for="was-${k}">${l}<br><span style="font-size:11px;color:#888;">${h}</span></label><input id="was-${k}" value="${esc(cur[k]||'')}" style="font-family:monospace;">`).join('')}
     </div>
     <div style="margin-top:8px;"><button class="mini" onclick="waSettingsSave()">Save settings</button> <span id="was-msg" style="font-size:12px;"></span></div></div>`;
+}
+async function waDriveConnect(){
+  const t = (await db.auth.getSession()).data.session?.access_token;
+  if (!t){ alert('Sign in first'); return; }
+  location.href = FN_BASE + '/wa-gdrive-auth?action=start&t=' + encodeURIComponent(t);
 }
 async function waSettingsSave(){
   try {
@@ -2148,7 +2154,7 @@ function waRenderList(){
     <div onclick="waOpen('${c.id}')" style="padding:10px 12px;border-bottom:1px solid #f1ede4;cursor:pointer;background:${waCur===c.id?'#fdf6e3':'#fff'};">
       <div style="display:flex;justify-content:space-between;gap:6px;"><b style="font-size:13.5px;">${esc(c.name || waNum(c.wa_id))}</b><span style="font-size:11px;color:#999;white-space:nowrap;">${waWhen(c.last_msg_at)}</span></div>
       <div style="display:flex;justify-content:space-between;gap:6px;"><span style="font-size:12px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name?'<span style="color:#999">'+waNum(c.wa_id)+' · </span>':''}${esc(c.last_msg_preview||'')}</span>${c.unread?`<span style="background:#25d366;color:#fff;border-radius:10px;padding:0 7px;font-size:11px;font-weight:700;">${c.unread}</span>`:''}</div>
-    </div>`).join('') || `<p style="padding:14px;font-size:12.5px;color:#777;">${waContacts.length ? 'No match.' : 'No conversations yet. When someone messages the company WhatsApp number it appears here — or press ＋ to start one.'}</p>`;
+    </div>`).join('') || `<p style="padding:14px;font-size:12.5px;color:#777;">${waContacts.length ? 'No match for the search above. <button class="mini" onclick="$(\'wa-search\').value=\'\';waRenderList()">Show all conversations</button>' : 'No conversations yet. When someone messages the company WhatsApp number it appears here — or press ＋ to start one.'}</p>`;
 }
 async function waOpen(id){
   waCur = id; waRenderList();
@@ -2180,7 +2186,11 @@ async function waLoadThread(scroll){
     let body = esc(m.body||'').replace(/\n/g,'<br>');
     if (m.media_id){
       const isImg = (m.media_mime||'').startsWith('image/');
-      body = `<div id="wa-media-${m.id}"><button class="mini" onclick="waMedia('${m.id}','${m.media_id}','${m.drive_file_id||''}')">${isImg?'🖼 Show image':'📎 Open '+esc(m.media_name||m.msg_type)}</button>${m.drive_link?` <a href="${esc(m.drive_link)}" target="_blank" rel="noopener" class="mini" style="text-decoration:none;" title="Saved in Google Drive → WhatsApp data">☁ Drive</a>`:''}</div>` + (m.caption?`<div style="margin-top:4px;">${esc(m.caption)}</div>`:'');
+      const driveA = m.drive_link?` <a href="${esc(m.drive_link)}" target="_blank" rel="noopener" class="mini" style="text-decoration:none;" title="Saved in Google Drive → WhatsApp data">☁ Drive</a>`:'';
+      const cached = waMediaCache[m.id];
+      if (cached) body = `<div id="wa-media-${m.id}"><img src="${cached}" style="max-width:100%;max-height:360px;border-radius:8px;cursor:zoom-in;" onclick="window.open(this.src,'_blank')">${driveA}</div>`;
+      else body = `<div id="wa-media-${m.id}" data-auto="${isImg?1:0}" data-mid="${m.media_id}" data-did="${m.drive_file_id||''}"><button class="mini" onclick="waMedia('${m.id}','${m.media_id}','${m.drive_file_id||''}')">${isImg?'🖼 Show image':'📎 Open '+esc(m.media_name||m.msg_type)}</button>${driveA}</div>`;
+      body += (m.caption?`<div style="margin-top:4px;">${esc(m.caption)}</div>`:'');
     }
     if (m.msg_type === 'template') body = `<span style="font-size:11px;color:#7a6a4a;">Template · ${esc(m.template_name||'')}</span><br>` + body;
     const who = out ? `<span style="font-size:10.5px;color:#7a6a4a;">${esc(waUserName(m.sent_by))}</span>` : '';
@@ -2189,6 +2199,8 @@ async function waLoadThread(scroll){
       <div style="text-align:right;font-size:10.5px;color:#888;margin-top:2px;">${new Date(m.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})} ${tick(m)}${m.error_text?' <span style="color:#b3261e">'+esc(m.error_text)+'</span>':''}</div></div></div>`;
   }).join('') || '<p style="text-align:center;color:#777;font-size:12.5px;">No messages yet.</p>';
   if (scroll) $('wa-thread').scrollTop = $('wa-thread').scrollHeight;
+  // photos load by themselves (documents / audio on click)
+  document.querySelectorAll('#wa-thread [data-auto="1"]').forEach(el => { const id = el.id.replace('wa-media-',''); if (!waMediaCache[id] && !waMediaBusy[id]) waMedia(id, el.dataset.mid, el.dataset.did); });
   // 24-hour reply window
   const win = c.last_in_at ? (Date.now() - new Date(c.last_in_at).getTime()) : Infinity;
   const left = 24*3600*1000 - win;
@@ -2228,6 +2240,7 @@ async function waNewChat(){
   const name = (prompt('Name (optional):')||'').trim();
   const { data: id, error } = await db.schema('wa').rpc('upsert_contact', { p_wa_id: num, p_name: name || null });
   if (error){ alert('Could not add: ' + error.message); return; }
+  $('wa-search').value = '';
   await waLoadContacts(); waRenderList(); waOpen(id);
 }
 async function waRename(id){
@@ -2238,17 +2251,22 @@ async function waRename(id){
   if (error){ alert('Could not save: ' + error.message); return; }
   await waLoadContacts(); waRenderList(); waOpen(id);
 }
+const waMediaCache = {}, waMediaBusy = {};
 async function waMedia(msgId, mediaId, driveId){
   const box = $('wa-media-'+msgId); if (!box) return;
+  const driveA = box.querySelector('a') ? box.querySelector('a').outerHTML : '';
   box.innerHTML = '<span style="font-size:12px;color:#777;">Loading…</span>';
+  waMediaBusy[msgId] = true;
   try {
     const j = await waApi({ action:'media', media_id: mediaId, drive_file_id: driveId || null });
     const src = `data:${j.mime};base64,${j.data_b64}`;
-    if ((j.mime||'').startsWith('image/')) box.innerHTML = `<img src="${src}" style="max-width:100%;max-height:360px;border-radius:8px;cursor:zoom-in;" onclick="window.open(this.src,'_blank')">`;
-    else if ((j.mime||'').startsWith('audio/')) box.innerHTML = `<audio controls src="${src}" style="max-width:100%;"></audio>`;
+    const box2 = $('wa-media-'+msgId) || box;
+    if ((j.mime||'').startsWith('image/')){ waMediaCache[msgId] = src; box2.innerHTML = `<img src="${src}" style="max-width:100%;max-height:360px;border-radius:8px;cursor:zoom-in;" onclick="window.open(this.src,'_blank')">${driveA}`; waMediaBusy[msgId] = false; return; }
+    if ((j.mime||'').startsWith('audio/')) box.innerHTML = `<audio controls src="${src}" style="max-width:100%;"></audio>`;
     else if ((j.mime||'').startsWith('video/')) box.innerHTML = `<video controls src="${src}" style="max-width:100%;max-height:360px;border-radius:8px;"></video>`;
     else box.innerHTML = `<a href="${src}" download="${esc((waMsgs.find(m=>m.id===msgId)||{}).media_name||'file')}" class="mini" style="text-decoration:none;">⬇ Download file (${Math.round(j.size/1024)} KB)</a>`;
-  } catch(e){ box.innerHTML = `<span style="color:#b3261e;font-size:12px;">${esc(e.message)}</span>`; }
+  } catch(e){ box.innerHTML = `<span style="color:#b3261e;font-size:12px;">${esc(e.message)}</span> <button class="mini" onclick="waMedia('${msgId}','${mediaId}','${driveId||''}')">Retry</button>`; }
+  waMediaBusy[msgId] = false;
 }
 async function waTemplateForm(){
   if (!waCur) return;
