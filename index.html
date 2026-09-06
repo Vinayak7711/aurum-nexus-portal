@@ -475,6 +475,36 @@
       <p>Everyone in one place — vendors, distributors, employees and your personal contacts. Add details, sort them into groups, and never miss a birthday or anniversary.</p></div>
     <div id="contacts-body"></div>
   </section>
+  <!-- ============ WHATSAPP BUSINESS ============ -->
+  <section id="view-wa" class="hidden">
+    <div class="crumb" onclick="waLeave();show('home')">&larr; Back to Home</div>
+    <div class="welcome"><h2>WhatsApp Business Messenger</h2>
+      <p>Read and reply to WhatsApp messages sent to the company's WhatsApp Business number — distributors, vendors, retailers and customers — from inside the ERP. Every message is kept here, whoever answers it.</p></div>
+    <div id="wa-setup"></div>
+    <div id="wa-body" style="display:flex;gap:14px;align-items:stretch;min-height:520px;">
+      <div id="wa-left" style="flex:0 0 320px;max-width:45%;display:flex;flex-direction:column;border:1px solid #e6e0d2;border-radius:10px;background:#fff;overflow:hidden;">
+        <div style="padding:8px;border-bottom:1px solid #eee;display:flex;gap:6px;">
+          <input type="text" id="wa-search" placeholder="Search name or number" oninput="waRenderList()" style="flex:1;padding:8px 10px;font-size:13px;">
+          <button class="btn gold sm" onclick="waNewChat()" title="Start a new conversation">＋</button>
+        </div>
+        <div id="wa-list" style="flex:1;overflow:auto;"></div>
+      </div>
+      <div id="wa-right" style="flex:1;display:flex;flex-direction:column;border:1px solid #e6e0d2;border-radius:10px;background:#efe7dc;overflow:hidden;min-width:0;">
+        <div id="wa-head" style="padding:10px 14px;background:#fff;border-bottom:1px solid #eee;font-size:13px;color:#777;">Pick a conversation on the left, or start a new one.</div>
+        <div id="wa-thread" style="flex:1;overflow:auto;padding:14px;"></div>
+        <div id="wa-compose" class="hidden" style="background:#fff;border-top:1px solid #eee;padding:10px;">
+          <div id="wa-window" style="font-size:11.5px;color:#7a6a4a;margin-bottom:6px;"></div>
+          <div style="display:flex;gap:8px;align-items:flex-end;">
+            <textarea id="wa-text" rows="2" placeholder="Type a message… (Enter to send, Shift+Enter for a new line)" style="flex:1;font-family:inherit;font-size:13.5px;padding:9px 11px;border:1px solid #ddd;border-radius:10px;resize:vertical;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();waSend();}"></textarea>
+            <button class="btn gold sm" onclick="waSend()" style="padding:11px 16px;">Send</button>
+            <button class="btn ghost sm" onclick="waTemplateForm()" title="Send an approved template (needed when the customer has not written in the last 24 hours)">Template…</button>
+          </div>
+          <div id="wa-tpl"></div>
+          <div id="wa-msg"></div>
+        </div>
+      </div>
+    </div>
+  </section>
   <section id="view-docs" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Documents</h2>
@@ -689,6 +719,7 @@ const MODULES = [
   {key:'excise',  ico:'📜', name:'License & Renewal',desc:'Licences, permits, registrations, expiries', live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
   {key:'contacts',ico:'📇', name:'Contact Book',     desc:'Vendors, distributors, staff & personal contacts — with birthday reminders', live:true, open:()=>openContacts()},
+  {key:'wa',      ico:'💬', name:'WhatsApp Business', desc:'Read & reply to WhatsApp messages on the company number', live:true, waOnly:true, open:()=>openWa()},
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
 ];
 const PERM_ACTIONS = ['view','add','edit','admin'];
@@ -781,7 +812,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts'])
+  for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts','wa'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
   if (view === 'home' && me && me.id) refreshMe();   // pick up permission changes the Director made since sign-in
@@ -956,6 +987,7 @@ function drawModules(){
     if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS()) && !forced) continue;
     if (m.fieldOnly && !(isDir() || window.__hasReports) && !forced) continue;
     if (m.docsOnly && !(isDir() || me?.permissions_json?.docs?.view || me?.permissions_json?.docs?.add || me?.permissions_json?.docs?.edit) && !forced) continue;
+    if (m.waOnly && !waCan('view') && !forced) continue;
     if (!modTicked(m.key) && !forced) continue;   // the Director has left every box for this module unticked
     if (!secAnyAllowed(m.key)) continue;   // every tab inside was taken away — hide the module itself
     const el = document.createElement('div');
@@ -2010,6 +2042,207 @@ async function saveMcActual(structId){
   const { error } = await db.schema('sales').from('sku_structures')
     .update({ mc_actual: v===''?null:Number(v) }).eq('id', structId);
   if (error) say('rates-msg', error.message, false);
+}
+
+/* ================= WHATSAPP BUSINESS MESSENGER =================
+   Inbound messages arrive through the wa-webhook edge function into wa.messages;
+   replies go out through wa-api (which holds the Meta token — never the browser). */
+function waCan(a){ const p = (me && me.permissions_json && me.permissions_json.wa) || {}; return isDir() || !!(p[a] || p.admin); }
+function waCanSend(){ return isDir() || waCan('add') || waCan('edit'); }
+let waContacts = [], waCur = null, waTimer = null, waMsgs = [], waStatus = null;
+async function waApi(payload){
+  const t = await mailToken();
+  const r = await fetch(FN_BASE + '/wa-api', { method:'POST', headers:{ 'content-type':'application/json', authorization:'Bearer '+t }, body: JSON.stringify(payload) });
+  const j = await r.json().catch(()=>({ error:'Bad response from WhatsApp service' }));
+  if (!r.ok) throw new Error(j.error || 'WhatsApp service failed');
+  return j;
+}
+async function openWa(){
+  show('wa');
+  $('wa-setup').innerHTML = '';
+  await waLoadContacts();
+  waRenderList();
+  if (isDir()) waSetupCheck();
+  // keep the inbox fresh while it is open
+  clearInterval(waTimer); waTimer = setInterval(waPoll, 8000);
+}
+function waLeave(){ clearInterval(waTimer); waTimer = null; }
+async function waSetupCheck(){
+  try {
+    waStatus = await waApi({ action:'status' });
+    const c = waStatus.config || {};
+    const ok = c.token && c.phone_id && c.verify_token;
+    const ph = waStatus.phone;
+    if (ok && ph && !waStatus.error){
+      $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · add the WA_WABA_ID secret to send templates'}</div>`;
+      return;
+    }
+    const miss = ['token','phone_id','verify_token','waba_id'].filter(k=>!c[k]).map(k=>'WA_'+k.toUpperCase());
+    $('wa-setup').innerHTML = `<div class="card" style="margin-bottom:12px;border-color:#e6c97a;background:#fdf9ee;">
+      <h2 style="font-size:15px;">Connect the WhatsApp Business account <span style="font-weight:normal;font-size:12px;color:#777">(Director only — once)</span></h2>
+      <ol style="font-size:12.5px;color:#444;margin:6px 0 0 18px;line-height:1.6;">
+        <li>In Meta Business → WhatsApp → <b>API setup</b>, note the <b>Phone number ID</b> and the <b>WhatsApp Business Account ID</b>, and create a permanent <b>System User access token</b> with <i>whatsapp_business_messaging</i> and <i>whatsapp_business_management</i>.</li>
+        <li>In Supabase → Edge Functions → <b>Secrets</b>, add: <code>WA_TOKEN</code>, <code>WA_PHONE_ID</code>, <code>WA_WABA_ID</code>, and <code>WA_VERIFY_TOKEN</code> (any password-like phrase you choose; optional <code>WA_APP_SECRET</code> from the Meta app for signature checks).</li>
+        <li>In the Meta app → WhatsApp → <b>Configuration → Webhook</b>: Callback URL <code>${esc(waStatus.webhook_url||'')}</code>, Verify token = the same <code>WA_VERIFY_TOKEN</code>, then subscribe to the <b>messages</b> field.</li>
+        <li>Give your staff access in Control Panel → Users → <b>💬 WhatsApp Business</b> row (view = read only; add/edit = may reply).</li>
+      </ol>
+      <p style="font-size:12px;margin:8px 0 0;color:${miss.length?'#b3261e':'#1a7f37'};">${miss.length ? 'Not set yet: ' + miss.join(', ') : 'Secrets are set'}${waStatus.error ? ' · WhatsApp says: ' + esc(waStatus.error) : ''} <button class="mini" onclick="waSetupCheck()">Re-check</button></p></div>`;
+  } catch(e){ $('wa-setup').innerHTML = `<div class="msg err">Could not reach the WhatsApp service: ${esc(e.message)}</div>`; }
+}
+async function waLoadContacts(){
+  const { data, error } = await db.schema('wa').from('contacts').select('*').order('last_msg_at', { ascending:false, nullsFirst:false }).limit(500);
+  if (error){ $('wa-list').innerHTML = `<div class="msg err" style="margin:8px;">${esc(error.message)}</div>`; return; }
+  waContacts = data || [];
+}
+const waWhen = ts => { if (!ts) return ''; const d = new Date(ts), now = new Date();
+  return d.toDateString() === now.toDateString() ? d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}); };
+const waNum = n => { n = String(n||''); return n.startsWith('91') && n.length === 12 ? '+91 ' + n.slice(2,7) + ' ' + n.slice(7) : '+' + n; };
+function waRenderList(){
+  const q = ($('wa-search').value || '').trim().toLowerCase();
+  const list = waContacts.filter(c => !q || (c.name||'').toLowerCase().includes(q) || c.wa_id.includes(q.replace(/\D/g,'')));
+  $('wa-list').innerHTML = list.map(c => `
+    <div onclick="waOpen('${c.id}')" style="padding:10px 12px;border-bottom:1px solid #f1ede4;cursor:pointer;background:${waCur===c.id?'#fdf6e3':'#fff'};">
+      <div style="display:flex;justify-content:space-between;gap:6px;"><b style="font-size:13.5px;">${esc(c.name || waNum(c.wa_id))}</b><span style="font-size:11px;color:#999;white-space:nowrap;">${waWhen(c.last_msg_at)}</span></div>
+      <div style="display:flex;justify-content:space-between;gap:6px;"><span style="font-size:12px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name?'<span style="color:#999">'+waNum(c.wa_id)+' · </span>':''}${esc(c.last_msg_preview||'')}</span>${c.unread?`<span style="background:#25d366;color:#fff;border-radius:10px;padding:0 7px;font-size:11px;font-weight:700;">${c.unread}</span>`:''}</div>
+    </div>`).join('') || `<p style="padding:14px;font-size:12.5px;color:#777;">${waContacts.length ? 'No match.' : 'No conversations yet. When someone messages the company WhatsApp number it appears here — or press ＋ to start one.'}</p>`;
+}
+async function waOpen(id){
+  waCur = id; waRenderList();
+  const c = waContacts.find(x=>x.id===id); if (!c) return;
+  $('wa-head').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+    <div><b style="font-size:14px;color:#1a1a2e;">${esc(c.name || waNum(c.wa_id))}</b> <span style="color:#777">${c.name ? waNum(c.wa_id) : ''}</span></div>
+    <div>${waCanSend()?`<button class="mini" onclick="waRename('${c.id}')">✏️ Name</button>`:''} <button class="mini" onclick="waLoadThread(true)">↻</button></div></div>`;
+  $('wa-compose').classList.toggle('hidden', !waCanSend());
+  $('wa-tpl').innerHTML = ''; $('wa-msg').innerHTML = '';
+  await waLoadThread(true);
+  if (c.unread){ try { await db.schema('wa').rpc('mark_read', { p_contact: id }); c.unread = 0; waRenderList(); } catch(e){} }
+  // blue ticks for the customer — best effort, last inbound message
+  const lastIn = [...waMsgs].reverse().find(m=>m.direction==='IN' && m.wa_msg_id);
+  if (lastIn && waCanSend()) waApi({ action:'mark_read', wa_msg_id: lastIn.wa_msg_id }).catch(()=>{});
+}
+async function waLoadThread(scroll){
+  if (!waCur) return;
+  const { data, error } = await db.schema('wa').from('messages').select('*').eq('contact_id', waCur).order('ts').limit(400);
+  if (error){ $('wa-thread').innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  waMsgs = data || [];
+  const c = waContacts.find(x=>x.id===waCur) || {};
+  const tick = m => m.direction!=='OUT' ? '' : ({accepted:'🕓', sent:'✓', delivered:'✓✓', read:'<span style="color:#34b7f1">✓✓</span>', failed:'<span style="color:#b3261e">✗ failed</span>'}[m.status] || '');
+  let lastDay = '';
+  $('wa-thread').innerHTML = waMsgs.map(m => {
+    const day = new Date(m.ts).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+    const sep = day !== lastDay ? `<div style="text-align:center;margin:8px 0;"><span style="background:#fff;border-radius:8px;padding:2px 10px;font-size:11px;color:#777;">${day}</span></div>` : '';
+    lastDay = day;
+    const out = m.direction === 'OUT';
+    let body = esc(m.body||'').replace(/\n/g,'<br>');
+    if (m.media_id){
+      const isImg = (m.media_mime||'').startsWith('image/');
+      body = `<div id="wa-media-${m.id}"><button class="mini" onclick="waMedia('${m.id}','${m.media_id}')">${isImg?'🖼 Show image':'📎 Open '+esc(m.media_name||m.msg_type)}</button></div>` + (m.caption?`<div style="margin-top:4px;">${esc(m.caption)}</div>`:'');
+    }
+    if (m.msg_type === 'template') body = `<span style="font-size:11px;color:#7a6a4a;">Template · ${esc(m.template_name||'')}</span><br>` + body;
+    const who = out ? `<span style="font-size:10.5px;color:#7a6a4a;">${esc(waUserName(m.sent_by))}</span>` : '';
+    return sep + `<div style="display:flex;justify-content:${out?'flex-end':'flex-start'};margin:4px 0;"><div style="max-width:72%;background:${out?'#dcf8c6':'#fff'};border-radius:10px;padding:7px 10px;font-size:13.5px;box-shadow:0 1px 1px rgba(0,0,0,.08);">
+      ${who}<div>${body}</div>
+      <div style="text-align:right;font-size:10.5px;color:#888;margin-top:2px;">${new Date(m.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})} ${tick(m)}${m.error_text?' <span style="color:#b3261e">'+esc(m.error_text)+'</span>':''}</div></div></div>`;
+  }).join('') || '<p style="text-align:center;color:#777;font-size:12.5px;">No messages yet.</p>';
+  if (scroll) $('wa-thread').scrollTop = $('wa-thread').scrollHeight;
+  // 24-hour reply window
+  const win = c.last_in_at ? (Date.now() - new Date(c.last_in_at).getTime()) : Infinity;
+  const left = 24*3600*1000 - win;
+  $('wa-window').innerHTML = left > 0
+    ? `Reply window open — ${Math.floor(left/3600000)} h ${Math.floor((left%3600000)/60000)} min left (WhatsApp allows free-text replies for 24 hours after the customer's last message).`
+    : `<span style="color:#b3261e;">The customer has not written in the last 24 hours — WhatsApp only permits an approved <b>template</b> message now (use Template…). Free text works again once they reply.</span>`;
+}
+function waUserName(uid){ const u = (M.users||[]).find(x=>x.id===uid) || (allUsers||[]).find(x=>x.id===uid); return u ? u.full_name : (uid===me.id ? (me.full_name||'me') : 'ERP'); }
+async function waPoll(){
+  if ($('view-wa').classList.contains('hidden')){ waLeave(); return; }
+  const prevCount = waMsgs.length, prevLast = waMsgs.length ? waMsgs[waMsgs.length-1].status + waMsgs[waMsgs.length-1].id : '';
+  await waLoadContacts(); waRenderList();
+  if (waCur){
+    const before = JSON.stringify(waMsgs.map(m=>m.id+m.status));
+    await waLoadThread(false);
+    const after = JSON.stringify(waMsgs.map(m=>m.id+m.status));
+    if (after !== before && waMsgs.length > prevCount) $('wa-thread').scrollTop = $('wa-thread').scrollHeight;
+    const c = waContacts.find(x=>x.id===waCur);
+    if (c && c.unread){ try { await db.schema('wa').rpc('mark_read', { p_contact: waCur }); c.unread = 0; waRenderList(); } catch(e){} }
+  }
+}
+async function waSend(){
+  if (!waCur) return;
+  const text = $('wa-text').value.trim();
+  if (!text){ say('wa-msg','Type a message first.',false); return; }
+  $('wa-msg').innerHTML = '<span style="font-size:12px;color:#777;">Sending…</span>';
+  try {
+    await waApi({ action:'send_text', contact_id: waCur, text });
+    $('wa-text').value = ''; $('wa-msg').innerHTML = '';
+    await waLoadContacts(); waRenderList(); await waLoadThread(true);
+  } catch(e){ say('wa-msg', e.message, false); await waLoadThread(true); }
+}
+async function waNewChat(){
+  if (!waCanSend()){ alert('You can read WhatsApp messages but not send — ask the Director for add/edit on WhatsApp Business.'); return; }
+  const num = (prompt('WhatsApp number (with country code, e.g. 91 98765 43210):')||'').trim();
+  if (!num) return;
+  const name = (prompt('Name (optional):')||'').trim();
+  const { data: id, error } = await db.schema('wa').rpc('upsert_contact', { p_wa_id: num, p_name: name || null });
+  if (error){ alert('Could not add: ' + error.message); return; }
+  await waLoadContacts(); waRenderList(); waOpen(id);
+}
+async function waRename(id){
+  const c = waContacts.find(x=>x.id===id); if (!c) return;
+  const name = prompt('Name for ' + waNum(c.wa_id) + ':', c.name || '');
+  if (name === null) return;
+  const { error } = await db.schema('wa').from('contacts').update({ name: name.trim() || null }).eq('id', id);
+  if (error){ alert('Could not save: ' + error.message); return; }
+  await waLoadContacts(); waRenderList(); waOpen(id);
+}
+async function waMedia(msgId, mediaId){
+  const box = $('wa-media-'+msgId); if (!box) return;
+  box.innerHTML = '<span style="font-size:12px;color:#777;">Loading…</span>';
+  try {
+    const j = await waApi({ action:'media', media_id: mediaId });
+    const src = `data:${j.mime};base64,${j.data_b64}`;
+    if ((j.mime||'').startsWith('image/')) box.innerHTML = `<img src="${src}" style="max-width:100%;max-height:360px;border-radius:8px;cursor:zoom-in;" onclick="window.open(this.src,'_blank')">`;
+    else if ((j.mime||'').startsWith('audio/')) box.innerHTML = `<audio controls src="${src}" style="max-width:100%;"></audio>`;
+    else if ((j.mime||'').startsWith('video/')) box.innerHTML = `<video controls src="${src}" style="max-width:100%;max-height:360px;border-radius:8px;"></video>`;
+    else box.innerHTML = `<a href="${src}" download="${esc((waMsgs.find(m=>m.id===msgId)||{}).media_name||'file')}" class="mini" style="text-decoration:none;">⬇ Download file (${Math.round(j.size/1024)} KB)</a>`;
+  } catch(e){ box.innerHTML = `<span style="color:#b3261e;font-size:12px;">${esc(e.message)}</span>`; }
+}
+async function waTemplateForm(){
+  if (!waCur) return;
+  $('wa-tpl').innerHTML = '<p style="font-size:12px;color:#777;margin:8px 0 0;">Loading approved templates…</p>';
+  try {
+    const j = await waApi({ action:'templates' });
+    const tpls = j.templates || [];
+    if (!tpls.length){ $('wa-tpl').innerHTML = '<p style="font-size:12px;color:#b3261e;margin:8px 0 0;">No approved templates yet — create them in Meta Business → WhatsApp → Message templates.</p>'; return; }
+    window.__waTpls = tpls;
+    $('wa-tpl').innerHTML = `<div style="border:1px solid #e6d9b0;background:#fdf9ee;border-radius:8px;padding:10px;margin-top:8px;">
+      <div class="row2c"><div><label>Template</label><select id="wa-tpl-name" onchange="waTplPick()">${tpls.map((t,i)=>`<option value="${i}">${esc(t.name)} (${esc(t.language)})</option>`).join('')}</select></div><div id="wa-tpl-params"></div></div>
+      <div id="wa-tpl-preview" style="font-size:12.5px;color:#444;white-space:pre-wrap;margin-top:6px;"></div>
+      <div style="margin-top:8px;"><button class="btn gold sm" onclick="waTplSend()">Send template</button> <button class="btn ghost sm" onclick="$('wa-tpl').innerHTML=''">Cancel</button></div></div>`;
+    waTplPick();
+  } catch(e){ $('wa-tpl').innerHTML = `<p style="font-size:12px;color:#b3261e;margin:8px 0 0;">${esc(e.message)}</p>`; }
+}
+function waTplBody(t){ const b = (t.components||[]).find(c=>c.type==='BODY'); return b ? b.text : ''; }
+function waTplPick(){
+  const t = (window.__waTpls||[])[Number($('wa-tpl-name').value)]; if (!t) return;
+  const body = waTplBody(t); const n = (body.match(/\{\{\d+\}\}/g)||[]).length;
+  $('wa-tpl-params').innerHTML = n ? `<label>Fill in ${n} value${n>1?'s':''}</label>` + Array.from({length:n},(_,i)=>`<input type="text" class="wa-tpl-p" placeholder="{{${i+1}}}" oninput="waTplPreview()" style="margin-bottom:4px;">`).join('') : '<span style="font-size:11.5px;color:#777;">No fill-in values.</span>';
+  waTplPreview();
+}
+function waTplPreview(){
+  const t = (window.__waTpls||[])[Number($('wa-tpl-name').value)]; if (!t) return;
+  const vals = [...document.querySelectorAll('.wa-tpl-p')].map(i=>i.value);
+  $('wa-tpl-preview').textContent = waTplBody(t).replace(/\{\{(\d+)\}\}/g, (_,i)=> vals[Number(i)-1] || `{{${i}}}`);
+}
+async function waTplSend(){
+  const t = (window.__waTpls||[])[Number($('wa-tpl-name').value)]; if (!t) return;
+  const params = [...document.querySelectorAll('.wa-tpl-p')].map(i=>i.value.trim());
+  if (params.some(v=>!v)){ say('wa-msg','Fill in every template value first.',false); return; }
+  $('wa-msg').innerHTML = '<span style="font-size:12px;color:#777;">Sending…</span>';
+  try {
+    await waApi({ action:'send_template', contact_id: waCur, template: t.name, language: t.language, params, preview: $('wa-tpl-preview').textContent });
+    $('wa-tpl').innerHTML = ''; $('wa-msg').innerHTML = '';
+    await waLoadContacts(); waRenderList(); await waLoadThread(true);
+  } catch(e){ say('wa-msg', e.message, false); await waLoadThread(true); }
 }
 
 /* ================= MODULE 2: MANUFACTURING ================= */
