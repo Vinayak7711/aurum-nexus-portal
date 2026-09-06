@@ -2073,21 +2073,40 @@ async function waSetupCheck(){
     const c = waStatus.config || {};
     const ok = c.token && c.phone_id && c.verify_token;
     const ph = waStatus.phone;
+    const d = waStatus.drive || {};
+    const driveLine = d.ok
+      ? `☁ Google Drive connected — media and monthly archives go to <b>${esc(d.root||'WhatsApp data')}</b> <button class="mini" onclick="waArchive()">Archive finished months to Drive now</button>`
+      : `<span style="color:#b3261e;">☁ Google Drive not connected yet (${esc(d.error||'')}) — WhatsApp files stay on Meta's servers until the GDRIVE_SA_JSON secret is added.</span>`;
     if (ok && ph && !waStatus.error){
-      $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · add the WA_WABA_ID secret to send templates'}</div>`;
+      $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · add the WA_WABA_ID secret to send templates'}<br><span style="font-size:12px;">${driveLine}</span><div id="wa-arch-msg"></div></div>`;
       return;
     }
-    const miss = ['token','phone_id','verify_token','waba_id'].filter(k=>!c[k]).map(k=>'WA_'+k.toUpperCase());
+    const miss = ['token','phone_id','verify_token','waba_id','drive'].filter(k=>!c[k]).map(k=>k==='drive'?'GDRIVE_SA_JSON':'WA_'+k.toUpperCase());
     $('wa-setup').innerHTML = `<div class="card" style="margin-bottom:12px;border-color:#e6c97a;background:#fdf9ee;">
       <h2 style="font-size:15px;">Connect the WhatsApp Business account <span style="font-weight:normal;font-size:12px;color:#777">(Director only — once)</span></h2>
       <ol style="font-size:12.5px;color:#444;margin:6px 0 0 18px;line-height:1.6;">
         <li>In Meta Business → WhatsApp → <b>API setup</b>, note the <b>Phone number ID</b> and the <b>WhatsApp Business Account ID</b>, and create a permanent <b>System User access token</b> with <i>whatsapp_business_messaging</i> and <i>whatsapp_business_management</i>.</li>
         <li>In Supabase → Edge Functions → <b>Secrets</b>, add: <code>WA_TOKEN</code>, <code>WA_PHONE_ID</code>, <code>WA_WABA_ID</code>, and <code>WA_VERIFY_TOKEN</code> (any password-like phrase you choose; optional <code>WA_APP_SECRET</code> from the Meta app for signature checks).</li>
         <li>In the Meta app → WhatsApp → <b>Configuration → Webhook</b>: Callback URL <code>${esc(waStatus.webhook_url||'')}</code>, Verify token = the same <code>WA_VERIFY_TOKEN</code>, then subscribe to the <b>messages</b> field.</li>
+        <li><b>Google Drive storage</b> (so WhatsApp files never sit on the ERP server): in Google Cloud Console create a project → enable the <i>Google Drive API</i> → IAM → <b>Service account</b> → Keys → <i>Create new key (JSON)</i>. Paste the whole JSON file as the secret <code>GDRIVE_SA_JSON</code>, then share the Drive folder <a href="https://drive.google.com/drive/folders/${esc(waStatus.drive_folder||'')}" target="_blank" rel="noopener"><b>WhatsApp data</b></a> with the service account's e-mail (Editor). Photos, documents and voice notes are then copied to <i>WhatsApp data / Media / &lt;number&gt;</i> the moment they arrive, and each finished month's chat is written to <i>WhatsApp data / Archive</i>.</li>
         <li>Give your staff access in Control Panel → Users → <b>💬 WhatsApp Business</b> row (view = read only; add/edit = may reply).</li>
       </ol>
+      <p style="font-size:12px;margin:6px 0 0;">${driveLine}</p><div id="wa-arch-msg"></div>
       <p style="font-size:12px;margin:8px 0 0;color:${miss.length?'#b3261e':'#1a7f37'};">${miss.length ? 'Not set yet: ' + miss.join(', ') : 'Secrets are set'}${waStatus.error ? ' · WhatsApp says: ' + esc(waStatus.error) : ''} <button class="mini" onclick="waSetupCheck()">Re-check</button></p></div>`;
   } catch(e){ $('wa-setup').innerHTML = `<div class="msg err">Could not reach the WhatsApp service: ${esc(e.message)}</div>`; }
+}
+async function waArchive(){
+  if (!isDir()) return;
+  const prune = confirm('Write every finished month\'s WhatsApp messages to Google Drive → WhatsApp data / Archive (JSON + CSV)?\n\nPress OK to archive only.\nPress Cancel to stop.');
+  if (!prune) return;
+  const trim = confirm('Also remove archived messages older than 90 days from the ERP database (they stay in Drive)?\n\nOK = yes, trim the ERP copy · Cancel = keep everything in the ERP as well');
+  const box = $('wa-arch-msg'); if (box) box.innerHTML = '<span style="font-size:12px;color:#777;">Archiving…</span>';
+  try {
+    const j = await waApi({ action:'archive', prune: trim, keep_days: 90 });
+    const done = (j.archived||[]).map(a=>`${a.month}: ${a.messages} messages`).join(', ') || 'nothing new to archive';
+    if (box) box.innerHTML = `<div class="msg ok">Archived — ${esc(done)}${trim?` · ${j.pruned} old messages removed from the ERP`:''}.</div>`;
+    if (waCur) await waLoadThread(false);
+  } catch(e){ if (box) box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
 }
 async function waLoadContacts(){
   const { data, error } = await db.schema('wa').from('contacts').select('*').order('last_msg_at', { ascending:false, nullsFirst:false }).limit(500);
@@ -2136,7 +2155,7 @@ async function waLoadThread(scroll){
     let body = esc(m.body||'').replace(/\n/g,'<br>');
     if (m.media_id){
       const isImg = (m.media_mime||'').startsWith('image/');
-      body = `<div id="wa-media-${m.id}"><button class="mini" onclick="waMedia('${m.id}','${m.media_id}')">${isImg?'🖼 Show image':'📎 Open '+esc(m.media_name||m.msg_type)}</button></div>` + (m.caption?`<div style="margin-top:4px;">${esc(m.caption)}</div>`:'');
+      body = `<div id="wa-media-${m.id}"><button class="mini" onclick="waMedia('${m.id}','${m.media_id}','${m.drive_file_id||''}')">${isImg?'🖼 Show image':'📎 Open '+esc(m.media_name||m.msg_type)}</button>${m.drive_link?` <a href="${esc(m.drive_link)}" target="_blank" rel="noopener" class="mini" style="text-decoration:none;" title="Saved in Google Drive → WhatsApp data">☁ Drive</a>`:''}</div>` + (m.caption?`<div style="margin-top:4px;">${esc(m.caption)}</div>`:'');
     }
     if (m.msg_type === 'template') body = `<span style="font-size:11px;color:#7a6a4a;">Template · ${esc(m.template_name||'')}</span><br>` + body;
     const who = out ? `<span style="font-size:10.5px;color:#7a6a4a;">${esc(waUserName(m.sent_by))}</span>` : '';
@@ -2194,11 +2213,11 @@ async function waRename(id){
   if (error){ alert('Could not save: ' + error.message); return; }
   await waLoadContacts(); waRenderList(); waOpen(id);
 }
-async function waMedia(msgId, mediaId){
+async function waMedia(msgId, mediaId, driveId){
   const box = $('wa-media-'+msgId); if (!box) return;
   box.innerHTML = '<span style="font-size:12px;color:#777;">Loading…</span>';
   try {
-    const j = await waApi({ action:'media', media_id: mediaId });
+    const j = await waApi({ action:'media', media_id: mediaId, drive_file_id: driveId || null });
     const src = `data:${j.mime};base64,${j.data_b64}`;
     if ((j.mime||'').startsWith('image/')) box.innerHTML = `<img src="${src}" style="max-width:100%;max-height:360px;border-radius:8px;cursor:zoom-in;" onclick="window.open(this.src,'_blank')">`;
     else if ((j.mime||'').startsWith('audio/')) box.innerHTML = `<audio controls src="${src}" style="max-width:100%;"></audio>`;
