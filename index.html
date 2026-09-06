@@ -2081,19 +2081,44 @@ async function waSetupCheck(){
       $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · add the WA_WABA_ID secret to send templates'}<br><span style="font-size:12px;">${driveLine}</span><div id="wa-arch-msg"></div></div>`;
       return;
     }
-    const miss = ['token','phone_id','verify_token','waba_id','drive'].filter(k=>!c[k]).map(k=>k==='drive'?'GDRIVE_SA_JSON':'WA_'+k.toUpperCase());
+    const miss = ['token','phone_id','verify_token','waba_id','drive'].filter(k=>!c[k]).map(k=>({token:'WA_TOKEN secret',phone_id:'Phone number ID',verify_token:'Verify token',waba_id:'WhatsApp Business Account ID',drive:'GDRIVE_SA_JSON secret'})[k]);
     $('wa-setup').innerHTML = `<div class="card" style="margin-bottom:12px;border-color:#e6c97a;background:#fdf9ee;">
       <h2 style="font-size:15px;">Connect the WhatsApp Business account <span style="font-weight:normal;font-size:12px;color:#777">(Director only — once)</span></h2>
       <ol style="font-size:12.5px;color:#444;margin:6px 0 0 18px;line-height:1.6;">
         <li>In Meta Business → WhatsApp → <b>API setup</b>, note the <b>Phone number ID</b> and the <b>WhatsApp Business Account ID</b>, and create a permanent <b>System User access token</b> with <i>whatsapp_business_messaging</i> and <i>whatsapp_business_management</i>.</li>
-        <li>In Supabase → Edge Functions → <b>Secrets</b>, add: <code>WA_TOKEN</code>, <code>WA_PHONE_ID</code>, <code>WA_WABA_ID</code>, and <code>WA_VERIFY_TOKEN</code> (any password-like phrase you choose; optional <code>WA_APP_SECRET</code> from the Meta app for signature checks).</li>
-        <li>In the Meta app → WhatsApp → <b>Configuration → Webhook</b>: Callback URL <code>${esc(waStatus.webhook_url||'')}</code>, Verify token = the same <code>WA_VERIFY_TOKEN</code>, then subscribe to the <b>messages</b> field.</li>
+        <li>Enter the <b>Phone number ID</b>, <b>WhatsApp Business Account ID</b> and a <b>verify token</b> (any word you choose) in the box below — they are saved in the ERP. Only the access token is a real secret: in Supabase → Edge Functions → <b>Secrets</b> add <code>WA_TOKEN</code> (optional <code>WA_APP_SECRET</code> from the Meta app for signature checks).</li>
+        <li>In the Meta app → WhatsApp → <b>Configuration → Webhook</b>: Callback URL <code>${esc(waStatus.webhook_url||'')}</code>, Verify token = the same word as below, then subscribe to the <b>messages</b> field.</li>
         <li><b>Google Drive storage — vinayaks7711@gmail.com</b> (WhatsApp files never sit on the ERP server): (a) signed in to Google as <b>vinayaks7711@gmail.com</b>, open <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> → create a project → <i>APIs &amp; Services → Enable</i> the <b>Google Drive API</b> → <i>IAM &amp; Admin → Service accounts → Create</i> → open it → <i>Keys → Add key → JSON</i>; paste the whole downloaded JSON file as the secret <code>GDRIVE_SA_JSON</code>. (b) In <a href="https://drive.google.com/" target="_blank" rel="noopener">drive.google.com</a> (same Gmail) create a folder named exactly <b>WhatsApp data</b> and <i>Share</i> it as Editor with the service account's e-mail${waStatus.sa_email?' — <b>'+esc(waStatus.sa_email)+'</b>':' (shown here once the secret is saved)'}. The ERP finds the folder by that name; photos, documents and voice notes go to <i>WhatsApp data / Media / &lt;number&gt;</i> as they arrive and each finished month's chat to <i>WhatsApp data / Archive</i> — nowhere else.</li>
         <li>Give your staff access in Control Panel → Users → <b>💬 WhatsApp Business</b> row (view = read only; add/edit = may reply).</li>
       </ol>
+      <div id="wa-settings-box" style="margin-top:8px;"></div>
       <p style="font-size:12px;margin:6px 0 0;">${driveLine}</p><div id="wa-arch-msg"></div>
       <p style="font-size:12px;margin:8px 0 0;color:${miss.length?'#b3261e':'#1a7f37'};">${miss.length ? 'Not set yet: ' + miss.join(', ') : 'Secrets are set'}${waStatus.error ? ' · WhatsApp says: ' + esc(waStatus.error) : ''} <button class="mini" onclick="waSetupCheck()">Re-check</button></p></div>`;
+    waSettingsForm();
   } catch(e){ $('wa-setup').innerHTML = `<div class="msg err">Could not reach the WhatsApp service: ${esc(e.message)}</div>`; }
+}
+// Director-editable WhatsApp settings (non-secret): stored in wa.settings, read by the edge functions
+const WA_SETTING_KEYS = [['WA_PHONE_ID','Phone number ID','from Meta app → WhatsApp → API Setup'],['WA_WABA_ID','WhatsApp Business Account ID','same page'],['WA_VERIFY_TOKEN','Verify token','any word; type the same in Meta → Configuration → Webhook']];
+async function waSettingsForm(){
+  const box = $('wa-settings-box'); if (!box || !isDir()) return;
+  let cur = {};
+  try { const { data } = await db.schema('wa').from('settings').select('key,value'); (data||[]).forEach(r=>cur[r.key]=r.value||''); } catch(e){ /* table may be hidden */ }
+  box.innerHTML = `<div style="border:1px solid #e5e0d0;border-radius:8px;padding:10px;background:#fff;">
+    <b style="font-size:13px;">WhatsApp settings</b> <span style="font-size:11px;color:#777;">(saved in the ERP — no Supabase needed)</span>
+    <div style="display:grid;grid-template-columns:220px 1fr;gap:6px 10px;align-items:center;margin-top:8px;font-size:12.5px;">
+      ${WA_SETTING_KEYS.map(([k,l,h])=>`<label for="was-${k}">${l}<br><span style="font-size:11px;color:#888;">${h}</span></label><input id="was-${k}" value="${esc(cur[k]||'')}" style="font-family:monospace;">`).join('')}
+    </div>
+    <div style="margin-top:8px;"><button class="mini" onclick="waSettingsSave()">Save settings</button> <span id="was-msg" style="font-size:12px;"></span></div></div>`;
+}
+async function waSettingsSave(){
+  try {
+    for (const [k] of WA_SETTING_KEYS){
+      const { error } = await db.schema('wa').rpc('set_setting', { p_key:k, p_value: $('was-'+k).value.trim() });
+      if (error) throw error;
+    }
+    say('was-msg', 'Saved — re-checking…', true);
+    await waSetupCheck();
+  } catch(e){ say('was-msg', e.message, false); }
 }
 async function waArchive(){
   if (!isDir()) return;
