@@ -3754,7 +3754,7 @@ async function purchaseTab(t){
     }
     B.innerHTML = `
       <h4 class="sec">Purchase orders — placed → dispatched → received</h4>
-      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Open orders only. Once an order is fully received (or cancelled) it moves automatically to the <b>PO history</b> tab.</p>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Open orders only — those still to be received. The <b>PO history</b> tab holds the complete record of every order, open or closed, party-wise and date-wise.</p>
       <div style="margin:0 0 8px;"><label style="font-size:12px;color:#777;">Show:</label> <select onchange="window.poCatFilter=this.value;purchaseTab('pos')" style="width:auto;display:inline-block;padding:6px 10px;">
         <option value="" ${!window.poCatFilter?'selected':''}>All purchases</option>
         <option value="RM" ${window.poCatFilter==='RM'?'selected':''}>Raw material only</option>
@@ -3961,8 +3961,8 @@ async function purchaseTab(t){
   if (t === 'hist'){
     const { data: allVen } = await db.schema('sales').from('vendors').select('id, code, name').order('name');
     B.innerHTML = `
-      <h4 class="sec">Purchase order history — received &amp; closed orders</h4>
-      <p style="font-size:12px;color:#777;margin:4px 0 10px;">Every PO that has been fully received (or cancelled) lands here automatically. Pull the history back date-wise, month-wise, year-wise — or for one party.</p>
+      <h4 class="sec">Purchase order history</h4>
+      <p style="font-size:12px;color:#777;margin:4px 0 10px;">The complete record of every purchase order — still open, received or cancelled. Pull it back date-wise, month-wise, year-wise — or for one party.</p>
       <div class="row2c">
         <div><label>Show by</label><select id="ph-mode" onchange="poHistMode()">
           <option value="all">All history</option>
@@ -3978,7 +3978,12 @@ async function purchaseTab(t){
           <option value="OFFICE">Office &amp; admin</option>
           <option value="SERVICES">Services</option>
           <option value="OTHER">Other</option></select></div>
-        <div></div>
+        <div><label>Order status</label><select id="ph-status">
+          <option value="">All orders</option>
+          <option value="open">Still open (placed / part-received)</option>
+          <option value="closed">Received &amp; cancelled only</option>
+          <option value="RECEIVED">Received only</option>
+          <option value="CANCELLED">Cancelled only</option></select></div>
       </div>
       <div class="row2c" style="margin-top:8px;"><div id="ph-when1"></div><div id="ph-when2"></div></div>
       <button class="btn gold sm" style="margin-top:10px;" onclick="poHistRun()">Show history</button>
@@ -4023,7 +4028,12 @@ async function poHistRunInner(){
     if (y){ from = y + '-01-01'; to = y + '-12-31'; }
   }
   const G = db.schema('mfg');
-  let q = G.from('v_po_tracking').select('*').in('status', ['RECEIVED','CANCELLED']).order('order_date', {ascending:false}).limit(500);
+  const stf = $('ph-status') ? $('ph-status').value : '';
+  const OPEN_ST = ['DRAFT','AWAITING','PENDING','APPROVED','PLACED','DISPATCHED','PARTIAL'];
+  let q = G.from('v_po_tracking').select('*').order('order_date', {ascending:false}).limit(1000);
+  if (stf === 'open') q = q.in('status', OPEN_ST);
+  else if (stf === 'closed') q = q.in('status', ['RECEIVED','CANCELLED']);
+  else if (stf) q = q.eq('status', stf);
   if (from) q = q.gte('order_date', from);
   if (to) q = q.lte('order_date', to);
   const { data: pos, error } = await q;
@@ -4055,12 +4065,17 @@ async function poHistRunInner(){
     }
   }
   const recd = rows.filter(p=>p.status==='RECEIVED');
-  const totVal = recd.reduce((s,p)=>s+(amounts[p.id]||0),0);
+  const canc = rows.filter(p=>p.status==='CANCELLED');
+  const openR = rows.filter(p=>p.status!=='RECEIVED' && p.status!=='CANCELLED');
+  const totVal = rows.reduce((s,p)=>s+(amounts[p.id]||0),0);
+  const recVal = recd.reduce((s,p)=>s+(amounts[p.id]||0),0);
   out.innerHTML = `
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-      <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Orders received</div><div style="font-size:20px;font-weight:700;">${recd.length}</div></div>
-      ${canFin()?`<div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Value received ₹ (incl. tax)</div><div style="font-size:20px;font-weight:700;">₹ ${inr(totVal)}</div></div>`:''}
-      <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Cancelled</div><div style="font-size:20px;font-weight:700;color:#777">${rows.length-recd.length}</div></div>
+      <div class="card" style="flex:1;min-width:130px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Orders shown</div><div style="font-size:20px;font-weight:700;">${rows.length}</div></div>
+      <div class="card" style="flex:1;min-width:130px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Still open</div><div style="font-size:20px;font-weight:700;color:${openR.length?'#0b57d0':'#777'}">${openR.length}</div></div>
+      <div class="card" style="flex:1;min-width:130px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Received</div><div style="font-size:20px;font-weight:700;color:${recd.length?'#1a7f37':'#777'}">${recd.length}</div></div>
+      ${canFin()?`<div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Value ordered ₹ (incl. tax)</div><div style="font-size:20px;font-weight:700;">₹ ${inr(totVal)}</div><div style="font-size:11px;color:#777">received ₹ ${inr(recVal)}</div></div>`:''}
+      <div class="card" style="flex:1;min-width:130px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Cancelled</div><div style="font-size:20px;font-weight:700;color:#777">${canc.length}</div></div>
     </div>
     <div class="table-scroll"><table><thead><tr><th>PO</th><th>Party</th><th>Order date</th><th>Received on</th><th>Qty (ordered / dispatched / received)</th>${canFin()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
     ${rows.map(p=>{const mt=meta[p.id]||{};
@@ -4068,9 +4083,9 @@ async function poHistRunInner(){
         `<td>${esc(p.vendor_name||'—')}${mt.payment_terms?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(String(mt.payment_terms).slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${mt.received_at?String(mt.received_at).slice(0,10):'—'}</td>` +
         `<td style="white-space:nowrap">${Number(p.ordered_qty)} / <span style="color:#0b57d0" title="Dispatched by vendor">${Number((incBy[p.id]||{}).dispatched_qty ?? (p.status==='PLACED'?0:p.ordered_qty))}</span> / ${Number(p.received_qty)}${Number((incBy[p.id]||{}).awaiting_dispatch_qty||0)>0 && p.status!=='PLACED' ? `<br><span style="font-size:11px;color:#b3261e">${Number(incBy[p.id].awaiting_dispatch_qty)} pending at vendor</span>` : ''}</td>` +
         (canFin()?`<td class="amount">${amounts[p.id]!=null?inr(amounts[p.id]):'—'}</td>`:'') +
-        `<td><span style="color:${p.status==='RECEIVED'?'#1a7f37':'#777'};font-weight:600">${p.status}</span></td>` +
+        `<td><span style="color:${p.status==='RECEIVED'?'#1a7f37':(p.status==='CANCELLED'?'#777':'#0b57d0')};font-weight:600">${p.status}</span></td>` +
         `<td><button class="mini" onclick="poView('${p.id}')" title="See the full order">👁 View</button> <button class="mini" onclick="poPrint('${p.id}')" title="Print or save this purchase order as a PDF">🖨 PO</button> ${dirDelBtn('mfg','purchase_orders', p.id, 'PO '+(p.po_no||''), "poHistRun()")}</td></tr>`;}).join('')
-      || `<tr><td colspan="${canFin()?8:7}" style="color:#777">No received or closed orders ${m==='all'?'yet':'in this period'}${ven?' for this party':''}.</td></tr>`}
+      || `<tr><td colspan="${canFin()?8:7}" style="color:#777">No purchase orders ${m==='all'?'yet':'in this period'}${ven?' for this party':''}${stf?' with this status':''}.</td></tr>`}
     </tbody></table></div>`;
 }
 async function poView(id){
