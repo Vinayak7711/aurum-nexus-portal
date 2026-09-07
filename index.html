@@ -4005,6 +4005,11 @@ function poHistMode(){
   } else { w1.innerHTML = ''; w2.innerHTML = ''; }
 }
 async function poHistRun(){
+  // never leave the panel stuck on "Loading…" — show what went wrong instead
+  try { await poHistRunInner(); }
+  catch(e){ const o = $('ph-out'); if (o) o.innerHTML = `<div class="msg err">Could not show the history: ${esc(e && e.message ? e.message : String(e))}</div>`; }
+}
+async function poHistRunInner(){
   const out = $('ph-out'); if (!out) return;
   out.innerHTML = '<p style="color:#777">Loading…</p>';
   const m = $('ph-mode').value;
@@ -4029,6 +4034,12 @@ async function poHistRun(){
   if (rows.length){
     try { const { data: fl } = await G.from('purchase_orders').select('id, vendor_id, received_at, bill_to_mmc, payment_terms, category').in('id', rows.map(p=>p.id));
           (fl||[]).forEach(f => meta[f.id] = f); } catch(e){ /* optional */ }
+  }
+  // dispatched / awaiting quantities (own copy — the open-orders tab keeps its own)
+  const incBy = {};
+  if (rows.length){
+    try { const { data: inc } = await G.from('v_po_incoming').select('id, dispatched_qty, awaiting_dispatch_qty, in_transit_qty');
+          (inc||[]).forEach(r => incBy[r.id] = r); } catch(e){ /* optional */ }
   }
   const ven = $('ph-vendor').value;
   if (ven) rows = rows.filter(p => (meta[p.id]||{}).vendor_id === ven);
