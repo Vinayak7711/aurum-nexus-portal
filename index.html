@@ -496,9 +496,12 @@
           <div id="wa-window" style="font-size:11.5px;color:#7a6a4a;margin-bottom:6px;"></div>
           <div style="display:flex;gap:8px;align-items:flex-end;">
             <textarea id="wa-text" rows="2" placeholder="Type a message… (Enter to send, Shift+Enter for a new line)" style="flex:1;font-family:inherit;font-size:13.5px;padding:9px 11px;border:1px solid #ddd;border-radius:10px;resize:vertical;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();waSend();}"></textarea>
-            <button class="btn gold sm" onclick="waSend()" style="padding:11px 16px;">Send</button>
-            <button class="btn ghost sm" onclick="waTemplateForm()" title="Send an approved template (needed when the customer has not written in the last 24 hours)">Template…</button>
+            <input type="file" id="wa-file" accept="image/jpeg,image/png,application/pdf" style="display:none;" onchange="waFilePick()">
+            <button class="btn ghost sm" id="wa-attach-btn" onclick="$('wa-file').click()" title="Send a photo (JPG/PNG) or a PDF" style="padding:11px 13px;">📎</button>
+            <button class="btn gold sm" id="wa-send-btn" onclick="waSend()" style="padding:11px 16px;">Send</button>
+            <button class="btn ghost sm" id="wa-tpl-btn" onclick="waTemplateForm()" title="Send an approved template (needed when the customer has not written in the last 24 hours)">Template…</button>
           </div>
+          <div id="wa-file-name" style="font-size:12px;color:#7a6a4a;margin-top:6px;"></div>
           <div id="wa-tpl"></div>
           <div id="wa-msg"></div>
         </div>
@@ -2205,8 +2208,15 @@ async function waLoadThread(scroll){
   const win = c.last_in_at ? (Date.now() - new Date(c.last_in_at).getTime()) : Infinity;
   const left = 24*3600*1000 - win;
   $('wa-window').innerHTML = left > 0
-    ? `Reply window open — ${Math.floor(left/3600000)} h ${Math.floor((left%3600000)/60000)} min left (WhatsApp allows free-text replies for 24 hours after the customer's last message).`
-    : `<span style="color:#b3261e;">The customer has not written in the last 24 hours — WhatsApp only permits an approved <b>template</b> message now (use Template…). Free text works again once they reply.</span>`;
+    ? `Reply window open — ${Math.floor(left/3600000)} h ${Math.floor((left%3600000)/60000)} min left. Free text, photos (JPG/PNG) and PDFs can all be sent now.`
+    : `<span style="color:#b3261e;">This person has not written in the last 24 hours — WhatsApp allows only an approved <b>template</b> to open the conversation (press <b>Template…</b>). Text, photos and PDFs work again the moment they reply.</span>`;
+  // steer the eye to the button that actually works right now
+  const sB = $('wa-send-btn'), tB = $('wa-tpl-btn'), aB = $('wa-attach-btn');
+  if (sB && tB){
+    sB.className = 'btn sm ' + (left > 0 ? 'gold' : 'ghost');
+    tB.className = 'btn sm ' + (left > 0 ? 'ghost' : 'gold');
+    if (aB) aB.style.opacity = left > 0 ? '1' : '.45';
+  }
 }
 function waUserName(uid){ const u = (M.users||[]).find(x=>x.id===uid) || (allUsers||[]).find(x=>x.id===uid); return u ? u.full_name : (uid===me.id ? (me.full_name||'me') : 'ERP'); }
 async function waPoll(){
@@ -2222,14 +2232,49 @@ async function waPoll(){
     if (c && c.unread){ try { await db.schema('wa').rpc('mark_read', { p_contact: waCur }); c.unread = 0; waRenderList(); } catch(e){} }
   }
 }
+// ---- photo / PDF attachment -------------------------------------------------
+let waFile = null;
+function waFilePick(){
+  const f = ($('wa-file').files || [])[0];
+  if (!f){ waFileClear(); return; }
+  const ok = ['image/jpeg','image/png','application/pdf'];
+  if (!ok.includes(f.type)){ say('wa-msg','WhatsApp accepts JPG or PNG photos and PDF files only. Save the file in one of those formats and try again.', false); $('wa-file').value=''; return; }
+  const cap = f.type === 'application/pdf' ? 15*1024*1024 : 5*1024*1024;
+  if (f.size > cap){ say('wa-msg', `That file is ${(f.size/1048576).toFixed(1)} MB — the limit is ${cap/1048576} MB${f.type==='application/pdf'?'':' for photos'}.`, false); $('wa-file').value=''; return; }
+  waFile = f;
+  $('wa-msg').innerHTML = '';
+  $('wa-file-name').innerHTML = `📎 <b>${esc(f.name)}</b> · ${(f.size/1024).toFixed(0)} KB — press <b>Send</b>. Anything typed above goes with it as a caption. <button class="mini" onclick="waFileClear()">✕ remove</button>`;
+}
+function waFileClear(){ waFile = null; const i = $('wa-file'); if (i) i.value=''; const n = $('wa-file-name'); if (n) n.innerHTML=''; }
+function waFileB64(f){ return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); }); }
+function waOutOfWindow(){
+  const c = waContacts.find(x=>x.id===waCur) || {};
+  return !c.last_in_at || (Date.now() - new Date(c.last_in_at).getTime()) > 24*3600*1000;
+}
 async function waSend(){
   if (!waCur) return;
   const text = $('wa-text').value.trim();
+  if (waOutOfWindow()){
+    $('wa-msg').innerHTML = '<span style="font-size:12.5px;color:#7a6a4a;">This person has not written to you in the last 24 hours, so WhatsApp will not carry free text, photos or files — only an <b>approved template</b> may open the conversation. Fill the blanks below and press <b>Send template</b>; once they reply you can send anything for 24 hours.</span>';
+    waTemplateForm();
+    return;
+  }
+  if (waFile) return waSendFile(text);
   if (!text){ say('wa-msg','Type a message first.',false); return; }
   $('wa-msg').innerHTML = '<span style="font-size:12px;color:#777;">Sending…</span>';
   try {
     await waApi({ action:'send_text', contact_id: waCur, text });
     $('wa-text').value = ''; $('wa-msg').innerHTML = '';
+    await waLoadContacts(); waRenderList(); await waLoadThread(true);
+  } catch(e){ say('wa-msg', e.message, false); await waLoadThread(true); }
+}
+async function waSendFile(caption){
+  const f = waFile; if (!f) return;
+  $('wa-msg').innerHTML = `<span style="font-size:12px;color:#777;">Sending ${esc(f.name)}…</span>`;
+  try {
+    const data_b64 = await waFileB64(f);
+    await waApi({ action:'send_media', contact_id: waCur, filename: f.name, mime: f.type, caption: caption || '', data_b64 });
+    waFileClear(); $('wa-text').value = ''; $('wa-msg').innerHTML = '';
     await waLoadContacts(); waRenderList(); await waLoadThread(true);
   } catch(e){ say('wa-msg', e.message, false); await waLoadThread(true); }
 }
