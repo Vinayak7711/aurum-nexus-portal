@@ -2081,6 +2081,23 @@ async function waSetupCheck(){
     const driveLine = d.ok
       ? `☁ Google Drive connected — media and monthly archives go to <b>${esc(d.root||'WhatsApp data')}</b> <button class="mini" onclick="waArchive()">Archive finished months to Drive now</button> ${connectBtn}`
       : `<span style="color:#b3261e;">☁ Google Drive not connected — ${esc(d.error||'')}.</span> ${(!waStatus.oauth_client||!waStatus.oauth_secret)?'<span style="font-size:11.5px;color:#777;">(needs the Google OAuth client ID in WhatsApp settings and the GDRIVE_OAUTH_CLIENT_SECRET secret in Supabase)</span>':connectBtn} <span style="font-size:11.5px;color:#777;">Sign in with <b>vinayaks7711@gmail.com</b> — files go only to the folder “WhatsApp data” in that Drive.</span>`;
+    // Meta can block the whole developer account / business portfolio — then every call fails and
+    // nothing sends or arrives. Say so plainly instead of hiding it in one grey line.
+    if (/blocked|restricted|confirm/i.test(String(waStatus.error || ''))){
+      $('wa-setup').innerHTML = `<div class="card" style="margin-bottom:12px;border-color:#b3261e;background:#fff5f5;">
+        <h4 class="sec" style="margin:0 0 6px;color:#b3261e;">Meta has blocked this WhatsApp app — nothing can be sent or received</h4>
+        <p style="font-size:13px;margin:0 0 8px;">Every request to WhatsApp comes back with: <b>${esc(waStatus.error)}</b>. This is a block on the Facebook/Meta account that owns the WhatsApp app — not a fault in the ERP. While it lasts, text, photos, PDFs, templates <i>and</i> incoming replies are all stopped.</p>
+        <p style="font-size:13px;margin:0 0 8px;"><b>How to clear it (only the Director can, in Meta):</b></p>
+        <ol style="font-size:13px;margin:0 0 8px 18px;padding:0;">
+          <li>Open <a href="https://developers.facebook.com/" target="_blank" rel="noopener">developers.facebook.com</a> in the browser where the Meta account is signed in.</li>
+          <li>If it says <i>“Account confirmation needed — we've noticed unusual activity on this developer account”</i>, press <b>Confirm Account</b> and finish Meta's identity check (phone / ID). Nothing here needs to change.</li>
+          <li>Also open <a href="https://business.facebook.com/business-support-home" target="_blank" rel="noopener">Business Support Home</a> and clear or appeal any restriction shown on the business portfolio.</li>
+          <li>When Meta says access is restored, come back and press <b>Re-check</b> — sending starts working again on its own.</li>
+        </ol>
+        <p style="font-size:12.5px;margin:0;color:#555;">Settings in the ERP are fine: token, Phone number ID, Business Account ID and verify token are all set. <button class="mini" onclick="waSetupCheck()">Re-check</button></p>
+        <p style="font-size:12px;margin:8px 0 0;">${driveLine}</p><div id="wa-arch-msg"></div></div>`;
+      return;
+    }
     if (ok && ph && !waStatus.error){
       $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · set the WhatsApp Business Account ID in settings to send templates'}<br><span style="font-size:12px;">${driveLine}</span><div id="wa-arch-msg"></div></div>`;
       return;
