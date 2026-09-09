@@ -499,7 +499,7 @@
             <input type="file" id="wa-file" accept="image/jpeg,image/png,application/pdf" style="display:none;" onchange="waFilePick()">
             <button class="btn ghost sm" id="wa-attach-btn" onclick="$('wa-file').click()" title="Send a photo (JPG/PNG) or a PDF" style="padding:11px 13px;">📎</button>
             <button class="btn gold sm" id="wa-send-btn" onclick="waSend()" style="padding:11px 16px;">Send</button>
-            <button class="btn ghost sm" id="wa-tpl-btn" onclick="waTemplateForm()" title="Send an approved template (needed when the customer has not written in the last 24 hours)">Template…</button>
+            <button class="btn ghost sm" id="wa-wame-btn" onclick="waOpenChat()" title="Open this number in your own WhatsApp with the message ready — works for any number, and you can attach anything">💬 WhatsApp</button>
           </div>
           <div id="wa-file-name" style="font-size:12px;color:#7a6a4a;margin-top:6px;"></div>
           <div id="wa-tpl"></div>
@@ -2181,7 +2181,7 @@ async function waOpen(id){
   const c = waContacts.find(x=>x.id===id); if (!c) return;
   $('wa-head').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
     <div><b style="font-size:14px;color:#1a1a2e;">${esc(c.name || waNum(c.wa_id))}</b> <span style="color:#777">${c.name ? waNum(c.wa_id) : ''}</span></div>
-    <div>${waCanSend()?`<button class="mini" onclick="waRename('${c.id}')">✏️ Name</button>`:''} <button class="mini" onclick="waLoadThread(true)">↻</button></div></div>`;
+    <div><button class="mini" onclick="waOpenWhatsApp('${esc(c.wa_id)}', true)" title="Open this number in your own WhatsApp — any number, any attachment, no limits">💬 Open in WhatsApp</button> ${waCanSend()?`<button class="mini" onclick="waRename('${c.id}')">✏️ Name</button>`:''} <button class="mini" onclick="waLoadThread(true)">↻</button></div></div>`;
   $('wa-compose').classList.toggle('hidden', !waCanSend());
   $('wa-tpl').innerHTML = ''; $('wa-msg').innerHTML = '';
   await waLoadThread(true);
@@ -2225,15 +2225,10 @@ async function waLoadThread(scroll){
   const win = c.last_in_at ? (Date.now() - new Date(c.last_in_at).getTime()) : Infinity;
   const left = 24*3600*1000 - win;
   $('wa-window').innerHTML = left > 0
-    ? `Reply window open — ${Math.floor(left/3600000)} h ${Math.floor((left%3600000)/60000)} min left. Free text, photos (JPG/PNG) and PDFs can all be sent now.`
-    : `<span style="color:#b3261e;">This person has not written in the last 24 hours — WhatsApp allows only an approved <b>template</b> to open the conversation (press <b>Template…</b>). Text, photos and PDFs work again the moment they reply.</span>`;
-  // steer the eye to the button that actually works right now
-  const sB = $('wa-send-btn'), tB = $('wa-tpl-btn'), aB = $('wa-attach-btn');
-  if (sB && tB){
-    sB.className = 'btn sm ' + (left > 0 ? 'gold' : 'ghost');
-    tB.className = 'btn sm ' + (left > 0 ? 'ghost' : 'gold');
-    if (aB) aB.style.opacity = left > 0 ? '1' : '.45';
-  }
+    ? `Open chat — ${Math.floor(left/3600000)} h ${Math.floor((left%3600000)/60000)} min left. Text, photos and PDFs all go straight through.`
+    : `They have not written in the last 24 hours, so WhatsApp will only carry an approved opening message. Just type and press <b>Send</b> — the ERP handles it. If WhatsApp refuses, use <b>💬 WhatsApp</b>.`;
+  const aB = $('wa-attach-btn');
+  if (aB) aB.style.opacity = left > 0 ? '1' : '.45';
 }
 function waUserName(uid){ const u = (M.users||[]).find(x=>x.id===uid) || (allUsers||[]).find(x=>x.id===uid); return u ? u.full_name : (uid===me.id ? (me.full_name||'me') : 'ERP'); }
 async function waPoll(){
@@ -2268,13 +2263,35 @@ function waOutOfWindow(){
   const c = waContacts.find(x=>x.id===waCur) || {};
   return !c.last_in_at || (Date.now() - new Date(c.last_in_at).getTime()) > 24*3600*1000;
 }
+// Open this number in the Director's own WhatsApp (web or phone), message ready to send.
+// No Meta limits apply here — any number, any attachment.
+function waOpenWhatsApp(waId, withText){
+  const num = String(waId || '').replace(/\D/g, '');
+  if (!num){ say('wa-msg','No number for this contact.', false); return; }
+  const t = withText ? ($('wa-text') ? $('wa-text').value.trim() : '') : '';
+  window.open('https://wa.me/' + num + (t ? '?text=' + encodeURIComponent(t) : ''), '_blank', 'noopener');
+}
+function waOpenChat(){ const c = waContacts.find(x=>x.id===waCur); if (c) waOpenWhatsApp(c.wa_id, true); }
+// Explain a refusal in plain words and offer the way that always works.
+function waSendProblem(msg){
+  let why = '';
+  if (/healthy ecosystem engagement|131049/i.test(msg))
+    why = 'WhatsApp counted this as a <b>marketing</b> message to somebody who has never written to you, and Meta limits those. Nothing is wrong with the ERP.';
+  else if (/not in allowed list|131030/i.test(msg))
+    why = 'This number is not on the allowed list of the Meta <b>test</b> number. Adding your own business number in WhatsApp Manager removes that limit for good.';
+  else if (/24 hours/i.test(msg))
+    why = 'Only an approved opening message may start a conversation.';
+  $('wa-msg').innerHTML = `<div class="msg err" style="margin-top:6px;">${esc(msg)}${why?'<br>'+why:''}
+    <div style="margin-top:8px;">Quickest way right now: <button class="btn gold sm" onclick="waOpenChat()">💬 Open in WhatsApp</button>
+    <span style="font-size:12px;color:#555;">— opens this number in your own WhatsApp with the message ready; any number, and you can attach photos or files there.</span></div></div>`;
+}
 async function waSend(){
   if (!waCur) return;
   const text = $('wa-text').value.trim();
   if (waOutOfWindow()){
-    $('wa-msg').innerHTML = '<span style="font-size:12.5px;color:#7a6a4a;">This person has not written to you in the last 24 hours, so WhatsApp will not carry free text, photos or files — only an <b>approved template</b> may open the conversation. Fill the blanks below and press <b>Send template</b>; once they reply you can send anything for 24 hours.</span>';
-    waTemplateForm();
-    return;
+    if (waFile){ waSendProblem('A photo or file cannot open a conversation — WhatsApp needs an approved opening message first.'); return; }
+    if (!text){ say('wa-msg','Type a message first.',false); return; }
+    return waSendOpening(text);
   }
   if (waFile) return waSendFile(text);
   if (!text){ say('wa-msg','Type a message first.',false); return; }
@@ -2283,7 +2300,31 @@ async function waSend(){
     await waApi({ action:'send_text', contact_id: waCur, text });
     $('wa-text').value = ''; $('wa-msg').innerHTML = '';
     await waLoadContacts(); waRenderList(); await waLoadThread(true);
-  } catch(e){ say('wa-msg', e.message, false); await waLoadThread(true); }
+  } catch(e){ waSendProblem(e.message); await waLoadThread(true); }
+}
+// Outside the 24-hour window the ERP wraps what you typed in an approved opening
+// message by itself — no forms, no blanks to fill.
+async function waSendOpening(text){
+  $('wa-msg').innerHTML = '<span style="font-size:12px;color:#777;">Sending…</span>';
+  try {
+    const list = (await waApi({ action:'templates' })).templates || [];
+    const body = t => ((t.components||[]).find(x=>x.type==='BODY')||{}).text || '';
+    const one = list.find(t => t.name === 'aurum_message');
+    const two = list.find(t => t.name === 'aurum_reach_out');
+    const c = waContacts.find(x=>x.id===waCur) || {};
+    if (one){
+      await waApi({ action:'send_template', contact_id: waCur, template: one.name, language: one.language,
+        params: [text], preview: body(one).replace('{{1}}', text) });
+    } else if (two){
+      const who = c.name || 'Sir/Madam';
+      await waApi({ action:'send_template', contact_id: waCur, template: two.name, language: two.language,
+        params: [who, text], preview: body(two).replace('{{1}}', who).replace('{{2}}', text) });
+    } else {
+      throw new Error('WhatsApp has not approved an opening message for this account yet.');
+    }
+    $('wa-text').value = ''; $('wa-msg').innerHTML = '';
+    await waLoadContacts(); waRenderList(); await waLoadThread(true);
+  } catch(e){ waSendProblem(e.message); await waLoadThread(true); }
 }
 async function waSendFile(caption){
   const f = waFile; if (!f) return;
@@ -2293,7 +2334,7 @@ async function waSendFile(caption){
     await waApi({ action:'send_media', contact_id: waCur, filename: f.name, mime: f.type, caption: caption || '', data_b64 });
     waFileClear(); $('wa-text').value = ''; $('wa-msg').innerHTML = '';
     await waLoadContacts(); waRenderList(); await waLoadThread(true);
-  } catch(e){ say('wa-msg', e.message, false); await waLoadThread(true); }
+  } catch(e){ waSendProblem(e.message); await waLoadThread(true); }
 }
 async function waNewChat(){
   if (!waCanSend()){ alert('You can read WhatsApp messages but not send — ask the Director for add/edit on WhatsApp Business.'); return; }
