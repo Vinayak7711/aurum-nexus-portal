@@ -2301,7 +2301,10 @@ function waOpenWhatsApp(waId, withText){
   if (!num){ say('wa-msg','No number for this contact.', false); return; }
   const t = withText ? ($('wa-text') ? $('wa-text').value.trim() : '') : '';
   // web.whatsapp.com/send opens the chat straight away in WhatsApp Web (wa.me adds an extra "continue" page)
-  window.open('https://web.whatsapp.com/send?phone=' + num + (t ? '&text=' + encodeURIComponent(t) : ''), 'aurum-wa', 'noopener');
+  // one small WhatsApp window that lives beside the ERP; every Send just switches its chat
+  const w = Math.min(600, screen.availWidth - 40), h = Math.min(860, screen.availHeight - 60);
+  window.open('https://web.whatsapp.com/send?phone=' + num + (t ? '&text=' + encodeURIComponent(t) : ''), 'aurum-wa',
+    `noopener,popup=yes,width=${w},height=${h},left=${screen.availWidth - w - 10},top=30`);
 }
 function waOpenChat(){ const c = waContacts.find(x=>x.id===waCur); if (c) waOpenWhatsApp(c.wa_id, true); }
 // Explain a refusal in plain words and offer the way that always works.
