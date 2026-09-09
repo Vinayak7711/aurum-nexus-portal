@@ -484,7 +484,7 @@
     <div id="wa-body" style="display:flex;gap:14px;align-items:stretch;min-height:520px;">
       <div id="wa-left" style="flex:0 0 320px;max-width:45%;display:flex;flex-direction:column;border:1px solid #e6e0d2;border-radius:10px;background:#fff;overflow:hidden;">
         <div style="padding:8px;border-bottom:1px solid #eee;display:flex;gap:6px;">
-          <input type="text" id="wa-search" placeholder="Search name or number" oninput="waRenderList()" style="flex:1;padding:8px 10px;font-size:13px;">
+          <input type="text" id="wa-search" placeholder="Search name, number, vendor / distributor / retailer" oninput="waRenderList()" style="flex:1;padding:8px 10px;font-size:13px;">
           <button class="btn gold sm" onclick="waNewChat()" title="Start a new conversation">＋</button>
         </div>
         <div id="wa-list" style="flex:1;overflow:auto;"></div>
@@ -2186,25 +2186,31 @@ async function waArchive(){
 async function waLoadContacts(){
   const { data, error } = await db.schema('wa').from('contacts').select('*').order('last_msg_at', { ascending:false, nullsFirst:false }).limit(500);
   if (error){ $('wa-list').innerHTML = `<div class="msg err" style="margin:8px;">${esc(error.message)}</div>`; return; }
-  waContacts = data || [];
+  waContacts = (data || []).sort((a,b) => {
+    if (a.last_msg_at && b.last_msg_at) return a.last_msg_at < b.last_msg_at ? 1 : -1;
+    if (a.last_msg_at) return -1; if (b.last_msg_at) return 1;
+    return (a.name||a.wa_id).localeCompare(b.name||b.wa_id);
+  });
 }
+const WA_KIND = { VENDOR:['Vendor','#6b4fbb'], DISTRIBUTOR:['Distributor','#0b7a5b'], RETAILER:['Retailer','#b3601e'] };
+const waKindTag = c => c.kind && WA_KIND[c.kind] ? `<span style="font-size:10px;font-weight:600;color:#fff;background:${WA_KIND[c.kind][1]};border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;">${WA_KIND[c.kind][0]}</span>` : '';
 const waWhen = ts => { if (!ts) return ''; const d = new Date(ts), now = new Date();
   return d.toDateString() === now.toDateString() ? d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}); };
 const waNum = n => { n = String(n||''); return n.startsWith('91') && n.length === 12 ? '+91 ' + n.slice(2,7) + ' ' + n.slice(7) : '+' + n; };
 function waRenderList(){
   const q = ($('wa-search').value || '').trim().toLowerCase();
-  const list = waContacts.filter(c => !q || (c.name||'').toLowerCase().includes(q) || c.wa_id.includes(q.replace(/\D/g,'')));
+  const list = waContacts.filter(c => !q || (c.name||'').toLowerCase().includes(q) || (c.kind||'').toLowerCase().includes(q) || (q.replace(/\D/g,'') && c.wa_id.includes(q.replace(/\D/g,''))));
   $('wa-list').innerHTML = list.map(c => `
     <div onclick="waOpen('${c.id}')" style="padding:10px 12px;border-bottom:1px solid #f1ede4;cursor:pointer;background:${waCur===c.id?'#fdf6e3':'#fff'};">
-      <div style="display:flex;justify-content:space-between;gap:6px;"><b style="font-size:13.5px;">${esc(c.name || waNum(c.wa_id))}</b><span style="font-size:11px;color:#999;white-space:nowrap;">${waWhen(c.last_msg_at)}</span></div>
+      <div style="display:flex;justify-content:space-between;gap:6px;"><b style="font-size:13.5px;">${esc(c.name || waNum(c.wa_id))}${waKindTag(c)}</b><span style="font-size:11px;color:#999;white-space:nowrap;">${waWhen(c.last_msg_at)}</span></div>
       <div style="display:flex;justify-content:space-between;gap:6px;"><span style="font-size:12px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name?'<span style="color:#999">'+waNum(c.wa_id)+' · </span>':''}${esc(c.last_msg_preview||'')}</span>${c.unread?`<span style="background:#25d366;color:#fff;border-radius:10px;padding:0 7px;font-size:11px;font-weight:700;">${c.unread}</span>`:''}</div>
-    </div>`).join('') || `<p style="padding:14px;font-size:12.5px;color:#777;">${waContacts.length ? 'No match for the search above. <button class="mini" onclick="$(\'wa-search\').value=\'\';waRenderList()">Show all conversations</button>' : 'No conversations yet. When someone messages the company WhatsApp number it appears here — or press ＋ to start one.'}</p>`;
+    </div>`).join('') || `<p style="padding:14px;font-size:12.5px;color:#777;">${waContacts.length ? 'No match for the search above. <button class="mini" onclick="$(\'wa-search\').value=\'\';waRenderList()">Show all conversations</button>' : 'Vendors, distributors and retailers with a mobile number appear here automatically from their master records — or press ＋ to add any number.'}</p>`;
 }
 async function waOpen(id){
   waCur = id; waRenderList();
   const c = waContacts.find(x=>x.id===id); if (!c) return;
   $('wa-head').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-    <div><b style="font-size:14px;color:#1a1a2e;">${esc(c.name || waNum(c.wa_id))}</b> <span style="color:#777">${c.name ? waNum(c.wa_id) : ''}</span></div>
+    <div><b style="font-size:14px;color:#1a1a2e;">${esc(c.name || waNum(c.wa_id))}</b>${waKindTag(c)} <span style="color:#777">${c.name ? waNum(c.wa_id) : ''}</span></div>
     <div><button class="mini" onclick="waOpenWhatsApp('${esc(c.wa_id)}', true)" title="Open this number in your own WhatsApp — any number, any attachment, no limits">💬 Open in WhatsApp</button> ${waCanSend()?`<button class="mini" onclick="waRename('${c.id}')">✏️ Name</button>`:''} <button class="mini" onclick="waLoadThread(true)">↻</button></div></div>`;
   $('wa-compose').classList.toggle('hidden', !waCanSend());
   $('wa-tpl').innerHTML = ''; $('wa-msg').innerHTML = '';
