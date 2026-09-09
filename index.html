@@ -2323,9 +2323,10 @@ async function waSend(){
   if (waAppMode()){
     if (!text){ say('wa-msg','Type a message first.',false); return; }
     const c = waContacts.find(x=>x.id===waCur); if (!c) return;
-    try { await db.schema('wa').rpc('log_app_message', { p_contact: waCur, p_text: text }); } catch(e){ /* log is best effort */ }
+    // open WhatsApp FIRST, while the click is still fresh — after an await the browser treats it as a pop-up and blocks it
     waOpenWhatsApp(c.wa_id, true);
-    $('wa-text').value = ''; $('wa-msg').innerHTML = '<span style="font-size:12px;color:#1a7f37;">Opened in WhatsApp — press its Send button there.</span>';
+    try { await db.schema('wa').rpc('log_app_message', { p_contact: waCur, p_text: text }); } catch(e){ /* log is best effort */ }
+    $('wa-text').value = ''; $('wa-msg').innerHTML = '<span style="font-size:12px;color:#1a7f37;">Opened in WhatsApp — press its Send button there.</span> <span style="font-size:11.5px;color:#777;">Nothing opened? Your browser blocked the pop-up — allow pop-ups for this site (icon at the right end of the address bar), or use the <b>💬 Open in WhatsApp</b> button at the top of the chat.</span>';
     await waLoadContacts(); waRenderList(); await waLoadThread(true);
     return;
   }
