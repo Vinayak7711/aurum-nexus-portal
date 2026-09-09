@@ -2300,7 +2300,8 @@ function waOpenWhatsApp(waId, withText){
   const num = String(waId || '').replace(/\D/g, '');
   if (!num){ say('wa-msg','No number for this contact.', false); return; }
   const t = withText ? ($('wa-text') ? $('wa-text').value.trim() : '') : '';
-  window.open('https://wa.me/' + num + (t ? '?text=' + encodeURIComponent(t) : ''), '_blank', 'noopener');
+  // web.whatsapp.com/send opens the chat straight away in WhatsApp Web (wa.me adds an extra "continue" page)
+  window.open('https://web.whatsapp.com/send?phone=' + num + (t ? '&text=' + encodeURIComponent(t) : ''), 'aurum-wa', 'noopener');
 }
 function waOpenChat(){ const c = waContacts.find(x=>x.id===waCur); if (c) waOpenWhatsApp(c.wa_id, true); }
 // Explain a refusal in plain words and offer the way that always works.
