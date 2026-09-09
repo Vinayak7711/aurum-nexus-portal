@@ -627,6 +627,7 @@
       <div><label>Contact person</label><input type="text" id="pe-contact"></div>
       <div><label>Phone</label><input type="text" id="pe-phone"></div>
     </div>
+    <label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="pe-whatsapp" placeholder="WhatsApp number (mobile, e.g. 98765 43210)">
     <label>Email</label><input type="text" id="pe-email">
     <label>Salesperson (owner)</label><select id="pe-owner"></select>
     <label>Territory</label><select id="pe-territory" onchange="peTerrChange()"></select>
@@ -1681,7 +1682,7 @@ function openPartyEdit(p, kind){
   $('pe-name').value = p?.name||''; $('pe-city').value = p?.city||'';
   $('pe-credit').value = p?.credit_days??0; $('pe-license').value = p?.license_no||'';
   $('pe-gstin').value = p?.gstin||''; $('pe-contact').value = p?.contact_person||'';
-  $('pe-phone').value = p?.phone||''; $('pe-email').value = p?.email||'';
+  $('pe-phone').value = p?.phone||''; $('pe-email').value = p?.email||''; if ($('pe-whatsapp')) $('pe-whatsapp').value = p?.whatsapp||'';
   $('pe-active').checked = p ? p.is_active : true;
   $('pe-territory').innerHTML = '<option value="">\u2014 none \u2014</option>' +
     (M.terr||[]).filter(t=>t.is_active || (p&&p.territory_id===t.id)).map(t=>`<option value="${t.id}" ${p&&p.territory_id===t.id?'selected':''}>${esc(t.name)}${t.is_active?'':' (inactive)'}</option>`).join('') +
@@ -1717,7 +1718,7 @@ $('btn-save-party').onclick = async () => {
   const patch = {
     name, city: $('pe-city').value.trim()||null, credit_days: Number($('pe-credit').value)||0,
     license_no: $('pe-license').value.trim()||null, gstin: $('pe-gstin').value.trim()||null,
-    contact_person: $('pe-contact').value.trim()||null, phone: $('pe-phone').value.trim()||null,
+    contact_person: $('pe-contact').value.trim()||null, phone: $('pe-phone').value.trim()||null, whatsapp: $('pe-whatsapp').value.trim()||null,
     email: $('pe-email').value.trim()||null, owner_id: $('pe-owner').value, is_active: $('pe-active').checked,
     territory_id: terrId,
     party_type: $('pe-type') ? $('pe-type').value : 'DISTRIBUTOR'
@@ -2920,7 +2921,8 @@ async function onbTab(which){
       <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-gstin" placeholder="GSTIN">
       <input type="text" id="vn-phone" placeholder="Phone"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-contact" placeholder="Contact person">
-      <button class="btn gold sm" style="padding:11px;" onclick="vnAdd()">Register</button></div>
+      <input type="text" id="vn-whatsapp" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
+      <div style="margin-top:8px;"><button class="btn gold sm" style="padding:11px;" onclick="vnAdd()">Register</button></div>
       <div id="vn-msg"></div></div>
       <div id="vn-editbox"></div>`;
     html += '<div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>';
@@ -2943,6 +2945,7 @@ async function onbTab(which){
       <div style="margin-top:8px;"><input type="text" id="rt-address" placeholder="Address" style="width:100%;"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-phone" placeholder="Contact number">
       <input type="text" id="rt-license" placeholder="License number"></div>
+      <div style="margin-top:8px;"><input type="text" id="rt-whatsapp" placeholder="WhatsApp number (mobile, e.g. 98765 43210)" style="width:100%;"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-contact" placeholder="Contact person">
       <input type="text" id="rt-district" placeholder="District"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-area" placeholder="Area / locality">
@@ -2972,6 +2975,7 @@ async function rtAdd(){
     code, name, category: $('rt-cat').value||null, address: $('rt-address').value.trim()||null,
     phone: $('rt-phone').value.trim()||null, license_no: $('rt-license').value.trim()||null,
     contact_person: $('rt-contact').value.trim()||null, district: $('rt-district').value.trim()||null,
+    whatsapp: $('rt-whatsapp').value.trim()||null,
     area: $('rt-area').value.trim()||null, status: 'ACTIVE', created_by: me.id });
   if (error){ say('rt-msg', error.message, false); return; }
   onbTab('retailers');
@@ -2993,6 +2997,7 @@ function rtEdit(id){
       <div style="margin-top:8px;"><label>Address</label><input type="text" id="re-address" value="${esc(v.address||'')}" style="width:100%;"></div>
       <div class="row2c" style="margin-top:8px;"><div><label>Contact number</label><input type="text" id="re-phone" value="${esc(v.phone||'')}"></div>
         <div><label>License number</label><input type="text" id="re-license" value="${esc(v.license_no||'')}"></div></div>
+      <div style="margin-top:8px;"><label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="re-whatsapp" value="${esc(v.whatsapp||'')}" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
       <div class="row2c" style="margin-top:8px;"><div><label>Contact person</label><input type="text" id="re-contact" value="${esc(v.contact_person||'')}"></div>
         <div><label>District</label><input type="text" id="re-district" value="${esc(v.district||'')}"></div></div>
       <div style="margin-top:8px;"><label>Area / locality</label><input type="text" id="re-area" value="${esc(v.area||'')}"></div>
@@ -3009,6 +3014,7 @@ async function rtEditSave(id){
     name, category: $('re-cat').value||null, address: $('re-address').value.trim()||null,
     phone: $('re-phone').value.trim()||null, license_no: $('re-license').value.trim()||null,
     contact_person: $('re-contact').value.trim()||null, district: $('re-district').value.trim()||null,
+    whatsapp: $('re-whatsapp').value.trim()||null,
     area: $('re-area').value.trim()||null }).eq('id', id);
   if (error){ say('re-msg','Save failed: '+error.message,false); return; }
   onbTab('retailers');
@@ -3026,6 +3032,7 @@ function vnEdit(id){
         <div><label>Phone</label><input type="text" id="ve-phone" value="${esc(v.phone||'')}"></div></div>
       <div class="row2c" style="margin-top:8px;"><div><label>Contact person</label><input type="text" id="ve-contact" value="${esc(v.contact_person||'')}"></div>
         <div><label>Email</label><input type="text" id="ve-email" value="${esc(v.email||'')}"></div></div>
+      <div style="margin-top:8px;"><label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="ve-whatsapp" value="${esc(v.whatsapp||'')}" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
       <div style="margin-top:8px;"><label>Type *</label><select id="ve-type">
         <option value="VENDOR" selected>💳 Vendor (we buy from them)</option>
         <option value="DISTRIBUTOR">🤝 Distributor (we sell to them) — moves it to the Party Master distributor list</option></select></div>
@@ -3042,12 +3049,12 @@ async function vnEditSave(id){
   if (!name){ say('ve-msg','Name is required.',false); return; }
   const f = { name, category: $('ve-cat').value.trim()||null, gstin: $('ve-gstin').value.trim()||null,
               phone: $('ve-phone').value.trim()||null, contact_person: $('ve-contact').value.trim()||null,
-              email: $('ve-email').value.trim()||null };
+              email: $('ve-email').value.trim()||null, whatsapp: $('ve-whatsapp').value.trim()||null };
   const toDist = $('ve-type').value === 'DISTRIBUTOR';
   const S2 = db.schema('sales');
   let error = null;
   if (v.party_id){
-    ({ error } = await S2.from('parties').update({ name: f.name, gstin: f.gstin, phone: f.phone,
+    ({ error } = await S2.from('parties').update({ name: f.name, gstin: f.gstin, phone: f.phone, whatsapp: f.whatsapp,
         contact_person: f.contact_person, email: f.email,
         party_type: toDist ? 'DISTRIBUTOR' : 'VENDOR' }).eq('id', v.party_id));
     if (!error) ({ error } = await S2.from('vendors').update({ category: f.category }).eq('id', id));
@@ -3056,7 +3063,7 @@ async function vnEditSave(id){
   } else {
     const { data: code, error: e1 } = await db.schema('app').rpc('next_party_code');
     if (e1){ say('ve-msg', e1.message, false); return; }
-    ({ error } = await S2.from('parties').insert({ code, name: f.name, gstin: f.gstin, phone: f.phone,
+    ({ error } = await S2.from('parties').insert({ code, name: f.name, gstin: f.gstin, phone: f.phone, whatsapp: f.whatsapp,
         contact_person: f.contact_person, email: f.email, party_type: 'DISTRIBUTOR',
         state_id: 'MH', is_active: true, owner_id: me.id, created_by: me.id }));
     if (!error) ({ error } = await S2.from('vendors').update({ status: 'INACTIVE' }).eq('id', id));
@@ -3097,6 +3104,7 @@ async function vnAdd(){
   const { error } = await db.schema('sales').from('vendors').insert({
     code, name, category: $('vn-cat').value.trim()||null, gstin: $('vn-gstin').value.trim()||null,
     phone: $('vn-phone').value.trim()||null, contact_person: $('vn-contact').value.trim()||null,
+    whatsapp: $('vn-whatsapp').value.trim()||null,
     status: 'ACTIVE', created_by: me.id });
   if (error){ say('vn-msg', error.message, false); return; }
   onbTab('vendors');
