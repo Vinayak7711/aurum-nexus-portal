@@ -2099,7 +2099,11 @@ async function waSetupCheck(){
       return;
     }
     if (ok && ph && !waStatus.error){
-      $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · set the WhatsApp Business Account ID in settings to send templates'}<br><span style="font-size:12px;">${driveLine}</span><div id="wa-arch-msg"></div></div>`;
+      const digits = String(ph.display_phone_number||'').replace(/\D/g,'');
+      const meLink = digits ? `https://wa.me/${digits}` : '';
+      $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · set the WhatsApp Business Account ID in settings to send templates'}<br><span style="font-size:12px;">${driveLine}</span>
+        ${meLink?`<div style="margin-top:8px;padding:8px 10px;background:#fff;border:1px solid #cfe3d3;border-radius:8px;font-size:12.5px;color:#1a1a2e;"><b>How anyone can reach you:</b> share <a href="${meLink}" target="_blank" rel="noopener"><b>${esc(meLink)}</b></a> <button class="mini" onclick="navigator.clipboard&&navigator.clipboard.writeText('${meLink}');say('wa-arch-msg','Link copied.',true)">Copy</button><br><span style="color:#555;">WhatsApp's rule: once a person has sent you <i>any</i> message, you can reply with text, photos and PDFs freely for 24 hours (each reply of theirs restarts the clock). Until they write first, only an approved opening message can go out — and Meta limits those. So put this link on invoices, the website and your signature; a single “Hi” from them opens the door.</span></div>`:''}
+        <div id="wa-arch-msg"></div></div>`;
       return;
     }
     const miss = ['token','phone_id','verify_token','waba_id','drive'].filter(k=>!c[k]).map(k=>({token:'WA_TOKEN secret',phone_id:'Phone number ID',verify_token:'Verify token',waba_id:'WhatsApp Business Account ID',drive:'GDRIVE_SA_JSON secret'})[k]);
