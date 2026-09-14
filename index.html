@@ -5725,6 +5725,7 @@ async function acMmcForm(kind, targetId, vid, vname, out){
   T.innerHTML = '<div class="card" style="margin-top:12px;max-width:700px;">Loading…</div>';
   const { data: vl } = await db.schema('sales').from('vendors').select('id,name').order('name');
   window.__mmcVendors = vl || [];
+  if (!acBanks.length){ try { const b = await db.schema('acct').from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   const vOpts = '<option value="">— not for a particular vendor —</option>' + (vl||[]).map(v=>`<option value="${v.id}" ${v.id===vid?'selected':''}>${esc(v.name)}</option>`).join('');
   const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   const isPay = kind === 'pay';
