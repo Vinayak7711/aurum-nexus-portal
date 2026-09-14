@@ -5249,8 +5249,8 @@ async function acctTab(t){
       <p style="font-size:12px;color:#777;margin:4px 0 12px;">Pick what you are entering — it opens the right form, and once saved the entry automatically reflects in its own section (and in the ledger / petty book / vendor dues wherever it belongs).</p>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         ${CARD('🏦','Bank / ledger entry','Money in, money out, transfers between banks, receipts &amp; recoveries — straight into the finance ledger.','ledger')}
-        ${CARD('💳','Vendor payment','Pay a vendor against their purchase bills — reduces that party’s outstanding in Vendor Dues.','vpay')}
-        ${CARD('🏭','Payment to MMC','For POs billed &amp; delivered to MMC: you pay MMC from your bank and MMC pays the vendor. Posts the bank payment to MMC and opens the MMC ledger.','mmc')}
+        ${CARD('💳','Vendor payment (paid by Aurum)','Pay a vendor straight from our bank against their purchase order — posts the bank entry and reduces that vendor’s outstanding.','vpay')}
+        ${CARD('🏭','Payment to MMC','For POs billed &amp; delivered to MMC: you pay MMC from your bank and MMC pays the vendor. Posts the bank payment to MMC and shows in the MMC ledger.','mmc')}
         ${CARD('🔁','MMC paid the vendor','Record that MMC has paid a vendor out of the money you sent — clears that vendor’s dues and reduces the balance held by MMC.','mmcv')}
         ${CARD('🧾','Business expense','Rent, utilities, travel, fees… tag the department, add GST/HSN & TDS. Paid by bank (hits the ledger) or petty cash (goes for approval). Shows in the Expense ledger.','exp')}
         ${CARD('💵','Petty cash expense','Small day-to-day cash spends from the box — waits for approval in the Petty Cash book.','petty')}
@@ -5511,8 +5511,7 @@ function acLedView(){ const s = document.getElementById('led-acct'); if (!s || s
 function acLedBack(){ window.acLedSel = ''; acctTab('ledger'); }
 async function acNewGo(kind){
   if (kind === 'ledger'){ await acctTab('ledger'); if (typeof acEntryForm === 'function'){ acEntryForm(); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); } }
-  else if (kind === 'vpay'){ await acctTab('vdues'); }
-  else if (kind === 'mmc' || kind === 'mmcv'){ window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; await acctTab('ledger'); acMmcForm(kind === 'mmc' ? 'pay' : 'vendor', 'ac-entry-form'); }
+  else if (kind === 'vpay' || kind === 'mmc' || kind === 'mmcv'){ window.acLedSel = ''; await acctTab('ledger'); await acEntryForm(kind==='vpay' ? 'VPAY' : kind==='mmc' ? 'MMC_PAY' : 'MMC_VEN'); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); }
   else if (kind === 'exp'){ await acctTab('exp'); const el=$('ex-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
   else if (kind === 'petty'){ await acctTab('petty'); const el=$('pc-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
   else if (kind === 'topup'){ await acctTab('petty'); const el=$('pt-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
@@ -6021,40 +6020,121 @@ async function acBankSave(id){
   openAcct();
 }
 /* ----- ledger ----- */
-function acEntryForm(){
+async function acEntryForm(kind){
+  if (!acBanks.length){ try { const b = await db.schema('acct').from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
+  if (!window.__enVendors){ const { data: vl } = await db.schema('sales').from('vendors').select('id,name').order('name'); window.__enVendors = vl || []; }
+  const vendorOpts = '<option value="">— choose the vendor —</option>' + window.__enVendors.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('');
   $('ac-entry-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">New finance entry</h3>
     <div class="row2c"><div><label>Kind *</label><select id="en-kind" onchange="acKindChange()">
+      <optgroup label="Vendor payments">
+      <option value="VPAY">Vendor payment — paid by Aurum from our bank</option>
+      <option value="MMC_PAY">Payment to MMC — MMC will pay the vendor</option>
+      <option value="MMC_VEN">MMC paid the vendor (from money already with MMC)</option>
+      </optgroup>
+      <optgroup label="Bank entries">
       <option value="BANK_IN">Money IN (deposit / receipt)</option>
       <option value="BANK_OUT">Money OUT (withdrawal)</option>
-      <option value="PAYMENT">Payment (vendor / expense)</option>
+      <option value="PAYMENT">Other payment (expense / non-vendor)</option>
       <option value="TRANSFER">Transfer between accounts</option>
       <option value="RECOVERY">Advance recovery (cash in)</option>
-      <option value="OTHER">Other</option></select></div>
+      <option value="OTHER">Other</option>
+      </optgroup></select></div>
     <div><label>Amount ₹ *</label><input type="number" id="en-amt" min="0.01" step="any"></div></div>
-    <div class="row2c"><div><label id="en-bank-lbl">Bank account *</label><select id="en-bank">${bankOpts}</select></div>
+    <div id="en-vendor-wrap" style="display:none">
+      <div class="row2c"><div><label>Vendor *</label><select id="en-vendor" onchange="acEnLoadPos()">${vendorOpts}</select></div>
+      <div><label>Against purchase order</label><select id="en-po" onchange="acEnPoChange()"><option value="">— none / not yet —</option></select></div></div>
+      <div id="en-ponote" style="font-size:12px;color:#777;margin:4px 0 8px;"></div>
+    </div>
+    <div class="row2c"><div id="en-bank-wrap"><label id="en-bank-lbl">Bank account *</label><select id="en-bank">${bankOpts}</select></div>
     <div id="en-counter-wrap" style="display:none"><label>Transfer to *</label><select id="en-counter">${bankOpts}</select></div>
     <div id="en-dir-wrap" style="display:none"><label>Direction *</label><select id="en-dir"><option value="OUT">Money OUT</option><option value="IN">Money IN</option></select></div></div>
-    <div class="row2c"><div><label>Date</label><input type="date" id="en-date"></div>
-    <div><label>Mode</label><select id="en-mode"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div></div>
-    <div class="row2c"><div><label>Reference no.</label><input type="text" id="en-ref"></div>
-    <div><label>Staff (if any)</label><select id="en-staff">${staffOpts}</select></div></div>
-    <label>Payee / narration</label><input type="text" id="en-narr" placeholder="Who / what for">
+    <div class="row2c"><div><label>Date</label><input type="date" id="en-date" value="${calFmt(new Date())}"></div>
+    <div id="en-mode-wrap"><label>Mode</label><select id="en-mode"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div></div>
+    <div class="row2c"><div><label id="en-ref-lbl">Reference no. (UTR / cheque)</label><input type="text" id="en-ref"></div>
+    <div id="en-staff-wrap"><label>Staff (if any)</label><select id="en-staff">${staffOpts}</select></div></div>
+    <label id="en-narr-lbl">Payee / narration</label><input type="text" id="en-narr" placeholder="Who / what for">
+    <p id="en-help" style="font-size:12px;color:#777;margin-top:6px;"></p>
     ${canFinApprove()?'':'<p style="font-size:12px;color:#b8860b;margin-top:6px;">This entry will wait for approval by the Accounts head or Director before money moves.</p>'}
     <button class="btn gold sm" style="margin-top:10px;" onclick="acEntrySave()">${canFinApprove()?'Post entry':'Submit for approval'}</button>
     <div id="en-msg"></div></div>`;
+  if (kind) $('en-kind').value = kind;
+  acKindChange();
   $('ac-entry-form').scrollIntoView({behavior:'smooth'});
 }
 function acKindChange(){
   const k = $('en-kind').value;
+  const isVen = (k==='VPAY' || k==='MMC_PAY' || k==='MMC_VEN');
   $('en-counter-wrap').style.display = k==='TRANSFER'?'block':'none';
   $('en-dir-wrap').style.display = k==='OTHER'?'block':'none';
+  $('en-vendor-wrap').style.display = isVen ? 'block' : 'none';
+  $('en-bank-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
+  $('en-mode-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
+  $('en-staff-wrap').style.display = isVen ? 'none' : '';
+  $('en-bank-lbl').textContent = k==='MMC_PAY' ? 'From our bank (paid to MMC) *' : k==='VPAY' ? 'From our bank *' : 'Bank account *';
+  $('en-ref-lbl').textContent = k==='MMC_VEN' ? 'MMC’s payment reference (UTR etc.)' : 'Reference no. (UTR / cheque)';
+  $('en-narr-lbl').textContent = isVen ? 'Note' : 'Payee / narration';
+  $('en-help').textContent = k==='VPAY' ? 'Money goes from your bank straight to the vendor. Posts the bank payment and reduces that vendor’s outstanding (Vendor Dues / vendor ledger).'
+    : k==='MMC_PAY' ? 'For POs billed & delivered to MMC. Money goes from your bank to MMC; it sits in the MMC ledger until you record MMC’s payment to the vendor.'
+    : k==='MMC_VEN' ? 'MMC has paid the vendor out of the money you sent. Reduces the vendor’s outstanding and the balance held by MMC — no bank of yours moves.' : '';
+  if (isVen){ const m = $('en-mode'); if (m && !m.value) m.value = 'NEFT'; acEnLoadPos(); }
+  const ph = $('en-narr'); if (ph) ph.placeholder = isVen ? 'e.g. part payment, balance on delivery' : 'Who / what for';
+}
+// vendor's POs for the vendor-payment kinds (all POs for a direct payment; only MMC-billed POs for the MMC kinds)
+async function acEnLoadPos(){
+  const k = $('en-kind')?.value, vsel = $('en-vendor'), psel = $('en-po'); if (!vsel || !psel) return;
+  psel.innerHTML = '<option value="">— none / not yet —</option>'; window.__enPos = []; $('en-ponote').textContent = '';
+  if (!vsel.value) return;
+  const isMmc = k !== 'VPAY';
+  const { data: pos, error } = await db.schema('acct').rpc(isMmc ? 'mmc_po_options' : 'vendor_po_options', { p_vendor: vsel.value });
+  if (error){ say('en-msg','Could not load the purchase orders: '+error.message,false); return; }
+  window.__enPos = (pos||[]).map(p => isMmc ? p : ({ ...p, to_mmc: 0, by_mmc: 0 }));
+  psel.innerHTML += window.__enPos.map(p=>{
+    const left = isMmc ? (k==='MMC_PAY' ? Number(p.po_value)-Number(p.to_mmc) : Number(p.to_mmc)-Number(p.by_mmc)) : Number(p.po_value)-Number(p.paid||0)-Number(p.requested||0);
+    return `<option value="${p.po_id}">${esc(p.po_no)} · ${p.order_date} · value ₹${inr(p.po_value)}${isMmc ? ' · sent to MMC ₹'+inr(p.to_mmc)+' · MMC paid ₹'+inr(p.by_mmc) : (left>0 ? ' · left ₹'+inr(left) : ' · fully covered')}</option>`;
+  }).join('');
+  if (!window.__enPos.length) $('en-ponote').textContent = isMmc ? 'This vendor has no purchase order marked "billed & delivered to MMC" — you can still record the amount without a PO.' : 'This vendor has no purchase order yet — you can still record the payment without a PO.';
+}
+function acEnPoChange(){
+  const k = $('en-kind').value, psel = $('en-po'), note = $('en-ponote'); if (!psel) return;
+  const po = (window.__enPos||[]).find(p=>p.po_id === psel.value);
+  if (!po){ if (note) note.textContent = ''; return; }
+  let left, txt;
+  if (k === 'VPAY'){ left = Number(po.po_value)-Number(po.paid||0)-Number(po.requested||0);
+    txt = `PO value ₹${inr(po.po_value)} · already paid ₹${inr(po.paid||0)}` + (Number(po.requested)>0 ? ` · awaiting approval ₹${inr(po.requested)}` : '') + ` · <b>still to pay ₹${inr(left>0?left:0)}</b>`; }
+  else if (k === 'MMC_PAY'){ left = Number(po.po_value)-Number(po.to_mmc);
+    txt = `PO value ₹${inr(po.po_value)} · sent to MMC so far ₹${inr(po.to_mmc)} · MMC has paid the vendor ₹${inr(po.by_mmc)} · <b>still to send ₹${inr(left>0?left:0)}</b>`; }
+  else { left = Number(po.to_mmc)-Number(po.by_mmc);
+    txt = `PO value ₹${inr(po.po_value)} · sent to MMC ₹${inr(po.to_mmc)} · MMC has paid the vendor ₹${inr(po.by_mmc)} · <b>with MMC for this PO ₹${inr(left>0?left:0)}</b>`; }
+  if (note) note.innerHTML = txt;
+  if (left > 0) $('en-amt').value = left;
 }
 async function acEntrySave(){
   const k = $('en-kind').value, amt = Number($('en-amt').value);
   if (!(amt>0)){ say('en-msg','Amount must be above zero.',false); return; }
+  if (k==='VPAY' || k==='MMC_PAY' || k==='MMC_VEN'){
+    const vid = $('en-vendor').value, po = $('en-po').value || null, note = $('en-narr').value.trim() || null, ref = $('en-ref').value.trim() || null;
+    if (!vid){ say('en-msg','Choose the vendor.',false); return; }
+    let res, msg;
+    if (k === 'VPAY'){
+      if (!$('en-bank').value){ say('en-msg','Choose the bank the money goes from.',false); return; }
+      res = await db.schema('acct').rpc('vendor_pay_bank', { p_vendor: vid, p_amount: amt, p_bank: $('en-bank').value, p_po: po, p_date: $('en-date').value||null, p_mode: $('en-mode').value||'NEFT', p_ref: ref, p_note: note });
+      msg = res.data && res.data.posted ? 'Vendor payment posted — the bank ledger and the vendor’s outstanding are updated.' : 'Sent for approval — it appears under Vendor Dues → Waiting for approval until the approving authority releases it.';
+    } else if (k === 'MMC_PAY'){
+      if (!$('en-bank').value){ say('en-msg','Choose the bank the money goes from.',false); return; }
+      res = await db.schema('acct').rpc('mmc_pay', { p_amount: amt, p_bank: $('en-bank').value, p_date: $('en-date').value||null, p_mode: $('en-mode').value||'NEFT', p_ref: ref, p_vendor: vid, p_po: po, p_note: note });
+      msg = canFinApprove() ? 'Payment to MMC posted — it is in the bank ledger and the MMC ledger.' : 'Submitted — the payment to MMC shows in the MMC ledger as awaiting approval until it is approved.';
+    } else {
+      res = await db.schema('acct').rpc('mmc_paid_vendor', { p_vendor: vid, p_amount: amt, p_date: $('en-date').value||null, p_po: po, p_ref: ref, p_note: note });
+      msg = 'Recorded — the vendor’s outstanding is reduced and the balance held by MMC has come down.';
+    }
+    if (res.error){ say('en-msg','Could not post: '+res.error.message,false); return; }
+    alert(msg);
+    if (k === 'VPAY') acctTab('vdues'); else { window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; acctTab('ledger'); }
+    return;
+  }
   const { error } = await db.schema('acct').rpc('create_entry', {
     p_kind: k, p_amount: amt, p_bank: $('en-bank').value,
     p_direction: k==='OTHER' ? $('en-dir').value : null,
