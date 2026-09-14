@@ -4883,10 +4883,19 @@ async function acctTab(t){
       const distNamesL = [...new Set([...(dlistL||[]).map(p=>p.name), ...(all||[]).map(e=>e.party_name).filter(Boolean)])].sort();
       const expCatsL = [...new Set((eCatsL||[]).map(e=>e.category).filter(Boolean))].sort();
       const mkItemsL = (pfx2, arr) => arr.map(n=>({ key: pfx2+n, label: n }));
+      // MMC pass-through account: what we sent to MMC less what MMC paid vendors for us
+      let mmcLabel = 'MMC — payments routed through MMC for POs billed to MMC';
+      if (window.acLedType === 'M:'){
+        try { const { data: mrows } = await A.from('v_mmc_ledger').select('kind, amount, status');
+          const live = (mrows||[]).filter(r=>r.status!=='REJECTED');
+          const bal = live.reduce((s,r)=>s+(r.kind==='PAY_TO_MMC'?1:-1)*Number(r.amount),0);
+          mmcLabel += ' — held by MMC ₹ ' + inr(bal); } catch(e){}
+      }
       const LT = {
         'B:': ['🏦 Bank accounts', mkItemsL('B:', [...new Set((all||[]).flatMap(e=>[e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort())],
         'P:': ['🤝 Party / distributor', mkItemsL('P:', distNamesL)],
         'V:': ['💳 Vendor', vendorItemsL],
+        'M:': ['🏭 MMC', [{ key: 'M:MMC', label: mmcLabel }]],
         'E:': ['🧾 Expenses', mkItemsL('E:', expCatsL)],
         'S:': ['👤 Staff', mkItemsL('S:', [...new Set((all||[]).map(e=>e.staff_name).filter(Boolean))].sort())],
       };
@@ -4897,7 +4906,7 @@ async function acctTab(t){
       window.__ledKeys = [];
       const acctOpts = names.map(it=>{
         const idx = window.__ledKeys.push(it.key) - 1;
-        const cnt = pfx==='V:' ? '' : ' ('+(all||[]).filter(e=>matchLed(e, it.key)).length+')';
+        const cnt = (pfx==='V:' || pfx==='M:') ? '' : ' ('+(all||[]).filter(e=>matchLed(e, it.key)).length+')';
         return `<option value="${idx}">${esc(it.label)}${cnt}</option>`;
       }).join('');
       B.innerHTML = `
@@ -5004,6 +5013,60 @@ async function acctTab(t){
       ${docs.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(totBil)}</td><td class="amount">${inr(totPaid)}</td></tr>
       <tr style="font-weight:700;"><td colspan="5">Outstanding (billed − paid)</td><td colspan="2" class="amount" style="color:${outst>0?'#b3261e':'#1a7f37'}">₹ ${inr(outst)}</td></tr>`:''}
       </tbody></table></div>`;
+      return;
+    }
+    if (sel === 'M:MMC' || sel === 'T:M:'){
+      let qM = A.from('v_mmc_ledger').select('*');
+      if (window.acLedFrom) qM = qM.gte('txn_date', window.acLedFrom);
+      if (window.acLedTo) qM = qM.lte('txn_date', window.acLedTo);
+      const { data: mrows, error: merr } = await qM.order('txn_date',{ascending:true}).order('created_at',{ascending:true}).limit(2000);
+      if (merr){ B.innerHTML = `<div class="msg err">Load failed: ${esc(merr.message)}</div>`; return; }
+      const mm = mrows || [];
+      let bal = 0;
+      mm.forEach(r=>{ if (r.status !== 'REJECTED') bal += (r.kind==='PAY_TO_MMC' ? 1 : -1) * Number(r.amount); r._bal = bal; });
+      const live = mm.filter(r=>r.status!=='REJECTED');
+      const totTo = live.reduce((s,r)=>s+Number(r.paid_to_mmc||0),0);
+      const totBy = live.reduce((s,r)=>s+Number(r.paid_by_mmc||0),0);
+      const pend = mm.filter(r=>r.status==='PENDING_APPROVAL').reduce((s,r)=>s+Number(r.amount),0);
+      // per-vendor view of the same money
+      const byV = {};
+      live.forEach(r=>{ const k = r.vendor_name || '(no vendor)'; byV[k] = byV[k] || { to:0, by:0 }; byV[k].to += Number(r.paid_to_mmc||0); byV[k].by += Number(r.paid_by_mmc||0); });
+      window.__mmcRows = mm;
+      window.__ledLabel = 'MMC ledger';
+      B.innerHTML = `
+      <button class="btn ghost sm" onclick="acLedBack()">‹ Back to all ledgers</button>
+      ${dateBar}
+      <p style="font-size:12px;color:#777;margin:6px 0;">For purchase orders billed &amp; delivered to MMC: you pay MMC from your bank, and MMC pays the vendor. Money sent to MMC sits here until MMC's payment to the vendor is recorded.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid to MMC (from our banks)</div><div style="font-size:19px;font-weight:700;color:#b3261e">₹ ${inr(totTo)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid by MMC to vendors</div><div style="font-size:19px;font-weight:700;color:#1a7f37">₹ ${inr(totBy)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Held by MMC (balance)</div><div style="font-size:19px;font-weight:700;color:${bal>=0?'#0b57d0':'#b3261e'}">₹ ${inr(bal)}</div>${pend?`<div style="font-size:11px;color:#b8860b">incl. ₹ ${inr(pend)} awaiting approval</div>`:''}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
+        ${canFinEdit()?`<button class="btn gold sm" onclick="acMmcForm('pay','ac-entry-form')">+ Payment to MMC</button> <button class="btn gold sm" onclick="acMmcForm('vendor','ac-entry-form')">+ MMC paid a vendor</button>`:''}
+        <button class="btn ghost sm" onclick="acMmcCsv()">⬇ Download (CSV / Excel)</button>
+        <button class="btn ghost sm" onclick="acMmcPrint()">🖨 Print / save PDF</button>
+      </div>
+      <div id="ac-entry-form"></div>
+      <h4 class="sec" style="margin-top:12px;">MMC ledger · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${mm.length} entr${mm.length===1?'y':'ies'}</h4>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>No.</th><th>Entry</th><th>Vendor / PO</th><th>Bank · ref</th><th class="amount">Paid to MMC ₹</th><th class="amount">MMC paid vendor ₹</th><th class="amount">Held by MMC ₹</th><th>Status</th><th></th></tr></thead><tbody>
+      ${mm.map(r=>`<tr style="${r.status==='REJECTED'?'opacity:.5;text-decoration:line-through;':''}"><td>${r.txn_date}</td><td><b>${esc(r.txn_no)}</b></td>` +
+        `<td>${r.kind==='PAY_TO_MMC'?'🏦 Paid to MMC':'🔁 MMC paid vendor'}${r.narration?'<br><span style="font-size:11px;color:#777">'+esc(r.narration)+'</span>':''}</td>` +
+        `<td>${esc(r.vendor_name||'—')}${r.po_no?'<br><span style="font-size:11px;color:#0b57d0;font-weight:600;">'+esc(r.po_no)+'</span>':''}</td>` +
+        `<td style="font-size:12px;">${r.kind==='PAY_TO_MMC'?esc(r.bank_name||'Bank')+(r.entry_no?' · '+esc(r.entry_no):''):(r.pay_no?esc(r.pay_no):'')}${r.ref_no?'<br><span style="color:#777">'+esc(r.ref_no)+'</span>':''}</td>` +
+        `<td class="amount" style="color:#b3261e">${Number(r.paid_to_mmc)?inr(r.paid_to_mmc):''}</td>` +
+        `<td class="amount" style="color:#1a7f37">${Number(r.paid_by_mmc)?inr(r.paid_by_mmc):''}</td>` +
+        `<td class="amount" style="font-weight:600;color:${r._bal>=0?'#0b57d0':'#b3261e'}">${inr(r._bal)}</td>` +
+        `<td style="font-size:11.5px;">${r.status==='PENDING_APPROVAL'?'<span style="color:#b8860b">⏳ awaiting approval</span>':r.status==='REJECTED'?'<span style="color:#b3261e">rejected</span>':'<span style="color:#1a7f37">✔ posted</span>'}</td>` +
+        `<td>${r.kind==='PAY_TO_MMC' ? dirDelBtn('acct','entries', r.entry_id, r.entry_no||r.txn_no, "acctTab('ledger')") : dirDelBtn('acct','vendor_payments', r.payment_id, r.pay_no||r.txn_no, "acctTab('ledger')")}</td></tr>`).join('')
+        || '<tr><td colspan="10" style="color:#777">Nothing routed through MMC in this date range yet. Use “+ Payment to MMC” when you pay MMC from your bank.</td></tr>'}
+      ${mm.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(totTo)}</td><td class="amount">${inr(totBy)}</td><td class="amount">${inr(bal)}</td><td colspan="2"></td></tr>`:''}
+      </tbody></table></div>
+      ${Object.keys(byV).length?`
+      <h4 class="sec" style="margin-top:14px;">Vendor-wise — money sent to MMC vs paid out by MMC</h4>
+      <div class="table-scroll"><table><thead><tr><th>Vendor</th><th class="amount">Paid to MMC ₹</th><th class="amount">MMC paid vendor ₹</th><th class="amount">Still with MMC ₹</th></tr></thead><tbody>
+      ${Object.keys(byV).sort().map(k=>`<tr><td><b>${esc(k)}</b></td><td class="amount">${inr(byV[k].to)}</td><td class="amount" style="color:#1a7f37">${inr(byV[k].by)}</td><td class="amount" style="font-weight:600;color:${byV[k].to-byV[k].by>0?'#0b57d0':byV[k].to-byV[k].by<0?'#b3261e':'#1a7f37'}">${inr(byV[k].to-byV[k].by)}</td></tr>`).join('')}
+      </tbody></table></div>`:''}`;
       return;
     }
     if (!isAllLed && sel.slice(0,2) === 'V:'){
@@ -5187,6 +5250,8 @@ async function acctTab(t){
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         ${CARD('🏦','Bank / ledger entry','Money in, money out, transfers between banks, receipts &amp; recoveries — straight into the finance ledger.','ledger')}
         ${CARD('💳','Vendor payment','Pay a vendor against their purchase bills — reduces that party’s outstanding in Vendor Dues.','vpay')}
+        ${CARD('🏭','Payment to MMC','For POs billed &amp; delivered to MMC: you pay MMC from your bank and MMC pays the vendor. Posts the bank payment to MMC and opens the MMC ledger.','mmc')}
+        ${CARD('🔁','MMC paid the vendor','Record that MMC has paid a vendor out of the money you sent — clears that vendor’s dues and reduces the balance held by MMC.','mmcv')}
         ${CARD('🧾','Business expense','Rent, utilities, travel, fees… tag the department, add GST/HSN & TDS. Paid by bank (hits the ledger) or petty cash (goes for approval). Shows in the Expense ledger.','exp')}
         ${CARD('💵','Petty cash expense','Small day-to-day cash spends from the box — waits for approval in the Petty Cash book.','petty')}
         ${CARD('🏧','Petty cash top-up','Cash withdrawn from a bank into the box — posts the bank withdrawal in the ledger on approval.','topup')}
@@ -5227,7 +5292,7 @@ async function acctTab(t){
       ${vds.map(r=>`<tr><td><b>${esc(r.vendor)}</b> <span style="color:#999;font-size:11px;">(${esc(r.code)})</span></td>` +
         `<td class="amount">${inr(r.billed)}</td><td class="amount" style="color:#1a7f37">${inr(r.paid)}</td>` +
         `<td class="amount" style="font-weight:700;color:${Number(r.outstanding)>0?'#b3261e':'#1a7f37'}">${inr(r.outstanding)}</td>` +
-        `<td>${canFinEdit()?`<button class="mini" onclick="acVendorPayForm('${r.vendor_id}','${esc(r.vendor).replace(/'/g,'&#39;')}',${Number(r.outstanding)})">Pay…</button>`:''}</td></tr>`).join('')
+        `<td style="white-space:nowrap">${canFinEdit()?`<button class="mini" onclick="acVendorPayForm('${r.vendor_id}','${esc(r.vendor).replace(/'/g,'&#39;')}',${Number(r.outstanding)})">Pay…</button> <button class="mini" title="MMC paid this vendor from the money we sent MMC (POs billed to MMC)" onclick="acMmcForm('vendor','vd-form','${r.vendor_id}','${esc(r.vendor).replace(/'/g,'&#39;')}',${Number(r.outstanding)})">🏭 Paid by MMC…</button>`:''}</td></tr>`).join('')
         || '<tr><td colspan="5" style="color:#777">No vendor bills yet — dues appear here as soon as a PO is placed.</td></tr>'}
       </tbody></table></div>
       <div id="vd-form"></div>
@@ -5447,6 +5512,7 @@ function acLedBack(){ window.acLedSel = ''; acctTab('ledger'); }
 async function acNewGo(kind){
   if (kind === 'ledger'){ await acctTab('ledger'); if (typeof acEntryForm === 'function'){ acEntryForm(); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); } }
   else if (kind === 'vpay'){ await acctTab('vdues'); }
+  else if (kind === 'mmc' || kind === 'mmcv'){ window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; await acctTab('ledger'); acMmcForm(kind === 'mmc' ? 'pay' : 'vendor', 'ac-entry-form'); }
   else if (kind === 'exp'){ await acctTab('exp'); const el=$('ex-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
   else if (kind === 'petty'){ await acctTab('petty'); const el=$('pc-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
   else if (kind === 'topup'){ await acctTab('petty'); const el=$('pt-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
@@ -5649,6 +5715,120 @@ async function acVpApprove(id, reject){
   if (error){ alert('Could not release the payment: ' + error.message); return; }
   alert('Payment released and recorded. The vendor outstanding has been reduced and the bank ledger posted.');
   acctTab($('ac-appr').classList.contains('on') ? 'appr' : 'vdues');
+}
+// ── MMC arrangement ──────────────────────────────────────────────────────────
+// POs billed & delivered to MMC are paid Aurum → MMC → vendor. Two entries:
+//   'pay'    : we pay MMC from our bank (a bank PAYMENT entry to payee MMC, follows entry approval)
+//   'vendor' : MMC paid the vendor for us (a vendor payment with no bank of ours, clears the vendor's dues)
+async function acMmcForm(kind, targetId, vid, vname, out){
+  const T = $(targetId || 'ac-entry-form'); if (!T) return;
+  T.innerHTML = '<div class="card" style="margin-top:12px;max-width:700px;">Loading…</div>';
+  const { data: vl } = await db.schema('sales').from('vendors').select('id,name').order('name');
+  window.__mmcVendors = vl || [];
+  const vOpts = '<option value="">— not for a particular vendor —</option>' + (vl||[]).map(v=>`<option value="${v.id}" ${v.id===vid?'selected':''}>${esc(v.name)}</option>`).join('');
+  const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  const isPay = kind === 'pay';
+  T.innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:700px;">
+      <h2 style="font-size:15px;">${isPay ? '🏭 Payment to MMC' : '🔁 MMC paid the vendor'}</h2>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">${isPay
+        ? 'Money goes from your bank to MMC, for a purchase order that is billed &amp; delivered to MMC. It is posted as a bank payment to MMC and sits in the MMC ledger until MMC pays the vendor.'
+        : 'MMC has paid the vendor out of the money you sent. This clears the vendor’s outstanding (like any vendor payment) and reduces the balance held by MMC — no bank of yours moves.'}
+        ${vname ? `<br>Vendor: <b>${esc(vname)}</b>${out!=null?` · outstanding right now <b style="color:${out>0?'#b3261e':'#1a7f37'}">₹ ${inr(out)}</b>`:''}` : ''}</p>
+      <div class="row2c">
+        <div><label>${isPay ? 'For vendor (optional)' : 'Vendor *'}</label><select id="mm-vendor" onchange="acMmcLoadPos()">${isPay ? vOpts : vOpts.replace('— not for a particular vendor —','— choose the vendor —')}</select></div>
+        <div><label>Against PO (billed to MMC)</label><select id="mm-po" onchange="acMmcPoChange()"><option value="">— none / not yet —</option></select></div>
+      </div>
+      <div id="mm-ponote" style="font-size:12px;color:#777;margin:4px 0 8px;"></div>
+      <div class="row2c">
+        <div><label>Amount ₹ *</label><input type="number" id="mm-amt" min="1" step="any"></div>
+        <div><label>Date</label><input type="date" id="mm-date" value="${calFmt(new Date())}"></div>
+      </div>
+      ${isPay ? `
+      <div class="row2c" style="margin-top:8px;">
+        <div><label>From bank *</label><select id="mm-bank">${bankOpts}</select></div>
+        <div><label>Mode</label><select id="mm-mode"><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CHEQUE">Cheque</option><option value="OTHER">Other</option></select></div>
+      </div>` : ''}
+      <div class="row2c" style="margin-top:8px;">
+        <div><label>${isPay ? 'UTR / cheque no.' : 'MMC’s payment reference (UTR etc.)'}</label><input type="text" id="mm-ref"></div>
+        <div><label>Note</label><input type="text" id="mm-note" placeholder="${isPay ? 'e.g. advance for PO, balance on delivery' : 'e.g. as per MMC statement dated …'}"></div>
+      </div>
+      ${isPay && !canFinApprove() ? '<p style="font-size:12px;color:#b8860b;margin-top:6px;">This bank payment will wait for approval by the Accounts head or Director before it is posted.</p>' : ''}
+      <button class="btn gold sm" style="margin-top:10px;" onclick="acMmcSave('${isPay?'pay':'vendor'}','${targetId||'ac-entry-form'}')">${isPay ? (canFinApprove() ? 'Post payment to MMC' : 'Submit for approval') : 'Record MMC’s payment to the vendor'}</button>
+      <button class="btn ghost sm" style="margin-top:10px;" onclick="$('${targetId||'ac-entry-form'}').innerHTML=''">Cancel</button>
+      <div id="mm-msg"></div>
+    </div>`;
+  window.__mmcKind = kind;
+  await acMmcLoadPos();
+  T.scrollIntoView({behavior:'smooth'});
+}
+async function acMmcLoadPos(){
+  const vsel = $('mm-vendor'), psel = $('mm-po'); if (!vsel || !psel) return;
+  psel.innerHTML = '<option value="">— none / not yet —</option>';
+  window.__mmcPos = [];
+  const { data: pos, error } = await db.schema('acct').rpc('mmc_po_options', { p_vendor: vsel.value || null });
+  if (error){ say('mm-msg','Could not load the MMC purchase orders: '+error.message,false); return; }
+  window.__mmcPos = pos || [];
+  psel.innerHTML += (pos||[]).map(p=>`<option value="${p.po_id}">${esc(p.po_no)} · ${p.order_date}${vsel.value?'':' · '+esc(p.vendor_name)} · value ₹${inr(p.po_value)} · sent to MMC ₹${inr(p.to_mmc)} · MMC paid ₹${inr(p.by_mmc)}</option>`).join('');
+  if (vsel.value && !(pos||[]).length) $('mm-ponote').textContent = 'This vendor has no purchase order marked "billed & delivered to MMC" — you can still record the amount without a PO.';
+  else $('mm-ponote').textContent = '';
+}
+function acMmcPoChange(){
+  const psel = $('mm-po'), note = $('mm-ponote'); if (!psel) return;
+  const po = (window.__mmcPos||[]).find(p=>p.po_id === psel.value);
+  if (!po){ if (note) note.textContent = ''; return; }
+  const vsel = $('mm-vendor'); if (vsel && !vsel.value && po.vendor_id){ vsel.value = po.vendor_id; }
+  const left = window.__mmcKind === 'pay' ? Number(po.po_value) - Number(po.to_mmc) : Number(po.to_mmc) - Number(po.by_mmc);
+  if (note) note.innerHTML = `PO value ₹${inr(po.po_value)} · sent to MMC so far ₹${inr(po.to_mmc)} · MMC has paid the vendor ₹${inr(po.by_mmc)}` +
+    (window.__mmcKind === 'pay' ? ` · <b>still to send ₹${inr(left>0?left:0)}</b>` : ` · <b>with MMC for this PO ₹${inr(left>0?left:0)}</b>`);
+  if (left > 0) $('mm-amt').value = left;
+}
+async function acMmcSave(kind, targetId){
+  const amt = Number($('mm-amt').value);
+  if (!(amt > 0)){ say('mm-msg','Enter the amount.',false); return; }
+  const vid = $('mm-vendor').value || null, po = $('mm-po').value || null;
+  let res;
+  if (kind === 'pay'){
+    if (!$('mm-bank') || !$('mm-bank').value){ say('mm-msg','Choose the bank the money goes from.',false); return; }
+    res = await db.schema('acct').rpc('mmc_pay', { p_amount: amt, p_bank: $('mm-bank').value, p_date: $('mm-date').value || null,
+      p_mode: $('mm-mode').value, p_ref: $('mm-ref').value.trim() || null, p_vendor: vid, p_po: po, p_note: $('mm-note').value.trim() || null });
+  } else {
+    if (!vid){ say('mm-msg','Choose the vendor MMC paid.',false); return; }
+    res = await db.schema('acct').rpc('mmc_paid_vendor', { p_vendor: vid, p_amount: amt, p_date: $('mm-date').value || null,
+      p_po: po, p_ref: $('mm-ref').value.trim() || null, p_note: $('mm-note').value.trim() || null });
+  }
+  if (res.error){ say('mm-msg','Could not save: '+res.error.message,false); return; }
+  if (kind === 'pay') alert(canFinApprove() ? 'Payment to MMC posted — it is in the bank ledger and the MMC ledger.' : 'Submitted — the payment to MMC will show in the MMC ledger as awaiting approval until the Accounts head or Director approves it.');
+  else alert('Recorded — the vendor’s outstanding is reduced and the balance held by MMC has come down.');
+  if (targetId === 'vd-form') acctTab('vdues');
+  else { window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; acctTab('ledger'); }
+}
+function acMmcCsv(){
+  const rows = window.__mmcRows || [];
+  const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const lines = [['No','Date','Entry','Vendor','PO','Bank','Ref','Narration','Paid to MMC (INR)','MMC paid vendor (INR)','Held by MMC (INR)','Status'].join(',')];
+  rows.forEach(r=> lines.push([e2(r.txn_no), e2(r.txn_date), e2(r.kind==='PAY_TO_MMC'?'Paid to MMC':'MMC paid vendor'), e2(r.vendor_name||''), e2(r.po_no||''), e2(r.bank_name||''), e2(r.ref_no||''), e2(r.narration||''),
+    Number(r.paid_to_mmc)||'', Number(r.paid_by_mmc)||'', Number(r._bal||0), e2(r.status)].join(',')));
+  const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'mmc-ledger-' + (window.acLedFrom||'start') + '-to-' + (window.acLedTo||'today') + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function acMmcPrint(){
+  const rows = window.__mmcRows || [];
+  const live = rows.filter(r=>r.status!=='REJECTED');
+  const totTo = live.reduce((s,r)=>s+Number(r.paid_to_mmc||0),0), totBy = live.reduce((s,r)=>s+Number(r.paid_by_mmc||0),0);
+  const body = `
+    <h1>AURUM SPIRITS INDIA LIMITED</h1>
+    <h2>MMC ledger · ${window.acLedFrom||'beginning'} to ${window.acLedTo||'today'}</h2>
+    <table><thead><tr><th>No.</th><th>Date</th><th>Entry</th><th>Vendor / PO</th><th>Bank · ref</th><th class="amount">Paid to MMC ₹</th><th class="amount">MMC paid vendor ₹</th><th class="amount">Held by MMC ₹</th><th>Status</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${esc(r.txn_no)}</td><td>${r.txn_date}</td><td>${r.kind==='PAY_TO_MMC'?'Paid to MMC':'MMC paid vendor'}${r.narration?'<br><span style="font-size:10px;color:#666">'+esc(r.narration)+'</span>':''}</td>`+
+      `<td>${esc(r.vendor_name||'—')}${r.po_no?'<br>'+esc(r.po_no):''}</td><td>${esc(r.bank_name||'')}${r.ref_no?'<br>'+esc(r.ref_no):''}</td>`+
+      `<td class="amount">${Number(r.paid_to_mmc)?inr(r.paid_to_mmc):''}</td><td class="amount">${Number(r.paid_by_mmc)?inr(r.paid_by_mmc):''}</td><td class="amount">${inr(r._bal||0)}</td><td>${r.status==='PENDING_APPROVAL'?'awaiting approval':r.status==='REJECTED'?'rejected':'posted'}</td></tr>`).join('')}
+    <tr class="tot"><td colspan="5">Total (${rows.length} entries)</td><td class="amount">${inr(totTo)}</td><td class="amount">${inr(totBy)}</td><td class="amount">${inr(totTo-totBy)}</td><td></td></tr>
+    </tbody></table>
+    <p style="font-size:11px;color:#666;margin-top:10px;">Balance held by MMC: ₹ ${inr(totTo-totBy)} · Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml('MMC ledger — Aurum Spirits', body);
 }
 function acExpPendItem(){
   const amt = Number($('ex-amt')?.value) || 0;
