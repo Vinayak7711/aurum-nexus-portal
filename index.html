@@ -660,24 +660,15 @@
   </div>
 </div>
 <div class="overlay hidden" id="sku-overlay">
-  <div class="sheet">
-    <h3>Add SKU</h3>
-    <label>Brand</label><select id="sa-brand"></select>
+  <div class="sheet" style="max-width:760px;">
+    <h3>Add SKUs</h3>
+    <p style="font-size:12px;color:#777;margin:2px 0 8px;">Add one SKU or several in one go — e.g. 180 ml, 375 ml and 750 ml of the same brand. Brand and manufacturer apply to every row below; each row is its own SKU.</p>
     <div class="row2c">
-      <div><label>Size (ml) *</label><input type="number" id="sa-size" placeholder="750"></div>
-      <div><label>Units per case *</label><input type="number" id="sa-upc" placeholder="12"></div>
+      <div><label>Brand</label><select id="sa-brand" onchange="skuRowsRefresh()"></select></div>
+      <div><label>Manufacturer</label><select id="sa-mfr"></select></div>
     </div>
-    <label>Pack material</label>
-    <select id="sa-material"><option value="PET">PET</option><option value="GLASS">GLASS</option></select>
-    <label>Manufacturer</label><select id="sa-mfr"></select>
-    <div class="row2c" style="margin-top:6px;">
-      <div><label>Price of bottle (before VAT) ₹</label><input type="number" id="sa-base" min="0" step="any" placeholder="e.g. 150" oninput="skuMrpAuto('sa')"></div>
-      <div><label>Excise duty ₹ / bottle</label><input type="number" id="sa-excise" min="0" step="any" placeholder="e.g. 80" oninput="skuMrpAuto('sa')"></div>
-    </div>
-    <div class="row2c">
-      <div><label>VAT ₹ / bottle</label><input type="number" id="sa-vatamt" min="0" step="any" placeholder="e.g. 20" oninput="skuMrpAuto('sa')"></div>
-      <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto-added, adjustable)</span></label><input type="number" id="sa-mrp" min="0" step="any"></div>
-    </div>
+    <div id="sa-rows" style="margin-top:8px;"></div>
+    <button class="btn ghost sm" type="button" style="margin-top:8px;" onclick="skuRowAdd()">＋ Add another SKU row</button>
     <div class="row2" style="margin-top:16px;">
       <button class="btn ghost" onclick="closeSheet('sku-overlay')">Cancel</button>
       <button class="btn gold" id="btn-save-sku">Save</button>
@@ -1873,28 +1864,90 @@ $('btn-save-brand').onclick = async () => {
   if (error){ say('ba-msg', error.message, false); return; }
   closeSheet('brand-overlay'); openBrands();
 };
+let __skuRowSeq = 0;
+function skuRowHtml(n){
+  return `<div class="card sku-row" data-row="${n}" style="padding:10px 12px;margin-bottom:8px;border:1px solid #e3ddcc;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <b style="font-size:12.5px;">SKU <span class="sku-row-no"></span> · <span class="sku-row-code" style="color:#0b57d0;font-weight:600;">code appears here</span></b>
+      <button class="mini" type="button" style="color:#b3261e;border-color:#b3261e;" onclick="skuRowRemove(${n})" title="Remove this row">✖</button>
+    </div>
+    <div class="row2c" style="margin-top:6px;">
+      <div><label>Size (ml) *</label><input type="number" id="sa-size-${n}" placeholder="750" oninput="skuRowsRefresh()"></div>
+      <div><label>Units per case *</label><input type="number" id="sa-upc-${n}" placeholder="12"></div>
+    </div>
+    <div class="row2c">
+      <div><label>Pack material</label><select id="sa-material-${n}" onchange="skuRowsRefresh()"><option value="PET">PET</option><option value="GLASS">GLASS</option></select></div>
+      <div><label>Price of bottle (before VAT) ₹</label><input type="number" id="sa-base-${n}" min="0" step="any" placeholder="e.g. 150" oninput="skuMrpAuto('sa-${n}')"></div>
+    </div>
+    <div class="row2c">
+      <div><label>Excise duty ₹ / bottle</label><input type="number" id="sa-excise-${n}" min="0" step="any" placeholder="e.g. 80" oninput="skuMrpAuto('sa-${n}')"></div>
+      <div><label>VAT ₹ / bottle</label><input type="number" id="sa-vatamt-${n}" min="0" step="any" placeholder="e.g. 20" oninput="skuMrpAuto('sa-${n}')"></div>
+    </div>
+    <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto-added, adjustable)</span></label><input type="number" id="sa-mrp-${n}" min="0" step="any"></div>
+  </div>`;
+}
+function skuRowAdd(copyFrom){
+  const n = ++__skuRowSeq;
+  $('sa-rows').insertAdjacentHTML('beforeend', skuRowHtml(n));
+  // a new row starts with the previous row's units / pack / prices so a size range is quick to enter
+  const prev = [...document.querySelectorAll('#sa-rows .sku-row')].slice(-2)[0];
+  if (prev && prev.dataset.row !== String(n)){
+    const p = prev.dataset.row;
+    ['upc','material','base','excise','vatamt','mrp'].forEach(f => { const a = $('sa-'+f+'-'+p), b = $('sa-'+f+'-'+n); if (a && b) b.value = a.value; });
+  }
+  skuRowsRefresh();
+  const sz = $('sa-size-'+n); if (sz) sz.focus();
+}
+function skuRowRemove(n){
+  const rows = document.querySelectorAll('#sa-rows .sku-row');
+  if (rows.length <= 1){ say('sa-msg','Keep at least one SKU row.',false); return; }
+  const el = document.querySelector('#sa-rows .sku-row[data-row="'+n+'"]'); if (el) el.remove();
+  skuRowsRefresh();
+}
+function skuCodeFor(brandName, size, material){ return (String(brandName||'').toUpperCase().replace(/ /g,'')) + '-' + size + '-' + material; }
+function skuRowsRefresh(){
+  const brand = M.brands.find(b=>b.id===$('sa-brand').value);
+  const seen = {};
+  document.querySelectorAll('#sa-rows .sku-row').forEach((el,i)=>{
+    const n = el.dataset.row; el.querySelector('.sku-row-no').textContent = i+1;
+    const size = Number($('sa-size-'+n).value), mat = $('sa-material-'+n).value;
+    const codeEl = el.querySelector('.sku-row-code');
+    if (!(size>0) || !brand){ codeEl.textContent = 'code appears here'; codeEl.style.color = '#999'; return; }
+    const code = skuCodeFor(brand.name, size, mat);
+    const dup = M.skus.some(s=>s.sku_code===code) ? 'already exists' : (seen[code] ? 'repeated in this list' : '');
+    seen[code] = true;
+    codeEl.textContent = code + (dup ? ' — ' + dup : ''); codeEl.style.color = dup ? '#b3261e' : '#0b57d0';
+  });
+}
 function openSkuAdd(){
   say('sa-msg','');
   $('sa-brand').innerHTML = M.brands.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   $('sa-mfr').innerHTML = M.mfrs.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('');
-  $('sa-size').value=''; $('sa-upc').value='';
-  $('sa-base').value=''; $('sa-excise').value=''; $('sa-vatamt').value=''; $('sa-mrp').value='';
+  $('sa-rows').innerHTML = ''; __skuRowSeq = 0;
+  skuRowAdd();
   $('sku-overlay').classList.remove('hidden');
 }
 $('btn-save-sku').onclick = async () => {
-  const size = Number($('sa-size').value), upc = Number($('sa-upc').value);
-  if (!(size>0 && upc>0)){ say('sa-msg','Size and units per case are required.',false); return; }
   const brand = M.brands.find(b=>b.id===$('sa-brand').value);
-  const code = (brand.name.toUpperCase().replace(/ /g,'')) + '-' + size + '-' + $('sa-material').value;
-  const { error } = await db.schema('sales').from('skus').insert({
-    sku_code: code, brand_id: brand.id, size_ml: size, units_per_case: upc,
-    material: $('sa-material').value, manufacturer_id: $('sa-mfr').value,
-    base_price: $('sa-base').value!=='' ? Number($('sa-base').value) : null,
-    excise_duty: $('sa-excise').value!=='' ? Number($('sa-excise').value) : null,
-    vat_amount: $('sa-vatamt').value!=='' ? Number($('sa-vatamt').value) : null,
-    mrp: $('sa-mrp').value!=='' ? Number($('sa-mrp').value) : null });
+  if (!brand){ say('sa-msg','Choose the brand.',false); return; }
+  const rows = [...document.querySelectorAll('#sa-rows .sku-row')];
+  const out = [], codes = {};
+  for (let i = 0; i < rows.length; i++){
+    const n = rows[i].dataset.row;
+    const size = Number($('sa-size-'+n).value), upc = Number($('sa-upc-'+n).value);
+    if (!(size>0 && upc>0)){ say('sa-msg','Row '+(i+1)+': size and units per case are required.',false); return; }
+    const mat = $('sa-material-'+n).value, code = skuCodeFor(brand.name, size, mat);
+    if (M.skus.some(s=>s.sku_code===code)){ say('sa-msg','Row '+(i+1)+': '+code+' already exists.',false); return; }
+    if (codes[code]){ say('sa-msg','Row '+(i+1)+': '+code+' is repeated in this list.',false); return; }
+    codes[code] = true;
+    const v = id => { const el = $(id+'-'+n); return el && el.value!=='' ? Number(el.value) : null; };
+    out.push({ sku_code: code, brand_id: brand.id, size_ml: size, units_per_case: upc, material: mat, manufacturer_id: $('sa-mfr').value,
+               base_price: v('sa-base'), excise_duty: v('sa-excise'), vat_amount: v('sa-vatamt'), mrp: v('sa-mrp') });
+  }
+  const { error } = await db.schema('sales').from('skus').insert(out);
   if (error){ say('sa-msg', error.message, false); return; }
   closeSheet('sku-overlay'); openBrands();
+  if (out.length > 1) setTimeout(()=>alert(out.length + ' SKUs added: ' + out.map(o=>o.sku_code).join(', ')), 300);
 };
 
 /* ================= RATES / STRUCTURE / OUTSTANDING / CM ================= */
