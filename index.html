@@ -6159,9 +6159,11 @@ async function acEntryForm(kind){
       </optgroup></select></div>
     <div><label>Amount ₹ *</label><input type="number" id="en-amt" min="0.01" step="any"></div></div>
     <div id="en-vendor-wrap" style="display:none">
-      <div class="row2c"><div><label>Vendor *</label><select id="en-vendor" onchange="acEnLoadPos()">${vendorOpts}</select></div>
+      <div class="row2c"><div><label id="en-vendor-lbl">Vendor *</label><select id="en-vendor" onchange="acEnLoadPos()">${vendorOpts}</select></div>
       <div><label>Against purchase order</label><select id="en-po" onchange="acEnPoChange()"><option value="">— none / not yet —</option></select></div></div>
       <div id="en-ponote" style="font-size:12px;color:#777;margin:4px 0 8px;"></div>
+      <div id="en-manual-wrap" style="display:none"><label>Payee name — if the party is not in the vendor list</label><input type="text" id="en-payee-manual" placeholder="Type the name of the person / firm being paid">
+        <p style="font-size:11.5px;color:#777;margin:4px 0 8px;">Leave the vendor as "— choose the vendor —" and type the payee here. The payment is posted to the bank ledger under this name (no vendor dues are touched).</p></div>
     </div>
     <div class="row2c"><div id="en-bank-wrap"><label id="en-bank-lbl">Bank account *</label><select id="en-bank">${bankOpts}</select></div>
     <div id="en-counter-wrap" style="display:none"><label>Transfer to *</label><select id="en-counter">${bankOpts}</select></div>
@@ -6185,6 +6187,7 @@ function acKindChange(){
   $('en-counter-wrap').style.display = k==='TRANSFER'?'block':'none';
   $('en-dir-wrap').style.display = k==='OTHER'?'block':'none';
   $('en-vendor-wrap').style.display = isVen ? 'block' : 'none';
+  acEnManualToggle();
   $('en-bank-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
   $('en-mode-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
   $('en-staff-wrap').style.display = isVen ? 'none' : '';
@@ -6197,8 +6200,15 @@ function acKindChange(){
   if (isVen){ const m = $('en-mode'); if (m && !m.value) m.value = 'NEFT'; acEnLoadPos(); }
   const ph = $('en-narr'); if (ph) ph.placeholder = isVen ? 'e.g. part payment, balance on delivery' : 'Who / what for';
 }
+// manual payee box: only for a direct vendor payment when no vendor from the list is chosen
+function acEnManualToggle(){
+  const k = $('en-kind')?.value, vsel = $('en-vendor'), w = $('en-manual-wrap'); if (!w) return;
+  w.style.display = (k === 'VPAY' && vsel && !vsel.value) ? '' : 'none';
+  const l = $('en-vendor-lbl'); if (l) l.textContent = k === 'VPAY' ? 'Vendor (from the list) — or type a payee below' : 'Vendor *';
+}
 // vendor's POs for the vendor-payment kinds (all POs for a direct payment; only MMC-billed POs for the MMC kinds)
 async function acEnLoadPos(){
+  acEnManualToggle();
   const k = $('en-kind')?.value, vsel = $('en-vendor'), psel = $('en-po'); if (!vsel || !psel) return;
   psel.innerHTML = '<option value="">— none / not yet —</option>'; window.__enPos = []; $('en-ponote').textContent = '';
   if (!vsel.value) return;
@@ -6231,8 +6241,18 @@ async function acEntrySave(){
   if (!(amt>0)){ say('en-msg','Amount must be above zero.',false); return; }
   if (k==='VPAY' || k==='MMC_PAY' || k==='MMC_VEN'){
     const vid = $('en-vendor').value, po = $('en-po').value || null, note = $('en-narr').value.trim() || null, ref = $('en-ref').value.trim() || null;
-    if (!vid){ say('en-msg','Choose the vendor.',false); return; }
+    const manual = ($('en-payee-manual') ? $('en-payee-manual').value.trim() : '');
+    if (!vid && !(k === 'VPAY' && manual)){ say('en-msg', k === 'VPAY' ? 'Choose the vendor from the list, or type the payee name in the box below the vendor.' : 'Choose the vendor.', false); return; }
     let res, msg;
+    if (k === 'VPAY' && !vid){
+      // payee not in the vendor master: a plain bank payment under the typed name (no vendor dues involved)
+      if (!$('en-bank').value){ say('en-msg','Choose the bank the money goes from.',false); return; }
+      res = await db.schema('acct').rpc('create_entry', { p_kind: 'PAYMENT', p_amount: amt, p_bank: $('en-bank').value, p_direction: 'OUT', p_counter_bank: null,
+        p_date: $('en-date').value||null, p_mode: $('en-mode').value||'NEFT', p_ref: ref, p_party: null, p_staff: null, p_payee: manual, p_narration: note || ('Payment to ' + manual) });
+      if (res.error){ say('en-msg','Could not post: '+res.error.message,false); return; }
+      alert(canFinApprove() ? 'Payment to ' + manual + ' posted in the bank ledger.' : 'Submitted — the payment to ' + manual + ' waits for approval by the Accounts head or Director.');
+      window.acLedSel = ''; acctTab('ledger'); return;
+    }
     if (k === 'VPAY'){
       if (!$('en-bank').value){ say('en-msg','Choose the bank the money goes from.',false); return; }
       res = await db.schema('acct').rpc('vendor_pay_bank', { p_vendor: vid, p_amount: amt, p_bank: $('en-bank').value, p_po: po, p_date: $('en-date').value||null, p_mode: $('en-mode').value||'NEFT', p_ref: ref, p_note: note });
