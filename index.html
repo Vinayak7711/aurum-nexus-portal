@@ -1877,14 +1877,20 @@ function skuRowHtml(n){
     </div>
     <div class="row2c">
       <div><label>Pack material</label><select id="sa-material-${n}" onchange="skuRowsRefresh()"><option value="PET">PET</option><option value="GLASS">GLASS</option></select></div>
-      <div><label>Price of bottle (before VAT) ₹</label><input type="number" id="sa-base-${n}" min="0" step="any" placeholder="e.g. 150" oninput="skuMrpAuto('sa-${n}')"></div>
+      <div><label>Price of bottle (before VAT) ₹</label><input type="number" id="sa-base-${n}" min="0" step="any" placeholder="e.g. 150" oninput="skuRowMrp(${n})"></div>
     </div>
     <div class="row2c">
-      <div><label>Excise duty ₹ / bottle</label><input type="number" id="sa-excise-${n}" min="0" step="any" placeholder="e.g. 80" oninput="skuMrpAuto('sa-${n}')"></div>
-      <div><label>VAT ₹ / bottle</label><input type="number" id="sa-vatamt-${n}" min="0" step="any" placeholder="e.g. 20" oninput="skuMrpAuto('sa-${n}')"></div>
+      <div><label>Excise duty ₹ / bottle</label><input type="number" id="sa-excise-${n}" min="0" step="any" placeholder="e.g. 80" oninput="skuRowMrp(${n})"></div>
+      <div><label>VAT ₹ / bottle</label><input type="number" id="sa-vatamt-${n}" min="0" step="any" placeholder="e.g. 20" oninput="skuRowMrp(${n})"></div>
     </div>
     <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto-added, adjustable)</span></label><input type="number" id="sa-mrp-${n}" min="0" step="any"></div>
   </div>`;
+}
+function skuRowMrp(n){
+  const v = f => { const el = $('sa-'+f+'-'+n); return el && el.value!=='' ? Number(el.value)||0 : 0; };
+  const el = $('sa-mrp-'+n); if (!el) return;
+  const total = v('base') + v('excise') + v('vatamt');
+  el.value = total ? total.toFixed(2) : '';
 }
 function skuRowAdd(copyFrom){
   const n = ++__skuRowSeq;
