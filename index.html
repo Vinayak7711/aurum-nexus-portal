@@ -5250,8 +5250,16 @@ async function acctTab(t){
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         ${CARD('🏦','Bank / ledger entry','Money in, money out, transfers between banks, receipts &amp; recoveries — straight into the finance ledger.','ledger')}
         ${CARD('💳','Vendor payment (paid by Aurum)','Pay a vendor straight from our bank against their purchase order — posts the bank entry and reduces that vendor’s outstanding.','vpay')}
-        ${CARD('🏭','Payment to MMC','For POs billed &amp; delivered to MMC: you pay MMC from your bank and MMC pays the vendor. Posts the bank payment to MMC and shows in the MMC ledger.','mmc')}
-        ${CARD('🔁','MMC paid the vendor','Record that MMC has paid a vendor out of the money you sent — clears that vendor’s dues and reduces the balance held by MMC.','mmcv')}
+        <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
+          <div style="font-size:26px;">🏭</div>
+          <h2 style="font-size:15px;margin:6px 0 4px;">Payment via MMC</h2>
+          <p style="font-size:12px;color:#777;margin:0 0 10px;">For POs billed &amp; delivered to MMC. <b>Step 1</b> — you pay MMC from your bank. <b>Step 2</b> — MMC pays the vendor from that money, which clears the vendor’s dues. Both show in the MMC ledger with the balance still held by MMC.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn gold sm" onclick="acNewGo('mmc')">1 · Paid to MMC</button>
+            <button class="btn gold sm" onclick="acNewGo('mmcv')">2 · MMC paid the vendor</button>
+          </div>
+          <div style="margin-top:8px;"><a href="#" style="font-size:12px;" onclick="event.preventDefault();window.acLedType='M:';window.acLedSel='M:MMC';acctTab('ledger')">📖 Open the MMC ledger</a></div>
+        </div>
         ${CARD('🧾','Business expense','Rent, utilities, travel, fees… tag the department, add GST/HSN & TDS. Paid by bank (hits the ledger) or petty cash (goes for approval). Shows in the Expense ledger.','exp')}
         ${CARD('💵','Petty cash expense','Small day-to-day cash spends from the box — waits for approval in the Petty Cash book.','petty')}
         ${CARD('🏧','Petty cash top-up','Cash withdrawn from a bank into the box — posts the bank withdrawal in the ledger on approval.','topup')}
