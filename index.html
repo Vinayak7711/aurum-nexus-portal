@@ -629,6 +629,8 @@
     </div>
     <label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="pe-whatsapp" placeholder="WhatsApp number (mobile, e.g. 98765 43210)">
     <label>Email</label><input type="text" id="pe-email">
+    <label>Postal address (for communication)</label><textarea id="pe-address" rows="2" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;" placeholder="Building, street, area"></textarea>
+    <label>PIN code</label><input type="text" id="pe-pincode" maxlength="6" placeholder="6-digit PIN">
     <label>Salesperson (owner)</label><select id="pe-owner"></select>
     <label>Territory</label><select id="pe-territory" onchange="peTerrChange()"></select>
     <input type="text" id="pe-territory-new" class="hidden" placeholder="Type the new territory, e.g. Panvel to Pen" style="margin-top:6px;">
@@ -1683,6 +1685,7 @@ function openPartyEdit(p, kind){
   $('pe-credit').value = p?.credit_days??0; $('pe-license').value = p?.license_no||'';
   $('pe-gstin').value = p?.gstin||''; $('pe-contact').value = p?.contact_person||'';
   $('pe-phone').value = p?.phone||''; $('pe-email').value = p?.email||''; if ($('pe-whatsapp')) $('pe-whatsapp').value = p?.whatsapp||'';
+  if ($('pe-address')) $('pe-address').value = p?.address||''; if ($('pe-pincode')) $('pe-pincode').value = p?.pincode||'';
   $('pe-active').checked = p ? p.is_active : true;
   $('pe-territory').innerHTML = '<option value="">\u2014 none \u2014</option>' +
     (M.terr||[]).filter(t=>t.is_active || (p&&p.territory_id===t.id)).map(t=>`<option value="${t.id}" ${p&&p.territory_id===t.id?'selected':''}>${esc(t.name)}${t.is_active?'':' (inactive)'}</option>`).join('') +
@@ -1720,6 +1723,7 @@ $('btn-save-party').onclick = async () => {
     license_no: $('pe-license').value.trim()||null, gstin: $('pe-gstin').value.trim()||null,
     contact_person: $('pe-contact').value.trim()||null, phone: $('pe-phone').value.trim()||null, whatsapp: $('pe-whatsapp').value.trim()||null,
     email: $('pe-email').value.trim()||null, owner_id: $('pe-owner').value, is_active: $('pe-active').checked,
+    address: $('pe-address') ? ($('pe-address').value.trim()||null) : null, pincode: $('pe-pincode') ? ($('pe-pincode').value.trim()||null) : null,
     territory_id: terrId,
     party_type: $('pe-type') ? $('pe-type').value : 'DISTRIBUTOR'
   };
@@ -2897,8 +2901,12 @@ async function onbTab(which){
       <input type="text" id="ob-licence" placeholder="Excise licence no."></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="ob-owner" placeholder="Owner / contact person">
       <input type="text" id="ob-phone" placeholder="Phone"></div>
-      <div class="row2c" style="margin-top:8px;"><input type="text" id="ob-email" placeholder="Email">
-      <button class="btn gold sm" style="padding:11px;" onclick="onbAdd()">Register application</button></div>
+      <div class="row2c" style="margin-top:8px;"><input type="email" id="ob-email" placeholder="Email">
+      <input type="text" id="ob-whatsapp" placeholder="WhatsApp number (mobile)"></div>
+      <div style="margin-top:8px;"><textarea id="ob-address" rows="2" placeholder="Postal address — building, street, area (for communication)" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;"></textarea></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="ob-city" placeholder="City / town">
+      <div class="row2c" style="gap:8px;"><input type="text" id="ob-state" placeholder="State"><input type="text" id="ob-pincode" placeholder="PIN code" maxlength="6" inputmode="numeric"></div></div>
+      <div style="margin-top:8px;"><button class="btn gold sm" style="padding:11px 22px;" onclick="onbAdd()">Register application</button></div>
       <div id="onb-msg"></div></div>`;
     html += '<div class="table-scroll"><table><thead><tr><th>App No</th><th>Applicant</th><th>Territory</th><th>Status</th><th></th></tr></thead><tbody>';
     for (const a of (data||[])){
@@ -2906,7 +2914,8 @@ async function onbTab(which){
       const act = (a.status==='APPLIED'||a.status==='UNDER_REVIEW')
         ? `<button class="mini" onclick="onbApprove('${a.id}')">Approve → create party</button>
            <button class="mini" onclick="onbStatus('${a.id}','${a.status==='APPLIED'?'UNDER_REVIEW':'REJECTED'}')">${a.status==='APPLIED'?'Mark review':'Reject'}</button>` : '';
-      html += `<tr><td><b>${esc(a.app_no)}</b></td><td>${esc(a.applicant_name)}${a.trade_name?'<br><span style="font-size:11px;color:#777">'+esc(a.trade_name)+'</span>':''}</td>
+      const addr = [a.profile?.address, a.profile?.city, a.profile?.state, a.profile?.pincode].filter(Boolean).join(', ');
+      html += `<tr><td><b>${esc(a.app_no)}</b></td><td>${esc(a.applicant_name)}${a.trade_name?'<br><span style="font-size:11px;color:#777">'+esc(a.trade_name)+'</span>':''}${addr?'<br><span style="font-size:11px;color:#777">📍 '+esc(addr)+'</span>':''}</td>
         <td>${esc(a.territory||'—')}</td><td><span class="pill ${pill}">${a.status}</span></td><td>${act}</td></tr>`;
     }
     B.innerHTML = html + '</tbody></table></div><div id="onb-msg2"></div>';
@@ -3086,13 +3095,17 @@ async function vnEditSave(id){
 async function onbAdd(){
   const name = $('ob-name').value.trim();
   if (!name){ say('onb-msg','Applicant name is required.',false); return; }
+  const em = $('ob-email').value.trim(), pin = $('ob-pincode').value.trim();
+  if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ say('onb-msg','That email address does not look right.',false); return; }
+  if (pin && !/^[1-9][0-9]{5}$/.test(pin)){ say('onb-msg','PIN code should be 6 digits.',false); return; }
   const { data: appno, error: e1 } = await db.schema('app').rpc('next_code', { p_series: 'DOF' });
   if (e1){ say('onb-msg', e1.message, false); return; }
   const { error } = await db.schema('sales').from('onboarding').insert({
     app_no: appno, applicant_name: name, trade_name: $('ob-trade').value.trim()||null,
     entity_type: $('ob-entity').value.trim()||null, territory: $('ob-territory').value.trim()||null,
     gstin: $('ob-gstin').value.trim()||null, excise_licence: $('ob-licence').value.trim()||null,
-    contacts: { owner: $('ob-owner').value.trim()||null, phone: $('ob-phone').value.trim()||null, email: $('ob-email').value.trim()||null },
+    contacts: { owner: $('ob-owner').value.trim()||null, phone: $('ob-phone').value.trim()||null, email: $('ob-email').value.trim()||null, whatsapp: $('ob-whatsapp').value.trim()||null },
+    profile: { address: $('ob-address').value.trim()||null, city: $('ob-city').value.trim()||null, state: $('ob-state').value.trim()||null, pincode: $('ob-pincode').value.trim()||null },
     created_by: me.id });
   if (error){ say('onb-msg', error.message, false); return; }
   onbTab('apps');
