@@ -5237,7 +5237,8 @@ async function acctTab(t){
           `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` +
           `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
           `<td>${(e.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acApprove('${e.id}',false)">Approve</button> <button class="mini" onclick="acApprove('${e.id}',true)">Reject</button> `:'')+
-                (isDir()?`<button class="mini" onclick="acEdit('${e.id}',${e.amount})">Edit</button> <button class="mini" onclick="acDelEntry('${e.id}')">Delete</button>`:'')}</td></tr>`;}).join('')
+                (canFinApprove()?`<button class="mini" onclick="acEdit('${e.id}')" title="Correct this entry (date, kind, amount, bank, mode, reference, narration)">✏️ Edit</button> `:'')+
+                (isDir()?`<button class="mini" onclick="acDelEntry('${e.id}')">Delete</button>`:'')}</td></tr>`;}).join('')
         || '<tr><td colspan="9" style="color:#777">No entries yet.</td></tr>'}
       </tbody></table></div>`;
     return;
@@ -6260,12 +6261,69 @@ async function acApprove(id, reject){
   if (error){ alert('Could not update: '+error.message); return; }
   acctTab('ledger');
 }
-async function acEdit(id, cur){
-  const v = prompt('New amount (₹) for this entry:', cur);
-  if (v===null) return;
-  const amt = Number(v); if (!(amt>0)){ alert('Enter a valid amount.'); return; }
-  const { error } = await db.schema('acct').rpc('edit_entry', { p_entry: id, p_amount: amt });
-  if (error){ alert('Could not edit: '+error.message); return; }
+// Director / approving authority can correct any ledger entry — approved ones included.
+// Every change is logged (before/after + reason) and linked vendor payments / expenses / MMC lines follow the correction.
+async function acEdit(id){
+  if (!canFinApprove()){ alert('Only the Director or the approving authority can edit a ledger entry.'); return; }
+  const A2 = db.schema('acct');
+  const { data: e, error } = await A2.from('v_entries').select('*').eq('id', id).single();
+  if (error || !e){ alert('Could not open that entry.'); return; }
+  if (!acBanks.length){ try { const b = await A2.from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(x){} }
+  const [{ data: vpL }, { data: exL }, { data: mmL }, { data: edits }] = await Promise.all([
+    A2.from('vendor_payments').select('pay_no').eq('entry_id', id),
+    A2.from('expenses').select('exp_no').eq('entry_id', id),
+    A2.from('mmc_txns').select('txn_no').eq('entry_id', id),
+    A2.from('entry_edits').select('edited_at, reason, edited_by').eq('entry_id', id).order('edited_at', {ascending:false}).limit(5)
+  ]);
+  const linked = [...(vpL||[]).map(x=>'vendor payment '+x.pay_no), ...(exL||[]).map(x=>'expense '+x.exp_no), ...(mmL||[]).map(x=>'MMC line '+x.txn_no)];
+  const bankOpts = sel => acBanks.map(b=>`<option value="${b.id}" ${b.id===sel?'selected':''}>${esc(b.name)}</option>`).join('');
+  const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}" ${s.id===e.staff_id?'selected':''}>${esc(s.full_name)}</option>`).join('');
+  const KINDS = [['BANK_IN','Money IN (deposit / receipt)'],['BANK_OUT','Money OUT (withdrawal)'],['PAYMENT','Payment (vendor / expense)'],['TRANSFER','Transfer between accounts'],['RECOVERY','Advance recovery (cash in)'],['SALARY','Salary'],['ADVANCE','Staff advance'],['OTHER','Other']];
+  const MODES = ['','NEFT','RTGS','UPI','CHEQUE','CASH','OTHER'];
+  const host = $('ac-entry-form') || $('acct-body');
+  const box = document.createElement('div'); box.id = 'ac-edit-box';
+  const old = $('ac-edit-box'); if (old) old.remove();
+  box.innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:680px;border:1px solid #b8860b;">
+      <h3 style="font-size:15px;">✏️ Correct entry ${esc(e.entry_no)} <span style="font-size:11.5px;color:${AC_ST[e.status]||'#777'};font-weight:600;">${acLbl(e.status)}</span></h3>
+      ${linked.length?`<p style="font-size:12px;color:#b8860b;margin:4px 0 8px;">Linked: ${esc(linked.join(', '))} — amount, date, bank and reference there will be corrected along with this entry.</p>`:''}
+      <div class="row2c"><div><label>Kind</label><select id="ee-kind" onchange="$('ee-counter-wrap').style.display=this.value==='TRANSFER'?'':'none';$('ee-dir-wrap').style.display=this.value==='OTHER'?'':'none';">
+        ${KINDS.map(k=>`<option value="${k[0]}" ${k[0]===e.kind?'selected':''}>${k[1]}</option>`).join('')}</select></div>
+      <div><label>Amount ₹</label><input type="number" id="ee-amt" min="0.01" step="any" value="${Number(e.amount)}"></div></div>
+      <div class="row2c"><div><label>Bank account</label><select id="ee-bank">${bankOpts(e.bank_account_id)}</select></div>
+      <div id="ee-counter-wrap" style="${e.kind==='TRANSFER'?'':'display:none'}"><label>Transfer to</label><select id="ee-counter">${bankOpts(e.counter_bank_account_id)}</select></div>
+      <div id="ee-dir-wrap" style="${e.kind==='OTHER'?'':'display:none'}"><label>Direction</label><select id="ee-dir"><option value="OUT" ${e.direction==='OUT'?'selected':''}>Money OUT</option><option value="IN" ${e.direction==='IN'?'selected':''}>Money IN</option></select></div></div>
+      <div class="row2c"><div><label>Date</label><input type="date" id="ee-date" value="${e.entry_date||''}"></div>
+      <div><label>Mode</label><select id="ee-mode">${MODES.map(m=>`<option value="${m}" ${m===(e.mode||'')?'selected':''}>${m||'—'}</option>`).join('')}</select></div></div>
+      <div class="row2c"><div><label>Reference no. (UTR / cheque)</label><input type="text" id="ee-ref" value="${esc(e.ref_no||'')}"></div>
+      <div><label>Staff (if any)</label><select id="ee-staff">${staffOpts}</select></div></div>
+      <label>Payee</label><input type="text" id="ee-payee" value="${esc(e.payee||'')}">
+      <label>Narration</label><input type="text" id="ee-narr" value="${esc(e.narration||'')}">
+      <label>Reason for the correction (kept on record)</label><input type="text" id="ee-reason" placeholder="e.g. wrong amount typed, correct UTR">
+      ${(edits||[]).length?`<p style="font-size:11.5px;color:#777;margin-top:8px;">Earlier corrections: ${(edits||[]).map(x=>new Date(x.edited_at).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})+(x.reason?' — '+esc(x.reason):'')).join(' · ')}</p>`:''}
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn gold sm" onclick="acEditSave('${e.id}')">Save correction</button>
+        <button class="btn ghost sm" onclick="$('ac-edit-box').remove()">Cancel</button>
+      </div>
+      <div id="ee-msg"></div>
+    </div>`;
+  host.parentNode.insertBefore(box, host.nextSibling);
+  box.scrollIntoView({behavior:'smooth', block:'center'});
+}
+async function acEditSave(id){
+  const amt = Number($('ee-amt').value);
+  if (!(amt > 0)){ say('ee-msg','Amount must be above zero.',false); return; }
+  const kind = $('ee-kind').value;
+  const reason = $('ee-reason').value.trim();
+  if (!reason){ say('ee-msg','Write a short reason for the correction — it is kept on record.',false); return; }
+  if (!confirm('Save this correction to the ledger entry?\n\nThe change is logged with your name, the time and the reason.')) return;
+  const { error } = await db.schema('acct').rpc('edit_entry_full', {
+    p_entry: id, p_date: $('ee-date').value || null, p_kind: kind,
+    p_direction: kind === 'OTHER' ? $('ee-dir').value : null, p_amount: amt,
+    p_bank: $('ee-bank').value || null, p_counter_bank: kind === 'TRANSFER' ? ($('ee-counter').value || null) : null,
+    p_mode: $('ee-mode').value, p_ref: $('ee-ref').value, p_payee: $('ee-payee').value, p_narration: $('ee-narr').value,
+    p_staff: $('ee-staff').value || null, p_party: null, p_reason: reason });
+  if (error){ say('ee-msg','Could not save: '+error.message,false); return; }
   acctTab('ledger');
 }
 async function acDelEntry(id){
