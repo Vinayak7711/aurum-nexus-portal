@@ -3129,19 +3129,24 @@ async function tasksTab(which){
     if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
     let html = '';
     if (which === 'all' && isDir()){
-      const uopts = M.users.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('');
-      html += `<div class="card" style="margin-bottom:14px;max-width:640px;"><h2 style="font-size:15px;">Assign a task</h2>
+      await tkLoadGroups();
+      html += `<div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Assign a task</h2>
         <input type="text" id="nt-title" placeholder="What needs doing? *" style="margin-top:8px;">
-        <div class="row2c" style="margin-top:8px;"><select id="nt-assignee">${uopts}</select>
-        <input type="date" id="nt-due"></div>
-        <div class="row2c" style="margin-top:8px;">
-        <select id="nt-priority"><option>NORMAL</option><option>HIGH</option><option>URGENT</option></select>
-        <button class="btn gold sm" style="padding:11px;" onclick="taskAdd()">Assign</button></div>
+        <label style="margin-top:8px;">Assign to — one person, several people, or a whole group *</label>
+        ${tkPeoplePicker('nt')}
+        <div class="row2c" style="margin-top:8px;"><input type="date" id="nt-due" title="Due date">
+        <select id="nt-priority"><option>NORMAL</option><option>HIGH</option><option>URGENT</option></select></div>
+        <button class="btn gold sm" style="margin-top:10px;padding:11px 22px;" onclick="taskAdd()">Assign</button>
         <div id="nt-msg"></div></div>`;
     }
+    // people sharing one assignment (same group_id) are shown together
+    const grpMates = {};
+    (data||[]).forEach(t=>{ if (t.group_id){ (grpMates[t.group_id] = grpMates[t.group_id] || []).push(t); } });
     html += '<div class="table-scroll"><table><thead><tr><th>No</th><th>Task</th>' +
       (which==='all'?'<th>Assignee</th>':'') + '<th>Due</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>';
     for (const t of (data||[])){
+      const mates = t.group_id ? (grpMates[t.group_id]||[]).filter(x=>x.id!==t.id) : [];
+      const grpNote = mates.length ? `<div style="font-size:10.5px;color:#0b57d0;margin-top:2px;">👥 also with ${mates.map(x=>esc(uname(x.assignee_id))+(x.status==='DONE'?' ✔':'')).join(', ')}</div>` : '';
       const overdue = t.due_date && t.status!=='DONE' && t.status!=='CANCELLED' && t.due_date < new Date().toISOString().slice(0,10);
       const acts = [];
       if (t.status==='OPEN' && t.assignee_id===me.id) acts.push(`<button class="mini" onclick="taskSet('${t.id}','IN_PROGRESS')">Start</button>`);
@@ -3155,8 +3160,8 @@ async function tasksTab(which){
       if (isDir()) acts.push(dirDelBtn('tasks','tasks', t.id, 'task '+(t.task_no||''), "tasksTab('"+which+"')"));
       const prog = t.status==='DONE' ? 100 : (t.progress||0);
       html += `<tr${overdue?' style="background:#fdf3f2;"':''}><td><b>${esc(t.task_no)}</b></td>
-        <td>${esc(t.title)}${t.details?'<br><span style="font-size:11px;color:#777">'+esc(t.details)+'</span>':''}</td>` +
-        (which==='all'?`<td>${esc(uname(t.assignee_id))}</td>`:'') +
+        <td>${esc(t.title)}${t.details?'<br><span style="font-size:11px;color:#777">'+esc(t.details)+'</span>':''}${which==='my'?grpNote:''}</td>` +
+        (which==='all'?`<td>${esc(uname(t.assignee_id))}${grpNote}</td>`:'') +
         `<td>${t.due_date||'—'}${overdue?' <b style="color:#b3382c">OVERDUE</b>':''}</td>
         <td>${t.priority}</td><td><span class="pill ${tpill(t.status)}">${t.status}</span><br>
           <span style="font-size:10.5px;color:#777">${prog}% done</span></td>
@@ -3171,26 +3176,47 @@ async function tasksTab(which){
     if (e1){ B.innerHTML = `<div class="msg err">${esc(e1.message)}</div>`; return; }
     let html = '';
     if (isDir()){
-      const uopts = M.users.map(u=>`<option value="${u.id}">${esc(u.full_name)}</option>`).join('');
-      html += `<div class="card" style="margin-bottom:14px;max-width:640px;"><h2 style="font-size:15px;">New recurring duty</h2>
-        <input type="text" id="nd-title" placeholder="e.g. Submit monthly excise return *" style="margin-top:8px;">
-        <div class="row2c" style="margin-top:8px;"><select id="nd-assignee">${uopts}</select>
-        <select id="nd-freq"><option value="MONTHLY">MONTHLY</option><option value="WEEKLY">WEEKLY</option></select></div>
-        <div class="row2c" style="margin-top:8px;"><input type="number" id="nd-day" placeholder="Day (1-28 of month, or 1=Mon…7=Sun)">
-        <button class="btn gold sm" style="padding:11px;" onclick="dutyAdd()">Create duty</button></div>
+      await tkLoadGroups();
+      html += `<div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">New recurring duty</h2>
+        <input type="text" id="nd-title" placeholder="e.g. Update all due payments *" style="margin-top:8px;">
+        <label style="margin-top:8px;">Whose duty — one person, several people, or a group *</label>
+        ${tkPeoplePicker('nd')}
+        <div class="row2c" style="margin-top:8px;">
+          <div><label>How often</label><select id="nd-freq" onchange="dutyFreqChange()"><option value="DAILY">Daily</option><option value="WEEKLY">Weekly</option><option value="MONTHLY" selected>Monthly</option></select></div>
+          <div id="nd-day-wrap"><label id="nd-day-lbl">Day of the month (1–28)</label><input type="number" id="nd-day" min="1" max="28" placeholder="e.g. 1"></div>
+        </div>
+        <div class="row2c" style="margin-top:8px;">
+          <div><label>Until (last date) — leave blank for no end</label><input type="date" id="nd-until"></div>
+          <div><label>&nbsp;</label><button class="btn gold sm" style="padding:11px;width:100%;" onclick="dutyAdd()">Create duty</button></div>
+        </div>
+        <p id="nd-help" style="font-size:12px;color:#777;margin:6px 0 0;"></p>
         <div id="ndm"></div></div>`;
     }
     const dutyName = id => (duties||[]).find(d=>d.id===id) || {};
-    html += '<div class="table-scroll"><table><thead><tr><th>Duty</th><th>Assignee</th><th>Period</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>';
+    const FREQ = { DAILY:'Every day', WEEKLY:'Weekly', MONTHLY:'Monthly' };
+    const DOW = ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const whenTxt = d => d.freq==='DAILY' ? 'Every day' : d.freq==='WEEKLY' ? 'Every '+(DOW[d.day_of]||d.day_of) : 'On the '+d.day_of+(d.day_of===1?'st':d.day_of===2?'nd':d.day_of===3?'rd':'th')+' of every month';
+    const live = (duties||[]).filter(d=>d.is_active);
+    if (live.length){
+      html += '<h4 class="sec">Standing duties</h4><div class="table-scroll"><table><thead><tr><th>Duty</th><th>Whose</th><th>When</th><th>From</th><th>Until</th><th></th></tr></thead><tbody>';
+      for (const d of live){
+        html += `<tr><td><b>${esc(d.title)}</b></td><td>${esc(uname(d.assignee_id))}</td><td>${whenTxt(d)}</td><td>${d.start_date||'—'}</td><td>${d.end_date||'no end'}</td>
+          <td style="white-space:nowrap">${isDir()?`<button class="mini" onclick="dutyStop('${d.id}')" title="Stop this duty from today">⏹ Stop</button> ${dirDelBtn('tasks','duties', d.id, 'duty '+d.title, "tasksTab('duties')")}`:''}</td></tr>`;
+      }
+      html += '</tbody></table></div>';
+    }
+    html += '<h4 class="sec" style="margin-top:14px;">Duty log</h4><div class="table-scroll"><table><thead><tr><th>Duty</th><th>Assignee</th><th>Period</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>';
     for (const l of (log||[])){
       const d = dutyName(l.duty_id);
       const canDo = (d.assignee_id===me.id || isDir()) && l.status!=='DONE';
-      html += `<tr${l.status==='LAPSED'?' style="background:#fdf3f2;"':''}><td><b>${esc(d.title||'')}</b></td>
+      html += `<tr${l.status==='LAPSED'?' style="background:#fdf3f2;"':''}><td><b>${esc(d.title||'')}</b> <span style="font-size:10.5px;color:#777">${FREQ[d.freq]||''}</span></td>
         <td>${esc(uname(d.assignee_id))}</td><td>${l.period}</td><td>${l.due_date}</td>
         <td><span class="pill ${l.status==='DONE'?'DELIVERED':(l.status==='LAPSED'?'CANCELLED':'DISPATCHED')}">${l.status}</span></td>
         <td>${canDo?`<button class="mini" onclick="dutyDone('${l.id}')">Mark done</button>`:''}</td></tr>`;
     }
+    if (!(log||[]).length) html += '<tr><td colspan="6" style="color:#777">Nothing in the log yet — the current period’s entry appears here as soon as a duty is created.</td></tr>';
     B.innerHTML = html + '</tbody></table></div><div id="tk-msg"></div>';
+    if (isDir()) dutyFreqChange();
   }
 }
 async function taskComments(id){
@@ -3264,13 +3290,66 @@ async function taskReopen(id){
   if (error){ alert('Could not reopen: '+error.message); return; }
   tasksTab($('kt-all')&&$('kt-all').classList.contains('on')?'all':'my');
 }
+// ── people picker (one / many / a saved group) shared by tasks and duties ──
+window.__tkGroups = window.__tkGroups || [];
+async function tkLoadGroups(){
+  try { const { data } = await db.schema('tasks').from('groups').select('*').order('name'); window.__tkGroups = data || []; } catch(e){ window.__tkGroups = []; }
+}
+function tkPeoplePicker(pfx){
+  const people = M.users.filter(u=>u.is_active!==false);
+  const chips = (window.__tkGroups||[]).map(g=>`<button class="mini" type="button" onclick="tkPickGroup('${pfx}','${g.id}')" title="${esc((g.member_ids||[]).map(id=>(M.users.find(u=>u.id===id)||{}).full_name||'').filter(Boolean).join(', '))}">👥 ${esc(g.name)} (${(g.member_ids||[]).length})</button>`).join(' ');
+  return `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 6px;">
+      <span style="font-size:11.5px;color:#777">Quick pick:</span>
+      <button class="mini" type="button" onclick="tkPickAll('${pfx}',true)">Everyone</button>
+      <button class="mini" type="button" onclick="tkPickAll('${pfx}',false)">Clear</button>
+      ${chips}
+      <button class="mini" type="button" onclick="tkGroupSave('${pfx}')" title="Save the ticked people as a named group for next time">＋ Save ticked as group</button>
+      ${(window.__tkGroups||[]).length?`<button class="mini" type="button" onclick="tkGroupDelete()" title="Remove a saved group">🗑 Remove group…</button>`:''}
+    </div>
+    <div id="${pfx}-people" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px 10px;max-height:170px;overflow:auto;border:1px solid #e3ddcc;border-radius:8px;padding:8px 10px;background:#fff;">
+      ${people.map(u=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:0;cursor:pointer;"><input type="checkbox" class="${pfx}-who" value="${u.id}" style="width:auto;margin:0;"> ${esc(u.full_name)}</label>`).join('')}
+    </div>
+    <div id="${pfx}-count" style="font-size:11.5px;color:#777;margin-top:4px;">Nobody selected yet.</div>`;
+}
+function tkPicked(pfx){ return [...document.querySelectorAll('.'+pfx+'-who:checked')].map(c=>c.value); }
+function tkPickCount(pfx){ const n = tkPicked(pfx).length, el = $(pfx+'-count'); if (el) el.textContent = n ? n + ' selected' : 'Nobody selected yet.'; }
+function tkPickAll(pfx, on){ document.querySelectorAll('.'+pfx+'-who').forEach(c=>{ c.checked = !!on; }); tkPickCount(pfx); }
+function tkPickGroup(pfx, gid){
+  const g = (window.__tkGroups||[]).find(x=>x.id===gid); if (!g) return;
+  document.querySelectorAll('.'+pfx+'-who').forEach(c=>{ if ((g.member_ids||[]).includes(c.value)) c.checked = true; });
+  tkPickCount(pfx);
+}
+document.addEventListener('change', e => { const m = (e.target.className||'').match(/^(\w+)-who$/); if (m) tkPickCount(m[1]); });
+async function tkGroupSave(pfx){
+  const ids = tkPicked(pfx);
+  if (ids.length < 2){ alert('Tick at least two people first, then save them as a group.'); return; }
+  const name = prompt('Name for this group (e.g. Sales team, Accounts):', '');
+  if (name === null || !name.trim()) return;
+  const { error } = await db.schema('tasks').from('groups').upsert({ name: name.trim(), member_ids: ids, created_by: me.id }, { onConflict: 'name' });
+  if (error){ alert('Could not save the group: ' + error.message); return; }
+  await tkLoadGroups();
+  tasksTab(pfx === 'nd' ? 'duties' : 'all');
+  setTimeout(()=>{ ids.forEach(id=>{ const c = document.querySelector('.'+pfx+'-who[value="'+id+'"]'); if (c) c.checked = true; }); tkPickCount(pfx); }, 400);
+}
+async function tkGroupDelete(){
+  const gs = window.__tkGroups||[]; if (!gs.length) return;
+  const pick = prompt('Remove which group? Type the number:\n\n' + gs.map((g,i)=>`${i+1}. ${g.name}`).join('\n'), '');
+  if (pick === null) return; const n = parseInt(pick,10); if (!(n>=1 && n<=gs.length)) return;
+  const { error } = await db.schema('tasks').from('groups').delete().eq('id', gs[n-1].id);
+  if (error){ alert('Could not remove: ' + error.message); return; }
+  await tkLoadGroups(); tasksTab($('kt-duties').classList.contains('on') ? 'duties' : 'all');
+}
 async function taskAdd(){
   const title = $('nt-title').value.trim();
   if (!title){ say('nt-msg','Title is required.',false); return; }
-  const { error } = await db.schema('tasks').rpc('create_task', {
-    p_title: title, p_details: null, p_assignee: $('nt-assignee').value,
+  const who = tkPicked('nt');
+  if (!who.length){ say('nt-msg','Tick at least one person (or pick a group).',false); return; }
+  const { data, error } = await db.schema('tasks').rpc('create_task_multi', {
+    p_title: title, p_details: null, p_assignees: who,
     p_due: $('nt-due').value || null, p_priority: $('nt-priority').value });
   if (error){ say('nt-msg', error.message, false); return; }
+  if (who.length > 1) alert('Assigned to ' + who.length + ' people — each one gets their own task number and marks their own progress; they are shown together in the list.');
   tasksTab('all');
 }
 async function taskSet(id, status){
@@ -3280,13 +3359,37 @@ async function taskSet(id, status){
   if (error){ say('tk-msg', error.message, false); return; }
   tasksTab(isDir() ? 'all' : 'my');
 }
+function dutyFreqChange(){
+  const f = $('nd-freq') ? $('nd-freq').value : 'MONTHLY';
+  const w = $('nd-day-wrap'), l = $('nd-day-lbl'), d = $('nd-day'), h = $('nd-help');
+  if (!w) return;
+  w.style.display = f === 'DAILY' ? 'none' : '';
+  if (f === 'WEEKLY'){ l.textContent = 'Day of the week (1 = Mon … 7 = Sun)'; d.min = 1; d.max = 7; d.placeholder = 'e.g. 1 for Monday'; }
+  else if (f === 'MONTHLY'){ l.textContent = 'Day of the month (1–28)'; d.min = 1; d.max = 28; d.placeholder = 'e.g. 1'; }
+  if (h) h.textContent = f === 'DAILY' ? 'A fresh entry is created every day and lapses if not marked done that day. It stops automatically after the "Until" date.'
+    : f === 'WEEKLY' ? 'One entry every week, due on the chosen weekday. Runs until the "Until" date (or for ever if blank).'
+    : 'One entry every month, due on the chosen date. Runs until the "Until" date (or for ever if blank).';
+}
 async function dutyAdd(){
-  const title = $('nd-title').value.trim(), day = Number($('nd-day').value);
-  if (!title || !(day>=1)){ say('ndm','Title and day are required.',false); return; }
-  const { error } = await db.schema('tasks').from('duties').insert({
-    title, assignee_id: $('nd-assignee').value, freq: $('nd-freq').value, day_of: day, created_by: me.id });
+  const title = $('nd-title').value.trim(), freq = $('nd-freq').value;
+  const day = freq === 'DAILY' ? 1 : Number($('nd-day').value);
+  if (!title){ say('ndm','Give the duty a title.',false); return; }
+  if (freq === 'WEEKLY' && !(day>=1 && day<=7)){ say('ndm','For a weekly duty enter the weekday as 1 (Mon) to 7 (Sun).',false); return; }
+  if (freq === 'MONTHLY' && !(day>=1 && day<=28)){ say('ndm','For a monthly duty enter the day of the month, 1 to 28.',false); return; }
+  const who = tkPicked('nd');
+  if (!who.length){ say('ndm','Tick at least one person (or pick a group).',false); return; }
+  const until = $('nd-until').value || null;
+  if (until && until < new Date().toISOString().slice(0,10)){ say('ndm','The "Until" date is already past.',false); return; }
+  const rows = who.map(uid => ({ title, assignee_id: uid, freq, day_of: day, end_date: until, created_by: me.id }));
+  const { error } = await db.schema('tasks').from('duties').insert(rows);
   if (error){ say('ndm', error.message, false); return; }
   await db.schema('tasks').rpc('generate_duty_log');
+  tasksTab('duties');
+}
+async function dutyStop(id){
+  if (!confirm('Stop this duty from today? Past entries stay in the log.')) return;
+  const { error } = await db.schema('tasks').from('duties').update({ is_active: false, end_date: new Date().toISOString().slice(0,10) }).eq('id', id);
+  if (error){ alert('Could not stop it: ' + error.message); return; }
   tasksTab('duties');
 }
 async function dutyDone(id){
