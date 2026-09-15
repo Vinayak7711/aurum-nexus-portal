@@ -4827,6 +4827,9 @@ async function openAcct(){
   $('ac-appr').style.display = canFinApprove() ? '' : 'none';
   acctTab('banks'); show('acct');
 }
+// Who the entry is with: the payee / party first; the staff member only for salary, advance and recovery entries
+// (never the person who typed the entry).
+function acWho(e){ if (!e) return ''; const staffKinds = {SALARY:1, ADVANCE:1, RECOVERY:1}; return e.payee || e.party_name || (staffKinds[e.kind] ? (e.staff_name||'') : '') || ''; }
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
 function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
 async function acctTab(t){
@@ -4891,7 +4894,7 @@ async function acctTab(t){
       ${total===0 ? '<div class="card" style="max-width:520px;"><p style="color:#1a7f37;font-weight:600;">✔ Nothing is pending — every entry has been decided.</p></div>' : ''}
       ${SEC('🏦 Bank / ledger entries', ents.length, T('<th>No.</th><th>Date</th><th>Kind</th><th>Party / payee</th><th>Bank</th><th class="amount">Amount ₹</th><th></th>',
         ents.map(e=>`<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>`+
-          `<td>${esc(e.staff_name||e.party_name||e.payee||'—')}${e.narration?'<br><span style="font-size:11px;color:#777">'+esc((e.narration||'').slice(0,60))+'</span>':''}</td>`+
+          `<td>${esc(acWho(e)||'—')}${e.narration?'<br><span style="font-size:11px;color:#777">'+esc((e.narration||'').slice(0,60))+'</span>':''}</td>`+
           `<td>${esc(e.bank_name_label||'—')}</td><td class="amount" style="font-weight:700;color:${e.direction==='IN'?'#1a7f37':'#b3261e'}">${inr(e.amount)}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('entry','${e.id}')" title="See full details">👁 View</button> <button class="mini" onclick="apprPrint('entry','${e.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('entry','${e.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('entry','${e.id}',true)">Reject</button> ${dirDelBtn('acct','entries', e.id, e.entry_no, "acctTab('appr')")}</td></tr>`).join('')))}
       ${SEC('💳 Vendor payments', vprs.length, T('<th>Request</th><th>Raised</th><th>Vendor</th><th>Against PO</th><th class="amount">Amount ₹</th><th>To be paid by</th><th></th>',
@@ -5230,9 +5233,9 @@ async function acctTab(t){
       <div id="ac-entry-form"></div>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
-      ${(es||[]).map(e=>{const who=e.staff_name||e.party_name||e.payee||'';const inA=e.direction==='IN'?inr(e.amount):'';const outA=e.direction==='OUT'?inr(e.amount):'';
+      ${(es||[]).map(e=>{const who=acWho(e)||'';const inA=e.direction==='IN'?inr(e.amount):'';const outA=e.direction==='OUT'?inr(e.amount):'';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
-          `<td>${esc(who)}${e.narration?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,50))+'</span>':''}</td>` +
+          `<td>${who?esc(who):esc((e.narration||'—').slice(0,80))}${who&&e.narration?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,80))+'</span>':''}</td>` +
           `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}</td>` +
           `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` +
           `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
@@ -5650,7 +5653,7 @@ function acLedCsv(){
   const esc2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
   const lines = [['Entry no','Date','Kind','Detail','Bank','In (INR)','Out (INR)','Mode','Ref','Narration','Status'].join(',')];
   rows.forEach(e=>{
-    const who = e.staff_name || e.party_name || e.payee || '';
+    const who = acWho(e) || '';
     lines.push([esc2(e.entry_no), esc2(e.entry_date), esc2(e.kind), esc2(who),
       esc2((e.bank_name_label||'') + (e.kind==='TRANSFER' ? ' -> '+(e.counter_bank_label||'') : '')),
       e.direction==='IN'?Number(e.amount):'', e.direction==='OUT'?Number(e.amount):'',
@@ -5670,7 +5673,7 @@ function acLedPrint(){
     <h1>AURUM SPIRITS INDIA LIMITED</h1>
     <h2>Finance ledger · ${esc(window.__ledLabel||'All entries')} · ${window.acLedFrom||'beginning'} to ${window.acLedTo||'today'}</h2>
     <table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th></tr></thead><tbody>
-    ${rows.map(e=>{const who=e.staff_name||e.party_name||e.payee||'';
+    ${rows.map(e=>{const who=acWho(e)||'';
       return `<tr><td>${esc(e.entry_no)}</td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>`+
         `<td>${esc(who)}${e.narration?'<br><span style="font-size:10px;color:#666">'+esc(e.narration)+'</span>':''}</td>`+
         `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}</td>`+
@@ -6667,7 +6670,7 @@ async function apprView(kind, id){
     rows = [['No.', '<b>'+esc(e.entry_no)+'</b>'], ['Date', e.entry_date], ['Kind', esc(e.kind)], ['Direction', e.direction==='IN'?'Money IN':'Money OUT'],
       ['Amount', '<b>₹ '+inr(e.amount)+'</b><br><span style="font-size:11px;color:#777">'+esc(inrWords(e.amount))+'</span>'],
       ['Bank', esc(e.bank_name_label||'—') + (e.kind==='TRANSFER'&&e.counter_bank_label?' → '+esc(e.counter_bank_label):'')],
-      ['Party / payee', esc(e.staff_name||e.party_name||e.payee||'—')], ['Mode', esc(e.mode||'—')], ['Narration', esc(e.narration||'—')], ['Status', acLbl(e.status)]];
+      ['Party / payee', esc(acWho(e)||'—')], ['Mode', esc(e.mode||'—')], ['Narration', esc(e.narration||'—')], ['Status', acLbl(e.status)]];
   } else if (kind === 'petty'){
     const r = (D.pcs||[]).find(x=>x.id===id); if (!r) return;
     title = 'Petty cash ' + r.pc_no;
@@ -6736,7 +6739,7 @@ async function apprPrint(kind, id){
     const e = (D.ents||[]).find(x=>x.id===id); if (!e) return;
     doc('LEDGER ENTRY VOUCHER', TR([['Entry no.','<b>'+esc(e.entry_no)+'</b>'],['Date',e.entry_date],['Kind',esc(e.kind)+' ('+(e.direction==='IN'?'Money IN':'Money OUT')+')'],
       ['Bank',esc(e.bank_name_label||'—')+(e.kind==='TRANSFER'&&e.counter_bank_label?' → '+esc(e.counter_bank_label):'')],
-      ['Party / payee',esc(e.staff_name||e.party_name||e.payee||'—')],['Mode',esc(e.mode||'—')],['Narration',esc(e.narration||'—')],
+      ['Party / payee',esc(acWho(e)||'—')],['Mode',esc(e.mode||'—')],['Narration',esc(e.narration||'—')],
       ['Amount','<b>₹ '+inr(e.amount)+'</b>'],['Amount in words',esc(inrWords(e.amount))],['Status','AWAITING APPROVAL']]), 'Entry '+e.entry_no);
   } else if (kind === 'slip'){
     const { data: s } = await db.schema('acct').from('salary_slips').select('*').eq('id', id).single();
