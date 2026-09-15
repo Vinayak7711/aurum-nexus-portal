@@ -2922,6 +2922,11 @@ async function onbTab(which){
       <input type="text" id="vn-phone" placeholder="Phone"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-contact" placeholder="Contact person">
       <input type="text" id="vn-whatsapp" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="email" id="vn-email" placeholder="Email address (for POs / communication)">
+      <input type="text" id="vn-pan" placeholder="PAN"></div>
+      <div style="margin-top:8px;"><textarea id="vn-address" rows="2" placeholder="Postal address — building, street, area (for communication)" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;"></textarea></div>
+      <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-city" placeholder="City / town">
+      <div class="row2c" style="gap:8px;"><input type="text" id="vn-state" placeholder="State"><input type="text" id="vn-pincode" placeholder="PIN code" maxlength="6" inputmode="numeric"></div></div>
       <div style="margin-top:8px;"><button class="btn gold sm" style="padding:11px;" onclick="vnAdd()">Register</button></div>
       <div id="vn-msg"></div></div>
       <div id="vn-editbox"></div>`;
@@ -3032,7 +3037,11 @@ function vnEdit(id){
         <div><label>Phone</label><input type="text" id="ve-phone" value="${esc(v.phone||'')}"></div></div>
       <div class="row2c" style="margin-top:8px;"><div><label>Contact person</label><input type="text" id="ve-contact" value="${esc(v.contact_person||'')}"></div>
         <div><label>Email</label><input type="text" id="ve-email" value="${esc(v.email||'')}"></div></div>
-      <div style="margin-top:8px;"><label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="ve-whatsapp" value="${esc(v.whatsapp||'')}" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
+      <div class="row2c" style="margin-top:8px;"><div><label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="ve-whatsapp" value="${esc(v.whatsapp||'')}" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
+        <div><label>PAN</label><input type="text" id="ve-pan" value="${esc(v.pan||'')}"></div></div>
+      <div style="margin-top:8px;"><label>Postal address (for communication)</label><textarea id="ve-address" rows="2" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;" placeholder="Building, street, area">${esc(v.address||'')}</textarea></div>
+      <div class="row2c" style="margin-top:8px;"><div><label>City / town</label><input type="text" id="ve-city" value="${esc(v.city||'')}"></div>
+        <div class="row2c" style="gap:8px;"><div><label>State</label><input type="text" id="ve-state" value="${esc(v.state||'')}"></div><div><label>PIN code</label><input type="text" id="ve-pincode" maxlength="6" value="${esc(v.pincode||'')}"></div></div></div>
       <div style="margin-top:8px;"><label>Type *</label><select id="ve-type">
         <option value="VENDOR" selected>💳 Vendor (we buy from them)</option>
         <option value="DISTRIBUTOR">🤝 Distributor (we sell to them) — moves it to the Party Master distributor list</option></select></div>
@@ -3049,7 +3058,9 @@ async function vnEditSave(id){
   if (!name){ say('ve-msg','Name is required.',false); return; }
   const f = { name, category: $('ve-cat').value.trim()||null, gstin: $('ve-gstin').value.trim()||null,
               phone: $('ve-phone').value.trim()||null, contact_person: $('ve-contact').value.trim()||null,
-              email: $('ve-email').value.trim()||null, whatsapp: $('ve-whatsapp').value.trim()||null };
+              email: $('ve-email').value.trim()||null, whatsapp: $('ve-whatsapp').value.trim()||null,
+              pan: $('ve-pan').value.trim().toUpperCase()||null, address: $('ve-address').value.trim()||null,
+              city: $('ve-city').value.trim()||null, state: $('ve-state').value.trim()||null, pincode: $('ve-pincode').value.trim()||null };
   const toDist = $('ve-type').value === 'DISTRIBUTOR';
   const S2 = db.schema('sales');
   let error = null;
@@ -3057,7 +3068,7 @@ async function vnEditSave(id){
     ({ error } = await S2.from('parties').update({ name: f.name, gstin: f.gstin, phone: f.phone, whatsapp: f.whatsapp,
         contact_person: f.contact_person, email: f.email,
         party_type: toDist ? 'DISTRIBUTOR' : 'VENDOR' }).eq('id', v.party_id));
-    if (!error) ({ error } = await S2.from('vendors').update({ category: f.category }).eq('id', id));
+    if (!error) ({ error } = await S2.from('vendors').update({ category: f.category, pan: f.pan, address: f.address, city: f.city, state: f.state, pincode: f.pincode, email: f.email }).eq('id', id));
   } else if (!toDist){
     ({ error } = await S2.from('vendors').update(f).eq('id', id));
   } else {
@@ -3099,12 +3110,16 @@ async function onbStatus(id, status){
 async function vnAdd(){
   const name = $('vn-name').value.trim();
   if (!name){ say('vn-msg','Vendor name is required.',false); return; }
+  const em = $('vn-email').value.trim(), pin = $('vn-pincode').value.trim();
+  if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ say('vn-msg','That email address does not look right.',false); return; }
+  if (pin && !/^[1-9][0-9]{5}$/.test(pin)){ say('vn-msg','PIN code should be 6 digits.',false); return; }
   const { data: code, error: e1 } = await db.schema('app').rpc('next_code', { p_series: 'VEN' });
   if (e1){ say('vn-msg', e1.message, false); return; }
   const { error } = await db.schema('sales').from('vendors').insert({
     code, name, category: $('vn-cat').value.trim()||null, gstin: $('vn-gstin').value.trim()||null,
     phone: $('vn-phone').value.trim()||null, contact_person: $('vn-contact').value.trim()||null,
-    whatsapp: $('vn-whatsapp').value.trim()||null,
+    whatsapp: $('vn-whatsapp').value.trim()||null, email: $('vn-email').value.trim()||null, pan: $('vn-pan').value.trim().toUpperCase()||null,
+    address: $('vn-address').value.trim()||null, city: $('vn-city').value.trim()||null, state: $('vn-state').value.trim()||null, pincode: $('vn-pincode').value.trim()||null,
     status: 'ACTIVE', created_by: me.id });
   if (error){ say('vn-msg', error.message, false); return; }
   onbTab('vendors');
