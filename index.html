@@ -5251,7 +5251,7 @@ async function acctTab(t){
         `<td class="amount" style="color:#1a7f37">${Number(r.paid_by_mmc)?inr(r.paid_by_mmc):''}</td>` +
         `<td class="amount" style="font-weight:600;color:${r._bal>=0?'#0b57d0':'#b3261e'}">${inr(r._bal)}</td>` +
         `<td style="font-size:11.5px;">${r.status==='PENDING_APPROVAL'?'<span style="color:#b8860b">⏳ awaiting approval</span>':r.status==='REJECTED'?'<span style="color:#b3261e">rejected</span>':'<span style="color:#1a7f37">✔ posted</span>'}</td>` +
-        `<td>${r.kind==='PAY_TO_MMC' ? dirDelBtn('acct','entries', r.entry_id, r.entry_no||r.txn_no, "acctTab('ledger')") : dirDelBtn('acct','vendor_payments', r.payment_id, r.pay_no||r.txn_no, "acctTab('ledger')")}</td></tr>`).join('')
+        `<td style="white-space:nowrap">${r.kind==='PAY_TO_MMC' ? (isDir()?`<button class="mini" title="Take this line out of the MMC ledger — the bank entry ${esc(r.entry_no||'')} stays as it is" onclick="acMmcUnlink('${r.id}','${esc(r.txn_no)}')">⛓ Unlink</button>`:'') : dirDelBtn('acct','vendor_payments', r.payment_id, r.pay_no||r.txn_no, "acctTab('ledger')")}</td></tr>`).join('')
         || '<tr><td colspan="10" style="color:#777">Nothing routed through MMC in this date range yet. Use “+ Payment to MMC” when you pay MMC from your bank.</td></tr>'}
       ${mm.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(totTo)}</td><td class="amount">${inr(totBy)}</td><td class="amount">${inr(bal)}</td><td colspan="2"></td></tr>`:''}
       </tbody></table></div>
@@ -5297,7 +5297,30 @@ async function acctTab(t){
       </tbody></table></div>`;
       return;
     }
-    const es = (all||[]).filter(e => isAllLed ? true : matchLed(e, sel));
+    let es = (all||[]).filter(e => isAllLed ? true : matchLed(e, sel));
+    // which head each money-out entry is linked to (vendor / MMC / expense / salary / petty)
+    const linkOf = {};
+    { const ids = es.filter(e=>e.direction==='OUT').map(e=>e.id);
+      for (let i = 0; i < ids.length; i += 200){
+        const { data: lk } = await A.from('v_entry_links').select('*').in('entry_id', ids.slice(i, i+200));
+        (lk||[]).forEach(l => { linkOf[l.entry_id] = l; });
+      } }
+    const linkHtml = e => {
+      const l = linkOf[e.id]; if (!l || e.direction !== 'OUT') return '';
+      const parts = [];
+      if (l.mmc_link) parts.push('🏭 MMC ledger ' + esc(l.mmc_link.split(';').map(x=>x.split('|')[0]).join(', ')));
+      if (l.vendor_link) parts.push('💳 Vendor: ' + esc(l.vendor_link.split(';').map(x=>x.split('|')[1]||'').join(', ')));
+      if (l.expense_link) parts.push('🧾 Expense: ' + esc(l.expense_link.split(';').map(x=>x.split('|')[1]||'').join(', ')));
+      if (l.salary_link) parts.push('👤 Salary slip ' + esc(l.salary_link));
+      if (l.petty_link) parts.push('💵 Petty cash ' + esc(l.petty_link));
+      if (parts.length) return '<div style="font-size:10.5px;color:#1a7f37;margin-top:2px;">🔗 ' + parts.join(' · ') + '</div>';
+      if (['PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && e.status !== 'REJECTED')
+        return '<div style="font-size:10.5px;color:#b8860b;margin-top:2px;">⚠ not linked to any head' + (canFinApprove() ? ` <button class="mini" style="padding:1px 7px;font-size:10.5px;" onclick="acLinkForm('${e.id}')">🔗 Link to MMC / vendor / expense</button>` : '') + '</div>';
+      return '';
+    };
+    const isUnlinked = e => { const l = linkOf[e.id]; return e.direction==='OUT' && ['PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && e.status!=='REJECTED' && !(l && (l.mmc_link||l.vendor_link||l.expense_link||l.salary_link||l.petty_link)); };
+    const unlinkedN = es.filter(isUnlinked).length;
+    if (window.acLedOnlyUnlinked) es = es.filter(isUnlinked);
     const totIn = es.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
     const totOut = es.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
     window.__ledRows = es;
@@ -5317,12 +5340,13 @@ async function acctTab(t){
       ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button> `:''}
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
+      ${(unlinkedN || window.acLedOnlyUnlinked) ? `<button class="btn ${window.acLedOnlyUnlinked?'gold':'ghost'} sm" style="${window.acLedOnlyUnlinked?'':'color:#b8860b;border-color:#b8860b;'}" onclick="window.acLedOnlyUnlinked=!window.acLedOnlyUnlinked;acctTab('ledger')" title="Payments that are not yet tied to the MMC ledger, a vendor, an expense head, a salary slip or petty cash">${window.acLedOnlyUnlinked ? '✔ Showing only unlinked payments — show all' : '⚠ ' + unlinkedN + ' payment' + (unlinkedN===1?'':'s') + ' not linked to any head'}</button>` : ''}
       <div id="ac-entry-form"></div>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
       ${(es||[]).map(e=>{const who=acWho(e)||'';const inA=e.direction==='IN'?inr(e.amount):'';const outA=e.direction==='OUT'?inr(e.amount):'';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
-          `<td>${who?esc(who):esc((e.narration||'—').slice(0,80))}${who&&e.narration&&e.narration.trim()!==who.trim()?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,80))+'</span>':''}</td>` +
+          `<td>${who?esc(who):esc((e.narration||'—').slice(0,80))}${who&&e.narration&&e.narration.trim()!==who.trim()?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,80))+'</span>':''}${linkHtml(e)}</td>` +
           `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}</td>` +
           `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` +
           `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
@@ -6004,6 +6028,82 @@ async function acMmcSave(kind, targetId){
   else alert('Recorded — the vendor’s outstanding is reduced and the balance held by MMC has come down.');
   if (targetId === 'vd-form') acctTab('vdues');
   else { window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; acctTab('ledger'); }
+}
+// Tie an existing bank payment to the head it belongs to (no second bank entry is created)
+async function acLinkForm(id){
+  if (!canFinApprove()){ alert('Only the Director or the approving authority can link entries.'); return; }
+  const A2 = db.schema('acct');
+  const { data: e } = await A2.from('v_entries').select('*').eq('id', id).single();
+  if (!e){ alert('Could not open that entry.'); return; }
+  if (!window.__enVendors){ const { data: vl } = await db.schema('sales').from('vendors').select('id,name').order('name'); window.__enVendors = vl || []; }
+  const vOpts = '<option value="">— none / not for a particular vendor —</option>' + window.__enVendors.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('');
+  const CATS = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Salary & wages','Bank charges & interest','Security deposit','Loan repayment','Miscellaneous'];
+  const old = $('ac-link-box'); if (old) old.remove();
+  const host = $('ac-entry-form') || $('acct-body');
+  const box = document.createElement('div'); box.id = 'ac-link-box';
+  box.innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:680px;border:1px solid #0b57d0;">
+      <h3 style="font-size:15px;">🔗 Link ${esc(e.entry_no)} · ₹ ${inr(e.amount)} · ${e.entry_date}</h3>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">${esc(acWho(e)||'')}${e.narration?' — '+esc(e.narration):''}</p>
+      <p style="font-size:12px;color:#777;margin:0 0 8px;">This bank entry stays exactly as it is — linking only tells the ERP which head it belongs to, so it shows in that ledger too.</p>
+      <label>Belongs to *</label>
+      <select id="lk-head" onchange="acLinkHeadChange()">
+        <option value="MMC">🏭 Payment to MMC (shows in the MMC ledger)</option>
+        <option value="VENDOR">💳 Vendor payment (reduces that vendor’s dues)</option>
+        <option value="EXPENSE">🧾 Expense head (shows in the Expense ledger)</option>
+      </select>
+      <div id="lk-vendor-wrap"><div class="row2c" style="margin-top:8px;">
+        <div><label id="lk-vendor-lbl">For vendor (optional)</label><select id="lk-vendor" onchange="acLinkLoadPos()">${vOpts}</select></div>
+        <div><label>Against PO</label><select id="lk-po"><option value="">— none —</option></select></div></div></div>
+      <div id="lk-exp-wrap" style="display:none"><div class="row2c" style="margin-top:8px;">
+        <div><label>Expense head *</label><select id="lk-cat">${CATS.map(c=>`<option>${c}</option>`).join('')}<option value="__other">Other (type below)</option></select><input type="text" id="lk-cat-other" placeholder="Type the head" style="display:none;margin-top:6px;"></div>
+        <div><label>Department</label><select id="lk-dept"><option value="">—</option><option>Director</option><option>Admin</option><option>Sales</option><option>Production</option><option>Accounts</option></select></div></div></div>
+      <label style="margin-top:8px;">Note (optional)</label><input type="text" id="lk-note" placeholder="e.g. security deposit, advance against PO">
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn gold sm" onclick="acLinkSave('${e.id}')">Link</button>
+        <button class="btn ghost sm" onclick="$('ac-link-box').remove()">Cancel</button>
+      </div>
+      <div id="lk-msg"></div>
+    </div>`;
+  host.parentNode.insertBefore(box, host.nextSibling);
+  $('lk-cat').addEventListener('change', ()=>{ $('lk-cat-other').style.display = $('lk-cat').value==='__other' ? '' : 'none'; });
+  // sensible default from the wording of the entry
+  const txt = ((e.payee||'')+' '+(e.narration||'')+' '+(e.ref_no||'')).toUpperCase();
+  if (/\bMMC\b/.test(txt)) $('lk-head').value = 'MMC';
+  else if (window.__enVendors.some(v=>txt.includes(v.name.toUpperCase().slice(0,12)))) { $('lk-head').value = 'VENDOR'; const v = window.__enVendors.find(v=>txt.includes(v.name.toUpperCase().slice(0,12))); if (v) $('lk-vendor').value = v.id; }
+  else $('lk-head').value = 'EXPENSE';
+  acLinkHeadChange();
+  box.scrollIntoView({behavior:'smooth', block:'center'});
+}
+function acLinkHeadChange(){
+  const h = $('lk-head').value;
+  $('lk-vendor-wrap').style.display = h === 'EXPENSE' ? 'none' : '';
+  $('lk-exp-wrap').style.display = h === 'EXPENSE' ? '' : 'none';
+  $('lk-vendor-lbl').textContent = h === 'VENDOR' ? 'Vendor *' : 'For vendor (optional)';
+  acLinkLoadPos();
+}
+async function acLinkLoadPos(){
+  const h = $('lk-head')?.value, vsel = $('lk-vendor'), psel = $('lk-po'); if (!vsel || !psel) return;
+  psel.innerHTML = '<option value="">— none —</option>';
+  if (!vsel.value || h === 'EXPENSE') return;
+  const { data: pos } = await db.schema('acct').rpc(h === 'MMC' ? 'mmc_po_options' : 'vendor_po_options', { p_vendor: vsel.value });
+  psel.innerHTML += (pos||[]).map(p=>`<option value="${p.po_id}">${esc(p.po_no)} · ${p.order_date} · ₹${inr(p.po_value)}</option>`).join('');
+}
+async function acLinkSave(id){
+  const h = $('lk-head').value, vid = $('lk-vendor').value || null, po = $('lk-po').value || null, note = $('lk-note').value.trim() || null;
+  let res;
+  if (h === 'MMC') res = await db.schema('acct').rpc('link_entry_mmc', { p_entry: id, p_vendor: vid, p_po: po, p_note: note });
+  else if (h === 'VENDOR'){ if (!vid){ say('lk-msg','Choose the vendor.',false); return; } res = await db.schema('acct').rpc('link_entry_vendor', { p_entry: id, p_vendor: vid, p_po: po, p_note: note }); }
+  else { const cat = $('lk-cat').value === '__other' ? $('lk-cat-other').value.trim() : $('lk-cat').value; if (!cat){ say('lk-msg','Type the expense head.',false); return; }
+    res = await db.schema('acct').rpc('link_entry_expense', { p_entry: id, p_category: cat, p_dept: $('lk-dept').value || null, p_payee: null, p_desc: note }); }
+  if (res.error){ say('lk-msg','Could not link: '+res.error.message,false); return; }
+  acctTab('ledger');
+}
+async function acMmcUnlink(id, no){
+  if (!confirm('Take ' + no + ' out of the MMC ledger?\n\nThe bank entry itself is not touched — it stays in the bank ledger and can be linked again later.')) return;
+  const { error } = await db.schema('acct').from('mmc_txns').delete().eq('id', id);
+  if (error){ alert('Could not unlink: ' + error.message); return; }
+  acctTab('ledger');
 }
 function acMmcCsv(){
   const rows = window.__mmcRows || [];
