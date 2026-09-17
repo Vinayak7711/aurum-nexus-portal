@@ -6054,7 +6054,8 @@ async function acDupCheck(){
   for (let i = 0; i < es.length; i++) for (let j = i+1; j < es.length; j++){
     const a = es[i], b = es[j];
     if (Number(a.amount) !== Number(b.amount) || a.direction !== b.direction) continue;
-    const sameRef = a.ref_no && b.ref_no && a.ref_no.trim().length >= 6 && a.ref_no.trim() === b.ref_no.trim();
+    const refOk = r => r && /\d{5,}/.test(r) && r.trim().length <= 40 && (r.trim().split(/\s+/).length <= 4);
+    const sameRef = refOk(a.ref_no) && refOk(b.ref_no) && a.ref_no.trim() === b.ref_no.trim();
     const near = days(a.entry_date, b.entry_date) <= 3;
     if (!sameRef && !near) continue;
     const wa = (acWho(a)||a.narration||'').toUpperCase(), wb = (acWho(b)||b.narration||'').toUpperCase();
