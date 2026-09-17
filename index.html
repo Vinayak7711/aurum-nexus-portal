@@ -5340,6 +5340,7 @@ async function acctTab(t){
       ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button> `:''}
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
+      ${canFinApprove()?`<button class="btn ghost sm" onclick="acDupCheck()" title="Find entries of the same amount within 3 days, or with the same reference — likely double entries">🔍 Check for double entries</button> `:''}
       ${(unlinkedN || window.acLedOnlyUnlinked) ? `<button class="btn ${window.acLedOnlyUnlinked?'gold':'ghost'} sm" style="${window.acLedOnlyUnlinked?'':'color:#b8860b;border-color:#b8860b;'}" onclick="window.acLedOnlyUnlinked=!window.acLedOnlyUnlinked;acctTab('ledger')" title="Payments that are not yet tied to the MMC ledger, a vendor, an expense head, a salary slip or petty cash">${window.acLedOnlyUnlinked ? '✔ Showing only unlinked payments — show all' : '⚠ ' + unlinkedN + ' payment' + (unlinkedN===1?'':'s') + ' not linked to any head'}</button>` : ''}
       <div id="ac-entry-form"></div>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
@@ -6029,6 +6030,50 @@ async function acMmcSave(kind, targetId){
   if (targetId === 'vd-form') acctTab('vdues');
   else { window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; acctTab('ledger'); }
 }
+// Likely double entries: same amount + same direction within 3 days, or the same bank reference.
+async function acDupCheck(){
+  const A2 = db.schema('acct');
+  const host = $('ac-entry-form') || $('acct-body');
+  const old = $('ac-dup-box'); if (old) old.remove();
+  const box = document.createElement('div'); box.id = 'ac-dup-box';
+  box.innerHTML = '<div class="card" style="margin-top:12px;">Checking…</div>';
+  host.parentNode.insertBefore(box, host.nextSibling);
+  const { data: all } = await A2.from('v_entries').select('*').neq('status','REJECTED').order('entry_date').limit(3000);
+  const es = all || [];
+  const linkOf = {};
+  for (let i = 0; i < es.length; i += 200){
+    const { data: lk } = await A2.from('v_entry_links').select('*').in('entry_id', es.slice(i, i+200).map(e=>e.id));
+    (lk||[]).forEach(l => { linkOf[l.entry_id] = l; });
+  }
+  const linkTxt = e => { const l = linkOf[e.id]; if (!l) return '—';
+    const p = []; if (l.mmc_link) p.push('MMC ' + l.mmc_link.split(';').map(x=>x.split('|')[0]).join(',')); if (l.vendor_link) p.push('Vendor: ' + l.vendor_link.split(';').map(x=>(x.split('|')[0])+' '+(x.split('|')[1]||'')).join(','));
+    if (l.expense_link) p.push('Expense ' + l.expense_link.split(';').map(x=>x.split('|')[0]).join(',')); if (l.salary_link) p.push('Salary ' + l.salary_link); if (l.petty_link) p.push('Petty ' + l.petty_link);
+    return p.length ? p.join(' · ') : '—'; };
+  const days = (a,b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
+  const pairs = [];
+  for (let i = 0; i < es.length; i++) for (let j = i+1; j < es.length; j++){
+    const a = es[i], b = es[j];
+    if (Number(a.amount) !== Number(b.amount) || a.direction !== b.direction) continue;
+    const sameRef = a.ref_no && b.ref_no && a.ref_no.trim().length >= 6 && a.ref_no.trim() === b.ref_no.trim();
+    const near = days(a.entry_date, b.entry_date) <= 3;
+    if (!sameRef && !near) continue;
+    const wa = (acWho(a)||a.narration||'').toUpperCase(), wb = (acWho(b)||b.narration||'').toUpperCase();
+    const sameParty = wa && wb && (wa.slice(0,10) === wb.slice(0,10) || wa.includes(wb.slice(0,12)) || wb.includes(wa.slice(0,12)));
+    pairs.push({ a, b, why: sameRef ? 'same bank reference' : (sameParty ? 'same amount, same party, within 3 days' : 'same amount within 3 days'), strong: sameRef || (near && sameParty && a.entry_date === b.entry_date) });
+  }
+  pairs.sort((x,y)=> (y.strong?1:0)-(x.strong?1:0) || Number(y.a.amount)-Number(x.a.amount));
+  const row = (e) => `<div style="font-size:12px;"><b>${esc(e.entry_no)}</b> · ${e.entry_date} · ${esc(e.kind)} · <span style="color:#777">${esc((acWho(e)||e.narration||'').slice(0,60))}</span>${e.ref_no?' · <span style="color:#999">ref '+esc(e.ref_no.slice(0,30))+'</span>':''}<br><span style="font-size:11px;color:#1a7f37">🔗 ${esc(linkTxt(e))}</span> <span style="font-size:11px;color:#999">· ${acLbl(e.status)} · entered ${new Date(e.created_at).toLocaleDateString('en-IN')}</span> ${isDir()?dirDelBtn('acct','entries', e.id, e.entry_no+' ₹'+inr(e.amount), 'acDupCheck()'):''}</div>`;
+  box.innerHTML = `
+    <div class="card" style="margin-top:12px;border:1px solid #b3261e;">
+      <h3 style="font-size:15px;">🔍 Possible double entries — ${pairs.length ? pairs.length + ' pair' + (pairs.length===1?'':'s') + ' to review' : 'none found'}</h3>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Each pair has the same amount and direction within 3 days (or the same bank reference). Monthly rent, salary or TDS of the same amount can appear here legitimately — look at the dates and the party before deleting. Deleting an entry also removes the vendor payment / expense / MMC line tied to it, so the other ledgers stay correct.</p>
+      ${pairs.map(p=>`<div style="border:1px solid ${p.strong?'#b3261e':'#e3ddcc'};border-radius:8px;padding:8px 10px;margin-bottom:8px;background:${p.strong?'#fdf3f2':'#fff'}">
+        <div style="font-size:12px;font-weight:600;color:${p.strong?'#b3261e':'#b8860b'};">₹ ${inr(p.a.amount)} — ${p.why}${p.strong?' — very likely a double entry':''}</div>
+        <div class="row2c" style="margin-top:4px;"><div>${row(p.a)}</div><div>${row(p.b)}</div></div></div>`).join('')}
+      <button class="btn ghost sm" onclick="$('ac-dup-box').remove()">Close</button>
+    </div>`;
+  box.scrollIntoView({behavior:'smooth', block:'start'});
+}
 // Tie an existing bank payment to the head it belongs to (no second bank entry is created)
 async function acLinkForm(id){
   if (!canFinApprove()){ alert('Only the Director or the approving authority can link entries.'); return; }
@@ -6373,7 +6418,7 @@ function acKindChange(){
   const isVen = (k==='VPAY' || k==='MMC_PAY' || k==='MMC_VEN');
   $('en-counter-wrap').style.display = k==='TRANSFER'?'block':'none';
   $('en-dir-wrap').style.display = k==='OTHER'?'block':'none';
-  $('en-vendor-wrap').style.display = isVen ? 'block' : 'none';
+  $('en-vendor-wrap').style.display = (isVen || k==='PAYMENT') ? 'block' : 'none';
   acEnManualToggle();
   $('en-bank-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
   $('en-mode-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
@@ -6381,17 +6426,18 @@ function acKindChange(){
   $('en-bank-lbl').textContent = k==='MMC_PAY' ? 'From our bank (paid to MMC) *' : k==='VPAY' ? 'From our bank *' : 'Bank account *';
   $('en-ref-lbl').textContent = k==='MMC_VEN' ? 'MMC’s payment reference (UTR etc.)' : 'Reference no. (UTR / cheque)';
   $('en-narr-lbl').textContent = isVen ? 'Note' : 'Payee / narration';
-  $('en-help').textContent = k==='VPAY' ? 'Money goes from your bank straight to the vendor. Posts the bank payment and reduces that vendor’s outstanding (Vendor Dues / vendor ledger).'
+  $('en-help').textContent = k==='PAYMENT' ? 'If this payment is to a vendor, pick the vendor above — the payment then reduces that vendor’s outstanding in Vendor Dues and shows in the vendor ledger. Leave the vendor blank for a non-vendor payment.'
+    : k==='VPAY' ? 'Money goes from your bank straight to the vendor. Posts the bank payment and reduces that vendor’s outstanding (Vendor Dues / vendor ledger).'
     : k==='MMC_PAY' ? 'For POs billed & delivered to MMC. Money goes from your bank to MMC; it sits in the MMC ledger until you record MMC’s payment to the vendor.'
     : k==='MMC_VEN' ? 'MMC has paid the vendor out of the money you sent. Reduces the vendor’s outstanding and the balance held by MMC — no bank of yours moves.' : '';
-  if (isVen){ const m = $('en-mode'); if (m && !m.value) m.value = 'NEFT'; acEnLoadPos(); }
+  if (isVen || k==='PAYMENT'){ const m = $('en-mode'); if (m && !m.value) m.value = 'NEFT'; acEnLoadPos(); }
   const ph = $('en-narr'); if (ph) ph.placeholder = isVen ? 'e.g. part payment, balance on delivery' : 'Who / what for';
 }
 // manual payee box: only for a direct vendor payment when no vendor from the list is chosen
 function acEnManualToggle(){
   const k = $('en-kind')?.value, vsel = $('en-vendor'), w = $('en-manual-wrap'); if (!w) return;
   w.style.display = (k === 'VPAY' && vsel && !vsel.value) ? '' : 'none';
-  const l = $('en-vendor-lbl'); if (l) l.textContent = k === 'VPAY' ? 'Vendor (from the list) — or type a payee below' : 'Vendor *';
+  const l = $('en-vendor-lbl'); if (l) l.textContent = k === 'VPAY' ? 'Vendor (from the list) — or type a payee below' : k === 'PAYMENT' ? 'Vendor (pick one if this pays a vendor)' : 'Vendor *';
 }
 // vendor's POs for the vendor-payment kinds (all POs for a direct payment; only MMC-billed POs for the MMC kinds)
 async function acEnLoadPos(){
@@ -6399,7 +6445,7 @@ async function acEnLoadPos(){
   const k = $('en-kind')?.value, vsel = $('en-vendor'), psel = $('en-po'); if (!vsel || !psel) return;
   psel.innerHTML = '<option value="">— none / not yet —</option>'; window.__enPos = []; $('en-ponote').textContent = '';
   if (!vsel.value) return;
-  const isMmc = k !== 'VPAY';
+  const isMmc = (k !== 'VPAY' && k !== 'PAYMENT');
   const { data: pos, error } = await db.schema('acct').rpc(isMmc ? 'mmc_po_options' : 'vendor_po_options', { p_vendor: vsel.value });
   if (error){ say('en-msg','Could not load the purchase orders: '+error.message,false); return; }
   window.__enPos = (pos||[]).map(p => isMmc ? p : ({ ...p, to_mmc: 0, by_mmc: 0 }));
@@ -6414,7 +6460,7 @@ function acEnPoChange(){
   const po = (window.__enPos||[]).find(p=>p.po_id === psel.value);
   if (!po){ if (note) note.textContent = ''; return; }
   let left, txt;
-  if (k === 'VPAY'){ left = Number(po.po_value)-Number(po.paid||0)-Number(po.requested||0);
+  if (k === 'VPAY' || k === 'PAYMENT'){ left = Number(po.po_value)-Number(po.paid||0)-Number(po.requested||0);
     txt = `PO value ₹${inr(po.po_value)} · already paid ₹${inr(po.paid||0)}` + (Number(po.requested)>0 ? ` · awaiting approval ₹${inr(po.requested)}` : '') + ` · <b>still to pay ₹${inr(left>0?left:0)}</b>`; }
   else if (k === 'MMC_PAY'){ left = Number(po.po_value)-Number(po.to_mmc);
     txt = `PO value ₹${inr(po.po_value)} · sent to MMC so far ₹${inr(po.to_mmc)} · MMC has paid the vendor ₹${inr(po.by_mmc)} · <b>still to send ₹${inr(left>0?left:0)}</b>`; }
@@ -6423,9 +6469,25 @@ function acEnPoChange(){
   if (note) note.innerHTML = txt;
   if (left > 0) $('en-amt').value = left;
 }
+// Warn before posting when an entry of the same amount already sits within 3 days (a likely double entry)
+async function acDupWarn(amt, date, dir){
+  try {
+    const d = new Date(date || calFmt(new Date())); if (isNaN(d)) return true;
+    const lo = new Date(d); lo.setDate(lo.getDate()-3); const hi = new Date(d); hi.setDate(hi.getDate()+3);
+    let q = db.schema('acct').from('v_entries').select('entry_no,entry_date,amount,payee,narration,status').eq('amount', amt).neq('status','REJECTED').gte('entry_date', calFmt(lo)).lte('entry_date', calFmt(hi));
+    if (dir) q = q.eq('direction', dir);
+    const { data } = await q.limit(5);
+    if (!data || !data.length) return true;
+    return confirm('Possible double entry!\n\nAn entry of ₹ ' + inr(amt) + ' already exists within 3 days of this date:\n' + data.map(e=>'  • ' + e.entry_no + ' · ' + e.entry_date + ' · ' + (acWho(e)||e.narration||'')).join('\n') + '\n\nPost this entry anyway?');
+  } catch(e){ return true; }
+}
 async function acEntrySave(){
-  const k = $('en-kind').value, amt = Number($('en-amt').value);
+  let k = $('en-kind').value; const amt = Number($('en-amt').value);
   if (!(amt>0)){ say('en-msg','Amount must be above zero.',false); return; }
+  // a plain "Payment" with a vendor picked is a vendor payment — it must reach Vendor Dues
+  if (k === 'PAYMENT' && $('en-vendor') && $('en-vendor').value) k = 'VPAY';
+  { const dir = ['VPAY','MMC_PAY','PAYMENT','BANK_OUT','SALARY','ADVANCE'].includes(k) ? 'OUT' : ['BANK_IN','RECOVERY'].includes(k) ? 'IN' : null;
+    if (k !== 'MMC_VEN' && !(await acDupWarn(amt, $('en-date').value, dir))) return; }
   if (k==='VPAY' || k==='MMC_PAY' || k==='MMC_VEN'){
     const vid = $('en-vendor').value, po = $('en-po').value || null, note = $('en-narr').value.trim() || null, ref = $('en-ref').value.trim() || null;
     const manual = ($('en-payee-manual') ? $('en-payee-manual').value.trim() : '');
