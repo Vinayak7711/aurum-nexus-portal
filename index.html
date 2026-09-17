@@ -5480,10 +5480,24 @@ async function acctTab(t){
           <div style="margin-top:8px;"><a href="#" style="font-size:12px;" onclick="event.preventDefault();window.acLedType='M:';window.acLedSel='M:MMC';acctTab('ledger')">📖 Open the MMC ledger</a></div>
         </div>
         ${CARD('🧾','Business expense','Rent, utilities, travel, fees… tag the department, add GST/HSN & TDS. Paid by bank (hits the ledger) or petty cash (goes for approval). Shows in the Expense ledger.','exp')}
-        ${CARD('💵','Petty cash expense','Small day-to-day cash spends from the box — waits for approval in the Petty Cash book.','petty')}
-        ${CARD('🏧','Petty cash top-up','Cash withdrawn from a bank into the box — posts the bank withdrawal in the ledger on approval.','topup')}
-        ${CARD('👤','Salary slip','Generate a staff salary slip in the Salary section.','salary')}
-        ${CARD('🤝','Staff advance','Give or recover a staff advance in the Advances section.','adv')}
+        <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
+          <div style="font-size:26px;">💵</div>
+          <h2 style="font-size:15px;margin:6px 0 4px;">Petty cash</h2>
+          <p style="font-size:12px;color:#777;margin:0 0 10px;"><b>Expense</b> — a small day-to-day cash spend from the box (waits for approval in the Petty Cash book). <b>Top-up</b> — cash withdrawn from a bank into the box (posts the bank withdrawal on approval).</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn gold sm" onclick="acNewGo('petty')">Petty cash expense</button>
+            <button class="btn gold sm" onclick="acNewGo('topup')">🏧 Top-up the box</button>
+          </div>
+        </div>
+        <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
+          <div style="font-size:26px;">👤</div>
+          <h2 style="font-size:15px;margin:6px 0 4px;">Salary &amp; staff advances</h2>
+          <p style="font-size:12px;color:#777;margin:0 0 10px;"><b>Salary slip</b> — generate a staff salary slip in the Salary section. <b>Advance</b> — give or recover a staff advance in the Advances section.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn gold sm" onclick="acNewGo('salary')">Salary slip</button>
+            <button class="btn gold sm" onclick="acNewGo('adv')">🤝 Staff advance</button>
+          </div>
+        </div>
         ${CARD('🏢','Asset / document','Add an asset or its papers in the Asset register.','asset')}
       </div>`;
     return;
