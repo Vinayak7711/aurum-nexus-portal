@@ -5467,8 +5467,15 @@ async function acctTab(t){
       <h4 class="sec">One place for every accounting entry</h4>
       <p style="font-size:12px;color:#777;margin:4px 0 12px;">Pick what you are entering — it opens the right form, and once saved the entry automatically reflects in its own section (and in the ledger / petty book / vendor dues wherever it belongs).</p>
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        ${CARD('🏦','Bank / ledger entry','Money in, money out, transfers between banks, receipts &amp; recoveries — straight into the finance ledger.','ledger')}
-        ${CARD('💳','Vendor payment (paid by Aurum)','Pay a vendor straight from our bank against their purchase order — posts the bank entry and reduces that vendor’s outstanding.','vpay')}
+        <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;cursor:pointer;" onclick="acNewGo('ledger')">
+          <div style="font-size:26px;">🏦</div>
+          <h2 style="font-size:15px;margin:6px 0 4px;">Bank / ledger entry</h2>
+          <p style="font-size:12px;color:#777;margin:0 0 10px;">Money in, money out, transfers between banks, receipts &amp; recoveries — and <b>vendor payments from our bank</b>: pick the vendor (and PO) on the form and the same entry reduces that vendor’s outstanding.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn gold sm" onclick="event.stopPropagation();acNewGo('ledger')">Make this entry</button>
+            <button class="btn ghost sm" onclick="event.stopPropagation();acNewGo('vpay')" title="Opens the same form with “Vendor payment — paid by Aurum” already selected">💳 Vendor payment</button>
+          </div>
+        </div>
         <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
           <div style="font-size:26px;">🏭</div>
           <h2 style="font-size:15px;margin:6px 0 4px;">Payment via MMC</h2>
