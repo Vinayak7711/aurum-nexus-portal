@@ -5487,11 +5487,8 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
           <div style="font-size:26px;">💵</div>
           <h2 style="font-size:15px;margin:6px 0 4px;">Petty cash</h2>
-          <p style="font-size:12px;color:#777;margin:0 0 10px;"><b>Expense</b> — a small day-to-day cash spend from the box (waits for approval in the Petty Cash book). <b>Top-up</b> — cash withdrawn from a bank into the box (posts the bank withdrawal on approval).</p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn gold sm" onclick="acNewGo('petty')">Petty cash expense</button>
-            <button class="btn gold sm" onclick="acNewGo('topup')">🏧 Top-up the box</button>
-          </div>
+          <p style="font-size:12px;color:#777;margin:0 0 10px;"><b>Expense</b> — a small day-to-day cash spend from the box (waits for approval in the Petty Cash book). To top up the box, use the bank entry card with kind “Money OUT (cash withdrawal)” — that withdrawal lands here automatically.</p>
+          <button class="btn gold sm" onclick="acNewGo('petty')">Petty cash expense</button>
         </div>
         <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
           <div style="font-size:26px;">👤</div>
@@ -6460,7 +6457,7 @@ async function acEntryForm(kind){
       </optgroup>
       <optgroup label="Bank entries">
       <option value="BANK_IN">Money IN (deposit / receipt)</option>
-      <option value="BANK_OUT">Money OUT (withdrawal)</option>
+      <option value="BANK_OUT">Money OUT (cash withdrawal → petty cash box)</option>
       <option value="PAYMENT">Other payment (expense / non-vendor)</option>
       <option value="TRANSFER">Transfer between accounts</option>
       <option value="RECOVERY">Advance recovery (cash in)</option>
@@ -6503,7 +6500,8 @@ function acKindChange(){
   $('en-bank-lbl').textContent = k==='MMC_PAY' ? 'From our bank (paid to MMC) *' : k==='VPAY' ? 'From our bank *' : 'Bank account *';
   $('en-ref-lbl').textContent = k==='MMC_VEN' ? 'MMC’s payment reference (UTR etc.)' : 'Reference no. (UTR / cheque)';
   $('en-narr-lbl').textContent = isVen ? 'Note' : 'Payee / narration';
-  $('en-help').textContent = k==='PAYMENT' ? 'If this payment is to a vendor, pick the vendor above — the payment then reduces that vendor’s outstanding in Vendor Dues and shows in the vendor ledger. Leave the vendor blank for a non-vendor payment.'
+  $('en-help').textContent = k==='BANK_OUT' ? 'A cash withdrawal from the bank goes straight into the petty cash box: this posts the petty cash top-up (PC number) and, once approved, the bank withdrawal in the ledger — both linked to each other.'
+    : k==='PAYMENT' ? 'If this payment is to a vendor, pick the vendor above — the payment then reduces that vendor’s outstanding in Vendor Dues and shows in the vendor ledger. Leave the vendor blank for a non-vendor payment.'
     : k==='VPAY' ? 'Money goes from your bank straight to the vendor. Posts the bank payment and reduces that vendor’s outstanding (Vendor Dues / vendor ledger).'
     : k==='MMC_PAY' ? 'For POs billed & delivered to MMC. Money goes from your bank to MMC; it sits in the MMC ledger until you record MMC’s payment to the vendor.'
     : k==='MMC_VEN' ? 'MMC has paid the vendor out of the money you sent. Reduces the vendor’s outstanding and the balance held by MMC — no bank of yours moves.' : '';
@@ -6565,6 +6563,20 @@ async function acEntrySave(){
   if (k === 'PAYMENT' && $('en-vendor') && $('en-vendor').value) k = 'VPAY';
   { const dir = ['VPAY','MMC_PAY','PAYMENT','BANK_OUT','SALARY','ADVANCE'].includes(k) ? 'OUT' : ['BANK_IN','RECOVERY'].includes(k) ? 'IN' : null;
     if (k !== 'MMC_VEN' && !(await acDupWarn(amt, $('en-date').value, dir))) return; }
+  if (k === 'BANK_OUT'){
+    // a cash withdrawal is a petty cash top-up: one record in the petty book, one bank entry, linked
+    if (!$('en-bank').value){ say('en-msg','Choose the bank the cash is withdrawn from.',false); return; }
+    const noteOut = [$('en-narr').value.trim(), $('en-ref').value.trim() ? 'ref ' + $('en-ref').value.trim() : ''].filter(Boolean).join(' · ') || null;
+    const { data: pcId, error: pe } = await db.schema('acct').rpc('petty_topup', { p_bank: $('en-bank').value, p_amount: amt, p_date: $('en-date').value || null, p_note: noteOut });
+    if (pe){ say('en-msg','Could not post the withdrawal: '+pe.message,false); return; }
+    let msg = 'Cash withdrawal recorded as a petty cash top-up — it waits for approval in the Petty Cash book; the bank withdrawal posts to the ledger when approved.';
+    if (canFinApprove() && pcId){
+      const { error: ae } = await db.schema('acct').rpc('petty_decide', { p_id: pcId, p_approve: true, p_note: null });
+      if (!ae) msg = 'Cash withdrawal posted — the bank ledger shows the withdrawal and the petty cash box is topped up (both linked).';
+    }
+    alert(msg);
+    acctTab('petty'); return;
+  }
   if (k==='VPAY' || k==='MMC_PAY' || k==='MMC_VEN'){
     const vid = $('en-vendor').value, po = $('en-po').value || null, note = $('en-narr').value.trim() || null, ref = $('en-ref').value.trim() || null;
     const manual = ($('en-payee-manual') ? $('en-payee-manual').value.trim() : '');
