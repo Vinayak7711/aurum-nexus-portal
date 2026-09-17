@@ -5469,12 +5469,9 @@ async function acctTab(t){
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;cursor:pointer;" onclick="acNewGo('ledger')">
           <div style="font-size:26px;">🏦</div>
-          <h2 style="font-size:15px;margin:6px 0 4px;">Bank / ledger entry</h2>
-          <p style="font-size:12px;color:#777;margin:0 0 10px;">Money in, money out, transfers between banks, receipts &amp; recoveries — and <b>vendor payments from our bank</b>: pick the vendor (and PO) on the form and the same entry reduces that vendor’s outstanding.</p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn gold sm" onclick="event.stopPropagation();acNewGo('ledger')">Make this entry</button>
-            <button class="btn ghost sm" onclick="event.stopPropagation();acNewGo('vpay')" title="Opens the same form with “Vendor payment — paid by Aurum” already selected">💳 Vendor payment</button>
-          </div>
+          <h2 style="font-size:15px;margin:6px 0 4px;">Bank ledger entry &amp; vendor payment</h2>
+          <p style="font-size:12px;color:#777;margin:0 0 10px;">Money in, money out, transfers between banks, receipts &amp; recoveries, and vendor payments from our bank — one form for all of them. Choose the kind on the form; for a vendor payment pick the vendor (and PO) and the same entry reduces that vendor’s outstanding.</p>
+          <button class="btn gold sm" onclick="event.stopPropagation();acNewGo('ledger')">Make this entry</button>
         </div>
         <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
           <div style="font-size:26px;">🏭</div>
@@ -6454,7 +6451,7 @@ async function acEntryForm(kind){
   if (!window.__enVendors){ const { data: vl } = await db.schema('sales').from('vendors').select('id,name').order('name'); window.__enVendors = vl || []; }
   const vendorOpts = '<option value="">— choose the vendor —</option>' + window.__enVendors.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('');
   $('ac-entry-form').innerHTML = `
-    <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">New finance entry</h3>
+    <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Bank ledger entry &amp; vendor payment</h3>
     <div class="row2c"><div><label>Kind *</label><select id="en-kind" onchange="acKindChange()">
       <optgroup label="Vendor payments">
       <option value="VPAY">Vendor payment — paid by Aurum from our bank</option>
