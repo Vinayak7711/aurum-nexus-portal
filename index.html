@@ -6323,7 +6323,7 @@ function acExpPendItem(){
            amount: amt, gst_rate: Number($('ex-gst')?.value) || 0 };
 }
 // Expense entry form — lives on the New Entry tab (the Expenses tab is view-only)
-async function acExpForm(){
+async function acExpForm(fromKind){
   const A = db.schema('acct');
   const host = $('ac-entry-form'); if (!host) return;
   if (!canFinEdit()){ host.innerHTML = '<p style="color:#777">Expenses are entered by Accounts (finance) or the Director.</p>'; return; }
@@ -6336,7 +6336,7 @@ async function acExpForm(){
         advOpen = (av||[]).filter(a => Number(a.outstanding) > 0); } catch(e){}
   window.__exAdvs = advOpen;
   const advOpts = advOpen.map(a=>`<option value="${a.id}">${esc(a.adv_no)} — ${esc(a.staff_name||'')} — outstanding ₹ ${inr(a.outstanding)}</option>`).join('');
-  host.innerHTML = `<div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Post an expense</h2>
+  host.innerHTML = `<div class="card" style="margin-bottom:14px;max-width:720px;">${fromKind?`<div style="margin-bottom:6px;"><button class="btn ghost sm" onclick="acEntryForm()">‹ Back to bank ledger entry &amp; vendor payment</button></div>`:''}<h2 style="font-size:15px;">Post an expense</h2>
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there.</p>
         <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
           <div><label>Category *</label><select id="ex-cat" onchange="acExpCatChange()">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}<option value="__ADV__">⇄ Settle staff expense advance (bills against advance given)</option></select></div></div>
@@ -6572,6 +6572,9 @@ async function acEntryForm(kind){
       <option value="MMC_PAY">Payment to MMC — MMC will pay the vendor</option>
       <option value="MMC_VEN">MMC paid the vendor (from money already with MMC)</option>
       </optgroup>
+      <optgroup label="Expenses">
+      <option value="EXPENSE">Business expense (rent, utilities, travel, fees… with GST / TDS)</option>
+      </optgroup>
       <optgroup label="Bank entries">
       <option value="BANK_IN">Money IN (deposit / receipt)</option>
       <option value="BANK_OUT">Money OUT (cash withdrawal → petty cash box)</option>
@@ -6606,6 +6609,7 @@ async function acEntryForm(kind){
 }
 function acKindChange(){
   const k = $('en-kind').value;
+  if (k === 'EXPENSE'){ acExpForm(true); return; }   // swaps this form for the business-expense form
   const isVen = (k==='VPAY' || k==='MMC_PAY' || k==='MMC_VEN');
   $('en-counter-wrap').style.display = k==='TRANSFER'?'block':'none';
   $('en-dir-wrap').style.display = k==='OTHER'?'block':'none';
