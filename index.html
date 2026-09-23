@@ -5327,6 +5327,7 @@ async function acctTab(t){
     }
     if (!isAllLed && sel.slice(0,2) === 'V:'){
       const vidL = sel.slice(2);
+      if (!(window.__ledVenNames||{})[vidL]){ try { const { data: vn1 } = await db.schema('sales').from('vendors').select('name').eq('id', vidL).maybeSingle(); window.__ledVenNames = window.__ledVenNames || {}; if (vn1) window.__ledVenNames[vidL] = vn1.name; } catch(e){} }
       const vnameL = (window.__ledVenNames||{})[vidL] || 'Vendor';
       const { data: vled, error: vlerr } = await A.rpc('vendor_ledger', { p_vendor: vidL, p_from: window.acLedFrom || null, p_to: window.acLedTo || null });
       if (vlerr){ B.innerHTML = `<div class="msg err">Load failed: ${esc(vlerr.message)}</div>`; return; }
@@ -5615,13 +5616,13 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid so far</div><div style="font-size:20px;font-weight:700;color:#1a7f37">₹ ${inr(totP)}</div></div>
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Outstanding</div><div style="font-size:20px;font-weight:700;color:${totO>0?'#b3261e':'#1a7f37'}">₹ ${inr(totO)}</div></div>
       </div>
-      <p style="font-size:12px;color:#777;margin:0 0 8px;">The moment a PO is placed on a vendor, its bill amount (incl. tax) lands here as that party's due. Accounts raises a payment against a purchase order and it goes for approval — the approving authority releases it and enters the UTR or cheque details at that moment. Only then is the payment recorded, the outstanding reduced and the bank ledger posted.</p>
+      <p style="font-size:12px;color:#777;margin:0 0 8px;">The moment a PO is placed on a vendor, its bill amount (incl. tax) lands here as that party's due. Payments are entered from the <b>New Entry</b> tab (Bank ledger entry &amp; vendor payment, or Payment via MMC); an entry by Accounts goes for approval and the approving authority releases it with the UTR or cheque details. Only then is the payment recorded, the outstanding reduced and the bank ledger posted. This tab is for viewing only.</p>
       <h4 class="sec">Party-wise outstanding</h4>
       <div class="table-scroll"><table><thead><tr><th>Vendor</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th class="amount"><b>Outstanding ₹</b></th><th></th></tr></thead><tbody>
       ${vds.map(r=>`<tr><td><b>${esc(r.vendor)}</b> <span style="color:#999;font-size:11px;">(${esc(r.code)})</span></td>` +
         `<td class="amount">${inr(r.billed)}</td><td class="amount" style="color:#1a7f37">${inr(r.paid)}</td>` +
         `<td class="amount" style="font-weight:700;color:${Number(r.outstanding)>0?'#b3261e':'#1a7f37'}">${inr(r.outstanding)}</td>` +
-        `<td style="white-space:nowrap">${canFinEdit()?`<button class="mini" onclick="acVendorPayForm('${r.vendor_id}','${esc(r.vendor).replace(/'/g,'&#39;')}',${Number(r.outstanding)})">Pay…</button> <button class="mini" title="MMC paid this vendor from the money we sent MMC (POs billed to MMC)" onclick="acMmcForm('vendor','vd-form','${r.vendor_id}','${esc(r.vendor).replace(/'/g,'&#39;')}',${Number(r.outstanding)})">🏭 Paid by MMC…</button>`:''}</td></tr>`).join('')
+        `<td style="white-space:nowrap"><button class="mini" title="Open this vendor’s ledger (bills, payments, running balance)" onclick="window.acLedType='V:';window.acLedSel='V:${r.vendor_id}';acctTab('ledger')">📖 Ledger</button></td></tr>`).join('')
         || '<tr><td colspan="5" style="color:#777">No vendor bills yet — dues appear here as soon as a PO is placed.</td></tr>'}
       </tbody></table></div>
       <div id="vd-form"></div>
