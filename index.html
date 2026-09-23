@@ -5538,7 +5538,7 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;cursor:pointer;" onclick="acNewGo('ledger')">
           <div style="font-size:26px;">🏦</div>
           <h2 style="font-size:15px;margin:6px 0 4px;">Bank ledger entry &amp; vendor payment</h2>
-          <p style="font-size:12px;color:#777;margin:0 0 10px;">Money in, money out, transfers between banks, receipts &amp; recoveries, and vendor payments from our bank — one form for all of them. Choose the kind on the form; for a vendor payment pick the vendor (and PO) and the same entry reduces that vendor’s outstanding.</p>
+          <p style="font-size:12px;color:#777;margin:0 0 10px;">Money in, money out, transfers between banks, receipts &amp; recoveries, vendor payments from our bank and business expenses — one form for all of them. Choose the kind on the form; for a vendor payment pick the vendor (and PO) and the same entry reduces that vendor’s outstanding; kind “Business expense” opens the expense form with GST/HSN &amp; TDS.</p>
           <button class="btn gold sm" onclick="event.stopPropagation();acNewGo('ledger')">Make this entry</button>
         </div>
         <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
@@ -5550,7 +5550,6 @@ async function acctTab(t){
           </div>
           <div style="margin-top:8px;"><a href="#" style="font-size:12px;" onclick="event.preventDefault();window.acLedType='M:';window.acLedSel='M:MMC';acctTab('ledger')">📖 Open the MMC ledger</a></div>
         </div>
-        ${CARD('🧾','Business expense','Rent, utilities, travel, fees… tag the department, add GST/HSN & TDS. Paid by bank (hits the ledger) or petty cash (goes for approval). Shows in the Expense ledger.','exp')}
         <div class="card" style="flex:1;min-width:230px;max-width:340px;padding:16px;">
           <div style="font-size:26px;">💵</div>
           <h2 style="font-size:15px;margin:6px 0 4px;">Petty cash</h2>
