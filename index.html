@@ -5120,9 +5120,11 @@ async function acctTab(t){
         ${typeBar}
         <div class="card" style="padding:14px;margin-top:8px;">
           <div><label>Select the ${LT[pfx][0].replace(/^[^ ]+ /,'')} account</label>
-            <select id="led-acct">${names.length
-              ? `<option value="">— Choose from ${names.length} account${names.length===1?'':'s'} —</option>`
-                + `<option value="ALLTYPE">✔ Select all — combined ledger of all ${names.length} account${names.length===1?'':'s'}</option>`
+            <select id="led-acct">${names.length === 1
+              ? acctOpts
+              : names.length
+              ? `<option value="">— Choose from ${names.length} accounts —</option>`
+                + `<option value="ALLTYPE">✔ Select all — combined ledger of all ${names.length} accounts</option>`
                 + acctOpts
               : '<option value="">No accounts of this type have entries yet</option>'}</select></div>
           <div class="row2c" style="margin-top:10px;">
