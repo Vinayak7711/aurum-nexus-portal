@@ -5119,8 +5119,7 @@ async function acctTab(t){
       }).join('');
       B.innerHTML = `
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
-          ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button>`:''}
-          <span style="font-size:12px;color:#777">Choose the account type, pick the account from the list, set the dates, then view its ledger.</span>
+          <span style="font-size:12px;color:#777">Choose the account type, pick the account from the list, set the dates, then view its ledger. Entries are made from the <b>New Entry</b> tab.</span>
         </div>
         <div id="ac-entry-form"></div>
         ${typeBar}
@@ -5172,7 +5171,6 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:140px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Cash spent</div><div style="font-size:19px;font-weight:700;color:#b3261e">₹ ${inr(tOutC)}</div></div>
         <div class="card" style="flex:1;min-width:140px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Cash in hand${window.acLedTo?' (on '+window.acLedTo+')':''}</div><div style="font-size:19px;font-weight:700;color:${run>=0?'#1a7f37':'#b3261e'}">₹ ${inr(run)}</div></div>
       </div>
-      ${canFinEdit()?`<button class="btn gold sm" onclick="acctTab('petty')">+ Petty cash expense</button> `:''}
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
       ${pendC?`<span style="font-size:12px;color:#b8860b;margin-left:6px;">⏳ ${pendC} awaiting approval — not counted in cash in hand</span>`:''}
@@ -5302,7 +5300,6 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Held by MMC (balance)</div><div style="font-size:19px;font-weight:700;color:${bal>=0?'#0b57d0':'#b3261e'}">₹ ${inr(bal)}</div>${pend?`<div style="font-size:11px;color:#b8860b">incl. ₹ ${inr(pend)} awaiting approval</div>`:''}</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
-        ${canFinEdit()?`<button class="btn gold sm" onclick="acMmcForm('pay','ac-entry-form')">+ Payment to MMC</button> <button class="btn gold sm" onclick="acMmcForm('vendor','ac-entry-form')">+ MMC paid a vendor</button>`:''}
         <button class="btn ghost sm" onclick="acMmcCsv()">⬇ Download (CSV / Excel)</button>
         <button class="btn ghost sm" onclick="acMmcPrint()">🖨 Print / save PDF</button>
       </div>
@@ -5318,7 +5315,7 @@ async function acctTab(t){
         `<td class="amount" style="font-weight:600;color:${r._bal>=0?'#0b57d0':'#b3261e'}">${inr(r._bal)}</td>` +
         `<td style="font-size:11.5px;">${r.status==='PENDING_APPROVAL'?'<span style="color:#b8860b">⏳ awaiting approval</span>':r.status==='REJECTED'?'<span style="color:#b3261e">rejected</span>':'<span style="color:#1a7f37">✔ posted</span>'}</td>` +
         `<td style="white-space:nowrap">${r.kind==='PAY_TO_MMC' ? (isDir()?`<button class="mini" title="Take this line out of the MMC ledger — the bank entry ${esc(r.entry_no||'')} stays as it is" onclick="acMmcUnlink('${r.id}','${esc(r.txn_no)}')">⛓ Unlink</button>`:'') : dirDelBtn('acct','vendor_payments', r.payment_id, r.pay_no||r.txn_no, "acctTab('ledger')")}</td></tr>`).join('')
-        || '<tr><td colspan="10" style="color:#777">Nothing routed through MMC in this date range yet. Use “+ Payment to MMC” when you pay MMC from your bank.</td></tr>'}
+        || '<tr><td colspan="10" style="color:#777">Nothing routed through MMC in this date range yet. Record money paid to MMC from New Entry → Bank ledger entry (kind “Payment to MMC”).</td></tr>'}
       ${mm.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(totTo)}</td><td class="amount">${inr(totBy)}</td><td class="amount">${inr(bal)}</td><td colspan="2"></td></tr>`:''}
       </tbody></table></div>
       ${Object.keys(byV).length?`
@@ -5403,7 +5400,6 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Money out</div><div style="font-size:19px;font-weight:700;color:#b3261e">₹ ${inr(totOut)}</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Net</div><div style="font-size:19px;font-weight:700;color:${totIn-totOut>=0?'#1a7f37':'#b3261e'}">₹ ${inr(totIn-totOut)}</div></div>
       </div>
-      ${canFinEdit()?`<button class="btn gold sm" onclick="acEntryForm()">+ New entry</button> `:''}
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
       ${canFinApprove()?`<button class="btn ghost sm" onclick="acDupCheck()" title="Find entries of the same amount within 3 days, or with the same reference — likely double entries">🔍 Check for double entries</button> `:''}
@@ -5570,7 +5566,8 @@ async function acctTab(t){
           </div>
         </div>
         ${CARD('🏢','Asset / document','Add an asset or its papers in the Asset register.','asset')}
-      </div>`;
+      </div>
+      <div id="ac-entry-form" style="margin-top:14px;"></div>`;
     return;
   }
 
@@ -5845,8 +5842,8 @@ function acLedView(){ const s = document.getElementById('led-acct'); if (!s || s
   acLedOpen(Number(s.value)); }
 function acLedBack(){ window.acLedSel = ''; acctTab('ledger'); }
 async function acNewGo(kind){
-  if (kind === 'ledger'){ await acctTab('ledger'); if (typeof acEntryForm === 'function'){ acEntryForm(); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); } }
-  else if (kind === 'vpay' || kind === 'mmc' || kind === 'mmcv'){ window.acLedSel = ''; await acctTab('ledger'); await acEntryForm(kind==='vpay' ? 'VPAY' : kind==='mmc' ? 'MMC_PAY' : 'MMC_VEN'); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); }
+  if (kind === 'ledger'){ await acctTab('newe'); if (typeof acEntryForm === 'function'){ await acEntryForm(); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); } }
+  else if (kind === 'vpay' || kind === 'mmc' || kind === 'mmcv'){ await acctTab('newe'); await acEntryForm(kind==='vpay' ? 'VPAY' : kind==='mmc' ? 'MMC_PAY' : 'MMC_VEN'); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); }
   else if (kind === 'exp'){ await acctTab('exp'); const el=$('ex-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
   else if (kind === 'petty'){ await acctTab('petty'); const el=$('pc-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
   else if (kind === 'topup'){ await acctTab('petty'); const el=$('pt-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
