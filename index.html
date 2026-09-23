@@ -5658,61 +5658,57 @@ async function acctTab(t){
   }
 
   if (t === 'exp'){
-    const { data: exps, error } = await A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status), items:expense_items(*)').order('exp_date',{ascending:false}).order('created_at',{ascending:false}).limit(200);
+    const { data: exps, error } = await A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status), items:expense_items(*)').order('exp_date',{ascending:false}).order('created_at',{ascending:false}).limit(1000);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
-    const rows = exps || [];
-    window.__expRows = rows;
-    window.__exItems = [];
-    const ym = new Date().toISOString().slice(0,7);
-    const monthTot = rows.filter(r=>String(r.exp_date).slice(0,7)===ym).reduce((s,r)=>s+Number(r.amount),0);
-    const CATS_EXP = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'];
-    const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
-    // open expense advances — bills can be booked against them instead of paying afresh
-    let advOpen = [];
-    try { const { data: av } = await A.from('v_advances').select('*').eq('adv_type','EXPENSE').eq('status','APPROVED').order('given_on');
-          advOpen = (av||[]).filter(a => Number(a.outstanding) > 0); } catch(e){}
-    window.__exAdvs = advOpen;
-    const advOpts = advOpen.map(a=>`<option value="${a.id}">${esc(a.adv_no)} — ${esc(a.staff_name||'')} — outstanding ₹ ${inr(a.outstanding)}</option>`).join('');
-    const advBy = {}; advOpen.forEach(a => advBy[a.id] = a); (rows||[]).forEach(r => { if (r.advance_id && !advBy[r.advance_id]) advBy[r.advance_id] = null; });
+    const all = exps || [];
     window.__exAdvNo = {};
-    try { const ids = [...new Set(rows.filter(r=>r.advance_id).map(r=>r.advance_id))];
+    try { const ids = [...new Set(all.filter(r=>r.advance_id).map(r=>r.advance_id))];
           if (ids.length){ const { data: an } = await A.from('advances').select('id, adv_no').in('id', ids); (an||[]).forEach(a => window.__exAdvNo[a.id] = a.adv_no); } } catch(e){}
+    // view filters: expense head, department, date range
+    window.acExpCat = window.acExpCat || ''; window.acExpDept = window.acExpDept || ''; window.acExpFrom = window.acExpFrom || ''; window.acExpTo = window.acExpTo || '';
+    const cats = [...new Set(all.map(r=>r.category).filter(Boolean))].sort();
+    const depts = [...new Set(all.map(r=>r.dept).filter(Boolean))].sort();
+    const rows = all.filter(r => (!window.acExpCat || r.category === window.acExpCat) && (!window.acExpDept || (window.acExpDept === '__NONE__' ? !r.dept : r.dept === window.acExpDept))
+      && (!window.acExpFrom || String(r.exp_date) >= window.acExpFrom) && (!window.acExpTo || String(r.exp_date) <= window.acExpTo));
+    window.__expRows = rows;
+    const ym = new Date().toISOString().slice(0,7);
+    const monthTot = all.filter(r=>String(r.exp_date).slice(0,7)===ym).reduce((s,r)=>s+Number(r.amount),0);
+    const selTot = rows.reduce((s,r)=>s+Number(r.amount),0);
+    const selGst = rows.reduce((s,r)=>s+Number(r.gst_amount||0),0);
+    const selTds = rows.reduce((s,r)=>s+Number(r.tds_amount||0),0);
+    const byHead = {}; rows.forEach(r=>{ const k = r.category||'—'; byHead[k] = byHead[k] || {n:0, amt:0}; byHead[k].n++; byHead[k].amt += Number(r.amount); });
+    const byDept = {}; rows.forEach(r=>{ const k = r.dept||'General'; byDept[k] = byDept[k] || {n:0, amt:0}; byDept[k].n++; byDept[k].amt += Number(r.amount); });
+    const filt = !!(window.acExpCat || window.acExpDept || window.acExpFrom || window.acExpTo);
     B.innerHTML = `
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Expenses this month</div><div style="font-size:20px;font-weight:700;">₹ ${inr(monthTot)}</div></div>
-        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Entries recorded</div><div style="font-size:20px;font-weight:700;">${rows.length}</div></div>
+        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">${filt?'Selected':'All'} expenses</div><div style="font-size:20px;font-weight:700;color:#b3261e">₹ ${inr(selTot)}</div><div style="font-size:11px;color:#777">${rows.length} entr${rows.length===1?'y':'ies'}</div></div>
+        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">GST in selection</div><div style="font-size:20px;font-weight:700;color:#1a7f37">₹ ${inr(selGst)}</div></div>
+        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">TDS in selection</div><div style="font-size:20px;font-weight:700;color:#b8860b">₹ ${inr(selTds)}</div></div>
       </div>
-      ${canFinEdit() ? `
-      <div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Post an expense</h2>
-        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there.</p>
-        <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
-          <div><label>Category *</label><select id="ex-cat" onchange="acExpCatChange()">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}<option value="__ADV__">⇄ Settle staff expense advance (bills against advance given)</option></select></div></div>
-        <div id="ex-adv-wrap" class="hidden" style="margin-top:8px;border:1px solid #e6d9b0;background:#fdf9ee;border-radius:8px;padding:10px;">
-          <div class="row2c"><div><label>Advance to settle *</label><select id="ex-adv" onchange="acExpAdvPick()">${advOpts || '<option value="">— no open expense advances —</option>'}</select></div>
-            <div><label>Expense head *</label><select id="ex-head">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}</select></div></div>
-          <div id="ex-adv-note" style="font-size:12px;color:#7a6a4a;margin-top:6px;">No money moves — the bill is booked under the expense head above and reduces the staff member's outstanding advance. Each bill can be less than the advance; settle it in as many bills as needed.</div>
+      <p style="font-size:12px;color:#777;margin:0 0 8px;">This tab is for viewing. Expenses are entered from <b>New Entry → Business expense</b>.</p>
+      <div class="card" style="padding:12px;margin-bottom:12px;">
+        <div class="row2c">
+          <div><label>Expense head</label><select id="exf-cat" onchange="window.acExpCat=this.value;acctTab('exp')"><option value="">— all heads —</option>${cats.map(c=>`<option${window.acExpCat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div>
+          <div><label>Department / section</label><select id="exf-dept" onchange="window.acExpDept=this.value;acctTab('exp')"><option value="">— all departments —</option><option value="__NONE__"${window.acExpDept==='__NONE__'?' selected':''}>General (no department)</option>${depts.map(d=>`<option${window.acExpDept===d?' selected':''}>${esc(d)}</option>`).join('')}</select></div>
         </div>
-        <div class="row2c" style="margin-top:8px;"><div><label>Supplier invoice no.</label><input type="text" id="ex-inv" placeholder="As printed on the supplier's bill"></div>
-          <div><label>Department</label><select id="ex-dept"><option value="">— none / general —</option>${['Office / Admin','Accounts','Sales','Marketing','Production / MMC','Purchase','HR','Director'].map(d=>`<option>${d}</option>`).join('')}</select></div></div>
-        <h4 class="sec" style="margin-top:12px;">Bill items <span style="font-weight:normal;font-size:11px;color:#999">— one line per item; each can have its own HSN &amp; GST</span></h4>
-        <div class="row2c"><div><label>Item / description</label><input type="text" id="ex-iname" placeholder="What was bought"></div>
-          <div><label>HSN / SAC code</label><input type="text" id="ex-hsn" placeholder="e.g. 9983" maxlength="10"></div></div>
-        <div class="row2c" style="margin-top:8px;"><div><label>Amount ₹ (before GST) *</label><input type="number" id="ex-amt" min="0.01" step="any" oninput="acExpCalc()"></div>
-          <div><label>GST % (0 if not applicable)</label><input type="number" id="ex-gst" min="0" max="100" step="any" value="0" oninput="acExpCalc()"></div></div>
-        <button class="btn ghost sm" style="margin-top:8px;" onclick="acExpItemAdd()">＋ Add this item to the bill</button>
-        <div id="ex-items" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
-        <div class="row2c" style="margin-top:8px;"><div><label>TDS deducted % (0 if none)</label><input type="number" id="ex-tds" min="0" max="99.99" step="any" value="0" oninput="acExpCalc()"></div>
-          <div><label>Paid to</label><input type="text" id="ex-payee" placeholder="Who received the money"></div></div>
-        <div id="ex-calc" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
-        <label style="margin-top:8px;display:block;">Details</label><input type="text" id="ex-desc" placeholder="What this expense was for">
-        <div class="row2c" id="ex-paid-wrap" style="margin-top:8px;">
-          <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='PETTY'?'none':'';">
-            <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="PETTY">Petty cash box</option></select></div>
-          <div id="ex-bank-wrap"><label>Bank account</label><select id="ex-bank">${bankOpts}</select></div>
+        <div class="row2c" style="margin-top:8px;">
+          <div><label>From date</label><input type="date" id="exf-from" value="${window.acExpFrom}" onchange="window.acExpFrom=this.value;acctTab('exp')"></div>
+          <div><label>To date</label><input type="date" id="exf-to" value="${window.acExpTo}" onchange="window.acExpTo=this.value;acctTab('exp')"></div>
         </div>
-        <button class="btn gold sm" style="margin-top:10px;" onclick="acExpenseAdd()">Record expense</button>
-        <div id="ex-msg"></div></div>` : ''}
-      <h4 class="sec">Expense book</h4>
+        <div style="margin-top:8px;">${filt?`<button class="btn ghost sm" onclick="window.acExpCat='';window.acExpDept='';window.acExpFrom='';window.acExpTo='';acctTab('exp')">✕ Clear filters</button> `:''}<button class="btn ghost sm" onclick="acExpCsv()">⬇ Download (CSV / Excel)</button></div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
+        <div style="flex:1;min-width:260px;"><h4 class="sec">Head-wise</h4>
+        <div class="table-scroll"><table><thead><tr><th>Expense head</th><th class="amount">Entries</th><th class="amount">Paid ₹</th></tr></thead><tbody>
+        ${Object.keys(byHead).sort((a,b)=>byHead[b].amt-byHead[a].amt).map(k=>`<tr style="cursor:pointer" onclick="window.acExpCat='${esc(k).replace(/'/g,'&#39;')}';acctTab('exp')"><td>${esc(k)}</td><td class="amount">${byHead[k].n}</td><td class="amount" style="font-weight:600">${inr(byHead[k].amt)}</td></tr>`).join('') || '<tr><td colspan="3" style="color:#777">Nothing in this selection.</td></tr>'}
+        </tbody></table></div></div>
+        <div style="flex:1;min-width:260px;"><h4 class="sec">Section / department-wise</h4>
+        <div class="table-scroll"><table><thead><tr><th>Department</th><th class="amount">Entries</th><th class="amount">Paid ₹</th></tr></thead><tbody>
+        ${Object.keys(byDept).sort((a,b)=>byDept[b].amt-byDept[a].amt).map(k=>`<tr style="cursor:pointer" onclick="window.acExpDept='${k==='General'?'__NONE__':esc(k).replace(/'/g,'&#39;')}';acctTab('exp')"><td>${esc(k)}</td><td class="amount">${byDept[k].n}</td><td class="amount" style="font-weight:600">${inr(byDept[k].amt)}</td></tr>`).join('') || '<tr><td colspan="3" style="color:#777">Nothing in this selection.</td></tr>'}
+        </tbody></table></div></div>
+      </div>
+      <h4 class="sec" style="margin-top:14px;">Expense book${filt?' — filtered':''} · ${window.acExpFrom||'beginning'} → ${window.acExpTo||'today'} · ${rows.length} entr${rows.length===1?'y':'ies'}</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / details</th><th class="amount">Bill ₹</th><th class="amount">GST ₹</th><th class="amount">TDS ₹</th><th class="amount">Paid ₹</th><th>Paid from</th><th></th></tr></thead><tbody>
       ${rows.map(r=>`<tr><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td>${esc(r.category)}${r.dept?'<br><span style="font-size:10.5px;color:#7a6a4a">'+esc(r.dept)+'</span>':''}</td>` +
         `<td>${esc(r.payee||'—')}${r.invoice_no?'<br><span style="font-size:10.5px;color:#7a6a4a">inv '+esc(r.invoice_no)+'</span>':''}${(r.items&&r.items.length)?'<br><span style="font-size:10.5px;color:#0b57d0">'+r.items.length+' item'+(r.items.length===1?'':'s')+'</span>':''}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
@@ -5722,7 +5718,8 @@ async function acctTab(t){
         `<td class="amount" style="font-weight:600;color:#b3261e">${inr(r.amount)}</td>` +
         `<td>${r.mode==='ADVANCE'?'👤 Staff advance <span style="font-size:10.5px;color:#7a6a4a;font-weight:600;">('+esc((window.__exAdvNo||{})[r.advance_id]||'settled')+')</span>':(r.mode!=='PETTY'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':''))}</td>` +
         `<td style="white-space:nowrap"><button class="mini" onclick="acExpVoucher('${r.id}')" title="Print or save a PDF voucher for your physical records">🖨 Voucher</button> ${dirDelBtn('acct','expenses', r.id, r.exp_no, "acctTab('exp')")}</td></tr>`).join('')
-        || '<tr><td colspan="10" style="color:#777">No expenses recorded yet.</td></tr>'}
+        || '<tr><td colspan="10" style="color:#777">No expenses in this selection.</td></tr>'}
+      ${rows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${inr(rows.reduce((s,r)=>s+Number(r.bill_amount!=null?r.bill_amount:r.amount),0))}</td><td class="amount">${inr(selGst)}</td><td class="amount">${inr(selTds)}</td><td class="amount">${inr(selTot)}</td><td colspan="2"></td></tr>`:''}
       </tbody></table></div>`;
     return;
   }
@@ -5845,7 +5842,7 @@ function acLedBack(){ window.acLedSel = ''; acctTab('ledger'); }
 async function acNewGo(kind){
   if (kind === 'ledger'){ await acctTab('newe'); if (typeof acEntryForm === 'function'){ await acEntryForm(); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); } }
   else if (kind === 'vpay' || kind === 'mmc' || kind === 'mmcv'){ await acctTab('newe'); await acEntryForm(kind==='vpay' ? 'VPAY' : kind==='mmc' ? 'MMC_PAY' : 'MMC_VEN'); const f=$('ac-entry-form'); if (f) f.scrollIntoView({behavior:'smooth'}); }
-  else if (kind === 'exp'){ await acctTab('exp'); const el=$('ex-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
+  else if (kind === 'exp'){ await acctTab('newe'); await acExpForm(); const el=$('ex-amt'); if (el){ el.focus(); } }
   else if (kind === 'petty'){ await acctTab('petty'); const el=$('pc-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
   else if (kind === 'topup'){ await acctTab('petty'); const el=$('pt-amt'); if (el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } }
   else if (kind === 'salary'){ await acctTab('salary'); if (typeof acSlipForm === 'function') acSlipForm(); }
@@ -6325,6 +6322,58 @@ function acExpPendItem(){
   return { name: $('ex-iname')?.value.trim() || 'Item', hsn: $('ex-hsn')?.value.trim() || null,
            amount: amt, gst_rate: Number($('ex-gst')?.value) || 0 };
 }
+// Expense entry form — lives on the New Entry tab (the Expenses tab is view-only)
+async function acExpForm(){
+  const A = db.schema('acct');
+  const host = $('ac-entry-form'); if (!host) return;
+  if (!canFinEdit()){ host.innerHTML = '<p style="color:#777">Expenses are entered by Accounts (finance) or the Director.</p>'; return; }
+  if (!acBanks.length){ try { const b = await A.from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
+  window.__exItems = [];
+  const CATS_EXP = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'];
+  const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  let advOpen = [];
+  try { const { data: av } = await A.from('v_advances').select('*').eq('adv_type','EXPENSE').eq('status','APPROVED').order('given_on');
+        advOpen = (av||[]).filter(a => Number(a.outstanding) > 0); } catch(e){}
+  window.__exAdvs = advOpen;
+  const advOpts = advOpen.map(a=>`<option value="${a.id}">${esc(a.adv_no)} — ${esc(a.staff_name||'')} — outstanding ₹ ${inr(a.outstanding)}</option>`).join('');
+  host.innerHTML = `<div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Post an expense</h2>
+        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there.</p>
+        <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
+          <div><label>Category *</label><select id="ex-cat" onchange="acExpCatChange()">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}<option value="__ADV__">⇄ Settle staff expense advance (bills against advance given)</option></select></div></div>
+        <div id="ex-adv-wrap" class="hidden" style="margin-top:8px;border:1px solid #e6d9b0;background:#fdf9ee;border-radius:8px;padding:10px;">
+          <div class="row2c"><div><label>Advance to settle *</label><select id="ex-adv" onchange="acExpAdvPick()">${advOpts || '<option value="">— no open expense advances —</option>'}</select></div>
+            <div><label>Expense head *</label><select id="ex-head">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}</select></div></div>
+          <div id="ex-adv-note" style="font-size:12px;color:#7a6a4a;margin-top:6px;">No money moves — the bill is booked under the expense head above and reduces the staff member's outstanding advance. Each bill can be less than the advance; settle it in as many bills as needed.</div>
+        </div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Supplier invoice no.</label><input type="text" id="ex-inv" placeholder="As printed on the supplier's bill"></div>
+          <div><label>Department</label><select id="ex-dept"><option value="">— none / general —</option>${['Office / Admin','Accounts','Sales','Marketing','Production / MMC','Purchase','HR','Director'].map(d=>`<option>${d}</option>`).join('')}</select></div></div>
+        <h4 class="sec" style="margin-top:12px;">Bill items <span style="font-weight:normal;font-size:11px;color:#999">— one line per item; each can have its own HSN &amp; GST</span></h4>
+        <div class="row2c"><div><label>Item / description</label><input type="text" id="ex-iname" placeholder="What was bought"></div>
+          <div><label>HSN / SAC code</label><input type="text" id="ex-hsn" placeholder="e.g. 9983" maxlength="10"></div></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Amount ₹ (before GST) *</label><input type="number" id="ex-amt" min="0.01" step="any" oninput="acExpCalc()"></div>
+          <div><label>GST % (0 if not applicable)</label><input type="number" id="ex-gst" min="0" max="100" step="any" value="0" oninput="acExpCalc()"></div></div>
+        <button class="btn ghost sm" style="margin-top:8px;" onclick="acExpItemAdd()">＋ Add this item to the bill</button>
+        <div id="ex-items" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>TDS deducted % (0 if none)</label><input type="number" id="ex-tds" min="0" max="99.99" step="any" value="0" oninput="acExpCalc()"></div>
+          <div><label>Paid to</label><input type="text" id="ex-payee" placeholder="Who received the money"></div></div>
+        <div id="ex-calc" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
+        <label style="margin-top:8px;display:block;">Details</label><input type="text" id="ex-desc" placeholder="What this expense was for">
+        <div class="row2c" id="ex-paid-wrap" style="margin-top:8px;">
+          <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='PETTY'?'none':'';">
+            <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="PETTY">Petty cash box</option></select></div>
+          <div id="ex-bank-wrap"><label>Bank account</label><select id="ex-bank">${bankOpts}</select></div>
+        </div>
+        <button class="btn gold sm" style="margin-top:10px;" onclick="acExpenseAdd()">Record expense</button>
+        <div id="ex-msg"></div></div>`;
+  host.scrollIntoView({behavior:'smooth'});
+}
+function acExpCsv(){
+  const rows = window.__expRows || []; if (!rows.length){ alert('Nothing to download in this selection.'); return; }
+  const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const lines = [['No','Date','Head','Department','Paid to','Invoice','Details','Bill (INR)','GST (INR)','TDS (INR)','Paid (INR)','Paid from'].join(',')];
+  rows.forEach(r=> lines.push([e2(r.exp_no), e2(r.exp_date), e2(r.category), e2(r.dept||''), e2(r.payee||''), e2(r.invoice_no||''), e2(r.description||''), Number(r.bill_amount!=null?r.bill_amount:r.amount).toFixed(2), Number(r.gst_amount||0).toFixed(2), Number(r.tds_amount||0).toFixed(2), Number(r.amount).toFixed(2), e2(r.mode==='PETTY'?'Petty cash':r.mode==='ADVANCE'?'Staff advance':(r.bank?r.bank.name:'Bank'))].join(',')));
+  const blob = new Blob(['﻿' + lines.join('\n')], {type:'text/csv'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'expenses-' + (window.acExpCat||'all').replace(/[^a-z0-9]+/gi,'_') + '.csv'; a.click();
+}
 function acExpItemAdd(){
   const it = acExpPendItem();
   if (!it){ say('ex-msg','Enter the item amount first.',false); return; }
@@ -6370,7 +6419,7 @@ function acExpAdvPick(){
 }
 // From the Advances tab: open the expense form with this advance preselected.
 async function acExpSettle(advId){
-  await acctTab('exp');
+  await acctTab('newe'); await acExpForm();
   if ($('ex-cat')){ $('ex-cat').value = '__ADV__'; acExpCatChange(); }
   if ($('ex-adv')){ $('ex-adv').value = advId; acExpAdvPick(); }
   const card = $('ex-cat'); if (card) card.scrollIntoView({behavior:'smooth', block:'center'});
