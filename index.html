@@ -1571,6 +1571,7 @@ async function openOrderDetail(id){
         </div>
         ${anyPreview ? '<p style="font-size:11.5px;color:#777;margin:8px 0 0;">Figures come live from Brands &amp; SKUs (basic price, excise duty × bottles, wine fees, VAT × bottles) and are stamped on the order at approval.</p>' : ''}
         ${o.excise_paid_amount != null ? `<p style="font-size:12px;margin:8px 0 0;"><b>Excise duty paid by distributor:</b> ₹ ${inr(o.excise_paid_amount)} · ref ${esc(o.excise_paid_ref||'—')} · ${o.excise_paid_date||''}${o.excise_paid_note?' · '+esc(o.excise_paid_note):''}</p>` : ''}
+        <div id="od-balance" style="font-size:12px;margin:6px 0 0;"></div>
       </td></tr>`);
   }
   window.__odCalc = { T, missing, anyPreview };
@@ -1623,6 +1624,10 @@ async function openOrderDetail(id){
   const P = $('od-pay');
   if (isDir()){
     const { data: pays } = await S.from('payments').select('*').eq('order_id', id).order('pay_date');
+    if ($('od-balance') && window.__odData && o.status !== 'RECEIVED' && o.status !== 'CANCELLED'){
+      const bd = orderBalanceSplit(window.__odData.T, pays||[]);
+      $('od-balance').innerHTML = `<b>Balance due from distributor:</b> basic ₹ ${inr(bd.basic)}${bd.wine?' + wine fees ₹ '+inr(bd.wine):''}${bd.exciseLeft?' + excise unpaid ₹ '+inr(bd.exciseLeft):''} + VAT ₹ ${inr(bd.vat)}${bd.otherPaid?' − received ₹ '+inr(bd.otherPaid):''} = <b>₹ ${inr(bd.balance)}</b>`;
+    }
     P.innerHTML = '<h4 class="sec">Payments</h4>' +
       ((pays&&pays.length) ? '<div class="table-scroll"><table><thead><tr><th>Date</th><th class="amount">Amount ₹</th><th>Mode</th><th>Ref</th></tr></thead><tbody>' +
         pays.map(p=>`<tr><td>${p.pay_date}</td><td class="amount">${inr(p.amount)}</td><td>${p.mode==='EXCISE_MMC'?'🏭 Excise &amp; taxes → MMC excise a/c':esc(p.mode||'')}</td><td>${esc(p.ref_no||'')}${p.remarks&&p.mode==='EXCISE_MMC'?'<br><span style="font-size:11px;color:#777">'+esc(p.remarks)+'</span>':''}</td></tr>`).join('') +
@@ -1655,6 +1660,15 @@ async function openOrderDetail(id){
     openOrderDetail(oid);
   }
 }
+// Balance due split: excise is settled by the distributor's payment into the MMC excise account; the rest (basic, wine fees, VAT)
+// is due to Aurum, less any other payments already received against the order.
+function orderBalanceSplit(T, pays){
+  const excPaid = pays.filter(p=>p.mode==='EXCISE_MMC').reduce((s,p)=>s+Number(p.amount),0);
+  const otherPaid = pays.filter(p=>p.mode!=='EXCISE_MMC').reduce((s,p)=>s+Number(p.amount),0);
+  const exciseLeft = Math.max(0, T.exc - excPaid);
+  const balance = T.total - excPaid - otherPaid;
+  return { basic: T.basic, wine: T.wine, vat: T.vat, exciseLeft, excPaid, otherPaid, balance };
+}
 // Printable order report (approved orders): lines with the stamped breakdown, totals, excise paid by the distributor, payments.
 async function orderReport(id){
   const D = window.__odData; if (!D || D.o.id !== id){ await openOrderDetail(id); }
@@ -1668,6 +1682,7 @@ async function orderReport(id){
     const b = v.basic_amount!=null?Number(v.basic_amount):null, e = v.excise_amount!=null?Number(v.excise_amount):null, w = v.wine_fee_amount!=null?Number(v.wine_fee_amount):null, t = v.vat_amount!=null?Number(v.vat_amount):null, a = v.amount!=null?Number(v.amount):null;
     return `<tr><td>${esc(l.sku?.sku_code)}</td><td class="amount">${c}</td><td class="amount">${l.sku?.units_per_case||''}</td><td class="amount">${v.basic_per_case!=null?inr(v.basic_per_case):'—'}</td><td class="amount">${b!=null?inr(b):'—'}</td><td class="amount">${e!=null?inr(e):'—'}</td><td class="amount">${w!=null?inr(w):'—'}</td><td class="amount">${t!=null?inr(t):'—'}</td><td class="amount">${v.rate_per_case!=null?inr(v.rate_per_case):'—'}</td><td class="amount"><b>${a!=null?inr(a):'—'}</b></td></tr>`; }).join('');
   const paid = (pays||[]).reduce((s,p)=>s+Number(p.amount),0);
+  const bd = orderBalanceSplit(T, pays||[]);
   const exf = T.basic + T.exc + T.wine;
   const body = `
     <h1>AURUM SPIRITS INDIA LIMITED</h1>
@@ -1699,7 +1714,15 @@ async function orderReport(id){
     <table><thead><tr><th>Date</th><th>Mode</th><th>Reference</th><th class="amount">Amount ₹</th></tr></thead><tbody>
       ${(pays||[]).map(p=>`<tr><td>${p.pay_date}</td><td>${p.mode==='EXCISE_MMC'?'Excise & taxes → MMC excise a/c':esc(p.mode||'')}</td><td>${esc(p.ref_no||'')}</td><td class="amount">${inr(p.amount)}</td></tr>`).join('') || '<tr><td colspan="4" style="color:#666">No payments recorded.</td></tr>'}
       <tr style="font-weight:700;"><td colspan="3">Received so far</td><td class="amount">${inr(paid)}</td></tr>
-      <tr style="font-weight:700;background:#f3eee0;"><td colspan="3">Balance due from distributor</td><td class="amount">${inr(T.total - paid)}</td></tr>
+    </tbody></table>
+    <h3 style="margin-top:14px;">Balance due from distributor</h3>
+    <table style="max-width:560px;"><tbody>
+      <tr><td>Basic (rate × cases)</td><td class="amount">${inr(bd.basic)}</td></tr>
+      ${T.wine ? `<tr><td>Wine fees</td><td class="amount">${inr(bd.wine)}</td></tr>` : ''}
+      ${bd.exciseLeft ? `<tr><td>Excise duty still unpaid</td><td class="amount">${inr(bd.exciseLeft)}</td></tr>` : ''}
+      <tr><td>VAT</td><td class="amount">${inr(bd.vat)}</td></tr>
+      ${bd.otherPaid ? `<tr><td>Less: other payments received</td><td class="amount">− ${inr(bd.otherPaid)}</td></tr>` : ''}
+      <tr style="font-weight:700;background:#f3eee0;"><td>Balance due (total)</td><td class="amount">${inr(bd.balance)}</td></tr>
     </tbody></table>
     <p style="font-size:10px;color:#666;margin-top:14px;">Generated from Aurum Nexus on ${new Date().toLocaleString('en-IN')}. Rates stamped from Brands &amp; SKUs at approval.</p>`;
   printHtml('Order ' + o.so_no + ' — Aurum Spirits', body);
