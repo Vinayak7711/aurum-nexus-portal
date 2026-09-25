@@ -309,7 +309,7 @@
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Brands &amp; SKUs</h2>
       <p>Your product masters. New launches enter here; retired items are deactivated (history stays).</p></div>
-    <div class="toolbar dir-only">
+    <div class="toolbar" id="brand-toolbar">
       <button class="btn gold sm" onclick="openBrandAdd()">+ Add brand</button>
       <button class="btn ghost sm" onclick="openSkuAdd()">+ Add SKU</button>
     </div>
@@ -826,6 +826,10 @@ async function refreshMe(){
 }
 function closeSheet(id){ $(id).classList.add('hidden'); }
 function isDir(){ return me && me.role === 'DIRECTOR'; }
+// Brands & SKUs rights as ticked in the Control Panel ('brand' row)
+function canBrandAct(a){ const p = (me && me.permissions_json && me.permissions_json.brand) || {}; return isDir() || !!(p[a] || p.admin); }
+function canBrandEdit(){ return canBrandAct('edit'); }
+function canBrandAdd(){ return canBrandAct('add'); }
 // Party Master rights as ticked in the Control Panel ('party' row); Sales-admin keeps its old powers.
 function canPartyAct(a){
   if (isDir()) return true;
@@ -1738,8 +1742,8 @@ async function openBrands(){
   const latestRate = {}; (rc||[]).forEach(r=>{ if(!latestRate[r.sku_id]) latestRate[r.sku_id]=r; }); window.__latestRate = latestRate;
   // ---- Brands panel (editable by Director) ----
   const skuCount = {}; M.skus.forEach(s=>{ skuCount[s.brand_id]=(skuCount[s.brand_id]||0)+1; });
-  let bp = `<h4 class="sec">Brands</h4><div class="table-scroll"><table><thead><tr><th>Brand</th><th>Category</th><th>Type</th><th class="amount">SKUs</th><th>Active</th>${isDir()?'<th></th>':''}</tr></thead><tbody>`;
-  bp += M.brands.map(b=>`<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(b.name)}</b></td><td>${esc(b.category_id)}</td><td>${esc(b.brand_type||'—')}</td><td class="amount">${skuCount[b.id]||0}</td><td>${b.is_active?'✔':'✖'}</td>${isDir()?`<td style="white-space:nowrap"><button class="mini" onclick="brandEdit('${b.id}')">Edit</button> <button class="mini" onclick="brandTog('${b.id}',${b.is_active?'false':'true'})" title="${b.is_active?'Hide this brand from new entries (history stays)':'Bring this brand back into use'}">${b.is_active?'Deactivate':'Reactivate'}</button> ${dirDelBtn('sales','brands', b.id, 'brand '+b.name, "openBrands()")}</td>`:''}</tr>`).join('') || '<tr><td colspan="6" style="color:#777">No brands yet.</td></tr>';
+  let bp = `<h4 class="sec">Brands</h4><div class="table-scroll"><table><thead><tr><th>Brand</th><th>Category</th><th>Type</th><th class="amount">SKUs</th><th>Active</th>${canBrandEdit()?'<th></th>':''}</tr></thead><tbody>`;
+  bp += M.brands.map(b=>`<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(b.name)}</b></td><td>${esc(b.category_id)}</td><td>${esc(b.brand_type||'—')}</td><td class="amount">${skuCount[b.id]||0}</td><td>${b.is_active?'✔':'✖'}</td>${canBrandEdit()?`<td style="white-space:nowrap"><button class="mini" onclick="brandEdit('${b.id}')">Edit</button> <button class="mini" onclick="brandTog('${b.id}',${b.is_active?'false':'true'})" title="${b.is_active?'Hide this brand from new entries (history stays)':'Bring this brand back into use'}">${b.is_active?'Deactivate':'Reactivate'}</button> ${dirDelBtn('sales','brands', b.id, 'brand '+b.name, "openBrands()")}</td>`:''}</tr>`).join('') || '<tr><td colspan="6" style="color:#777">No brands yet.</td></tr>';
   bp += '</tbody></table></div><div id="brand-edit-panel"></div>';
   $('brands-panel').innerHTML = bp;
   // ---- Brand filter for the SKU list (nothing shows until a brand is picked) ----
@@ -1753,7 +1757,7 @@ async function openBrands(){
     window.__skuBrandFilter = sel.value;
   }
   skuRowsRender();
-  applyDirOnly(); show('brands');
+  applyDirOnly(); const tbB = $('brand-toolbar'); if (tbB) tbB.classList.toggle('hidden', !canBrandAdd()); show('brands');
 }
 function skuBrandPick(v){ window.__skuBrandFilter = v || ''; skuRowsRender(); }
 function skuRowsRender(){
@@ -1784,8 +1788,8 @@ function skuRowsRender(){
       (()=>{ const c = skuCaseCalc(s); return `<td class="amount" style="border-left:2px solid #c9a227;">${c.basic!=null?inr(c.basic):'—'}</td><td class="amount">${c.excise!=null?inr(c.excise):'—'}</td><td class="amount">${c.wine!=null?inr(c.wine):'—'}</td><td class="amount" style="font-weight:600;">${c.exf!=null?inr(c.exf):'—'}</td><td class="amount">${c.vat!=null?inr(c.vat):'—'}</td><td class="amount" style="font-weight:700;">${c.total!=null?inr(c.total):'—'}</td>`; })() +
       `<td class="amount">${r?inr(r.rate_per_case):'<span style="color:#b3382c">not set</span>'}</td>` +
       `<td>${s.is_active?'✔':'✖'}</td>` +
-      (isDir()?`<td style="white-space:nowrap"><button class="mini" onclick="skuPriceEdit('${s.id}')">Edit price</button> <button class="mini" data-act="toggle">${s.is_active?'Deactivate':'Reactivate'}</button> ${dirDelBtn('sales','skus', s.id, 'SKU '+s.sku_code, "openBrands()")}</td>`:'');
-    if (isDir()) tr.querySelector('button[data-act="toggle"]').onclick = async ()=>{
+      (canBrandEdit()?`<td style="white-space:nowrap"><button class="mini" onclick="skuPriceEdit('${s.id}')">Edit price</button> <button class="mini" data-act="toggle">${s.is_active?'Deactivate':'Reactivate'}</button> ${dirDelBtn('sales','skus', s.id, 'SKU '+s.sku_code, "openBrands()")}</td>`:'');
+    if (canBrandEdit()) tr.querySelector('button[data-act="toggle"]').onclick = async ()=>{
       const { error } = await db.schema('sales').from('skus').update({is_active: !s.is_active}).eq('id', s.id);
       if (!error) openBrands();
     };
