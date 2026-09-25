@@ -320,7 +320,7 @@
       <select id="sku-brand-filter" onchange="skuBrandPick(this.value)" title="Pick a brand to see only its SKUs and prices"></select>
     </div>
     <div class="table-scroll"><table>
-      <thead><tr><th>SKU Code</th><th>Brand</th><th>Size</th><th>Units/Case</th><th>Pack</th><th>Mfr</th><th class="amount">Price/btl ₹<br><span style="font-weight:normal;font-size:10px;">before VAT</span></th><th class="amount">Excise ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">VAT ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">MRP ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">Rate/case ₹</th><th>Active</th><th class="dir-only"></th></tr></thead>
+      <thead><tr><th>SKU Code</th><th>Brand</th><th>Size</th><th>Units/Case</th><th>Pack</th><th>Mfr</th><th class="amount">Mfg cost ₹<br><span style="font-weight:normal;font-size:10px;">declared to Excise</span></th><th class="amount">Price/btl ₹<br><span style="font-weight:normal;font-size:10px;">incl. excise, before VAT</span></th><th class="amount">Excise ₹<br><span style="font-weight:normal;font-size:10px;">per bottle (in price)</span></th><th class="amount">VAT ₹<br><span style="font-weight:normal;font-size:10px;">per bottle</span></th><th class="amount">MRP ₹<br><span style="font-weight:normal;font-size:10px;">price + VAT</span></th><th class="amount">Rate/case ₹</th><th>Active</th><th class="dir-only"></th></tr></thead>
       <tbody id="sku-rows"></tbody>
     </table></div>
     <div id="sku-price-panel"></div>
@@ -1767,7 +1767,7 @@ function skuRowsRender(){
   }
   const list = f==='ALL' ? M.skus : M.skus.filter(s=>s.brand_id===f);
   if (!list.length){
-    tb.innerHTML = `<tr><td colspan="13" style="color:#777;padding:14px;">No SKUs under this brand yet.</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="14" style="color:#777;padding:14px;">No SKUs under this brand yet.</td></tr>`;
     return;
   }
   for (const s of list){
@@ -1776,6 +1776,7 @@ function skuRowsRender(){
     if (!s.is_active) tr.className='inactive';
     tr.innerHTML = `<td><b>${esc(s.sku_code)}</b></td><td>${esc(s.brand?.name)}</td>` +
       `<td>${s.size_ml} ml</td><td>${s.units_per_case}</td><td>${s.material}</td><td>${mfrName(s.manufacturer_id)}</td>` +
+      `<td class="amount">${s.mfg_cost_declared!=null?inr(s.mfg_cost_declared):'—'}</td>` +
       `<td class="amount">${s.base_price!=null?inr(s.base_price):'—'}</td>` +
       `<td class="amount">${s.excise_duty!=null?inr(s.excise_duty):'—'}</td>` +
       `<td class="amount">${s.vat_amount!=null?inr(s.vat_amount):'—'}</td>` +
@@ -1816,7 +1817,7 @@ async function brandSave(id){
 function skuMrpAuto(pfx){
   const n = id => { const el = $(id); return el && el.value!=='' ? Number(el.value)||0 : 0; };
   const el = $(pfx+'-mrp'); if (!el) return;
-  const total = n(pfx+'-base') + n(pfx+'-excise') + n(pfx+'-vatamt');
+  const total = n(pfx+'-base') + n(pfx+'-vatamt');   // the bottle price already includes excise duty
   el.value = total ? total.toFixed(2) : '';
 }
 function skuPriceEdit(id){
@@ -1824,10 +1825,11 @@ function skuPriceEdit(id){
   $('sku-price-panel').innerHTML = `<div class="card" style="margin-top:12px;max-width:620px;"><h3 style="font-size:15px;">Edit SKU price — ${esc(s.sku_code)}</h3>
     <div class="row2c"><div><label>Size (ml)</label><input type="number" id="sp-size" min="1" value="${s.size_ml}"></div>
     <div><label>Units per case</label><input type="number" id="sp-upc" min="1" value="${s.units_per_case}"></div></div>
-    <div class="row2c"><div><label>Price of bottle (before VAT) ₹</label><input type="number" id="sp-base" min="0" step="any" value="${s.base_price!=null?s.base_price:''}" oninput="skuMrpAuto('sp')"></div>
-    <div><label>Excise duty ₹ / bottle</label><input type="number" id="sp-excise" min="0" step="any" value="${s.excise_duty!=null?s.excise_duty:''}" oninput="skuMrpAuto('sp')"></div></div>
-    <div class="row2c"><div><label>VAT ₹ / bottle</label><input type="number" id="sp-vatamt" min="0" step="any" value="${s.vat_amount!=null?s.vat_amount:''}" oninput="skuMrpAuto('sp')"></div>
-    <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto = price + excise + VAT, adjustable)</span></label><input type="number" id="sp-mrp" min="0" step="any" value="${s.mrp!=null?s.mrp:''}"></div></div>
+    <div class="row2c"><div><label>Manufacturing cost ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(as declared to Excise)</span></label><input type="number" id="sp-mfgcost" min="0" step="any" value="${s.mfg_cost_declared!=null?s.mfg_cost_declared:''}"></div>
+    <div><label>Excise duty ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(included in the price below)</span></label><input type="number" id="sp-excise" min="0" step="any" value="${s.excise_duty!=null?s.excise_duty:''}"></div></div>
+    <div class="row2c"><div><label>Price of bottle ₹ <span style="color:#999;font-weight:normal;font-size:10.5px;">(incl. excise, before VAT)</span></label><input type="number" id="sp-base" min="0" step="any" value="${s.base_price!=null?s.base_price:''}" oninput="skuMrpAuto('sp')"></div>
+    <div><label>VAT ₹ / bottle</label><input type="number" id="sp-vatamt" min="0" step="any" value="${s.vat_amount!=null?s.vat_amount:''}" oninput="skuMrpAuto('sp')"></div></div>
+    <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto = price + VAT, adjustable)</span></label><input type="number" id="sp-mrp" min="0" step="any" value="${s.mrp!=null?s.mrp:''}"></div>
     <div class="row2c"><div><label>Rate ₹ / case</label><input type="number" id="sp-rate" min="0" step="any" value="${r?r.rate_per_case:''}"></div>
     <div><label>Rate effective from</label><input type="date" id="sp-eff" value="${calFmt(new Date())}"></div></div>
     <p style="font-size:11.5px;color:#777;margin-top:6px;">Current rate: ${r?('₹'+inr(r.rate_per_case)+', effective '+r.effective_from):'not set'}. Changing the rate adds a new dated entry — the old one stays in history.</p>
@@ -1841,7 +1843,7 @@ async function skuPriceSave(id){
   const num = fid => { const el=$(fid); return el && el.value!=='' ? Number(el.value) : null; };
   const { error } = await db.schema('sales').from('skus').update({
     size_ml: size, units_per_case: upc,
-    base_price: num('sp-base'), excise_duty: num('sp-excise'),
+    base_price: num('sp-base'), excise_duty: num('sp-excise'), mfg_cost_declared: num('sp-mfgcost'),
     vat_amount: num('sp-vatamt'), mrp: num('sp-mrp') }).eq('id', id);
   if (error){ say('sp-msg','Save failed: '+error.message,false); return; }
   const rate = Number($('sp-rate').value);
@@ -1877,19 +1879,22 @@ function skuRowHtml(n){
     </div>
     <div class="row2c">
       <div><label>Pack material</label><select id="sa-material-${n}" onchange="skuRowsRefresh()"><option value="PET">PET</option><option value="GLASS">GLASS</option></select></div>
-      <div><label>Price of bottle (before VAT) ₹</label><input type="number" id="sa-base-${n}" min="0" step="any" placeholder="e.g. 150" oninput="skuRowMrp(${n})"></div>
+      <div><label>Manufacturing cost ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(declared to Excise)</span></label><input type="number" id="sa-mfgcost-${n}" min="0" step="any" placeholder="e.g. 40"></div>
     </div>
     <div class="row2c">
-      <div><label>Excise duty ₹ / bottle</label><input type="number" id="sa-excise-${n}" min="0" step="any" placeholder="e.g. 80" oninput="skuRowMrp(${n})"></div>
-      <div><label>VAT ₹ / bottle</label><input type="number" id="sa-vatamt-${n}" min="0" step="any" placeholder="e.g. 20" oninput="skuRowMrp(${n})"></div>
+      <div><label>Excise duty ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(included in price)</span></label><input type="number" id="sa-excise-${n}" min="0" step="any" placeholder="e.g. 80"></div>
+      <div><label>Price of bottle ₹ <span style="color:#999;font-weight:normal;font-size:10.5px;">(incl. excise, before VAT)</span></label><input type="number" id="sa-base-${n}" min="0" step="any" placeholder="e.g. 150" oninput="skuRowMrp(${n})"></div>
     </div>
-    <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto-added, adjustable)</span></label><input type="number" id="sa-mrp-${n}" min="0" step="any"></div>
+    <div class="row2c">
+      <div><label>VAT ₹ / bottle</label><input type="number" id="sa-vatamt-${n}" min="0" step="any" placeholder="e.g. 20" oninput="skuRowMrp(${n})"></div>
+      <div><label>Final MRP ₹ / bottle <span style="color:#999;font-weight:normal;font-size:10.5px;">(auto = price + VAT, adjustable)</span></label><input type="number" id="sa-mrp-${n}" min="0" step="any"></div>
+    </div>
   </div>`;
 }
 function skuRowMrp(n){
   const v = f => { const el = $('sa-'+f+'-'+n); return el && el.value!=='' ? Number(el.value)||0 : 0; };
   const el = $('sa-mrp-'+n); if (!el) return;
-  const total = v('base') + v('excise') + v('vatamt');
+  const total = v('base') + v('vatamt');   // the bottle price already includes excise duty
   el.value = total ? total.toFixed(2) : '';
 }
 function skuRowAdd(copyFrom){
@@ -1899,7 +1904,7 @@ function skuRowAdd(copyFrom){
   const prev = [...document.querySelectorAll('#sa-rows .sku-row')].slice(-2)[0];
   if (prev && prev.dataset.row !== String(n)){
     const p = prev.dataset.row;
-    ['upc','material','base','excise','vatamt','mrp'].forEach(f => { const a = $('sa-'+f+'-'+p), b = $('sa-'+f+'-'+n); if (a && b) b.value = a.value; });
+    ['upc','material','base','excise','mfgcost','vatamt','mrp'].forEach(f => { const a = $('sa-'+f+'-'+p), b = $('sa-'+f+'-'+n); if (a && b) b.value = a.value; });
   }
   skuRowsRefresh();
   const sz = $('sa-size-'+n); if (sz) sz.focus();
@@ -1948,7 +1953,7 @@ $('btn-save-sku').onclick = async () => {
     codes[code] = true;
     const v = id => { const el = $(id+'-'+n); return el && el.value!=='' ? Number(el.value) : null; };
     out.push({ sku_code: code, brand_id: brand.id, size_ml: size, units_per_case: upc, material: mat, manufacturer_id: $('sa-mfr').value,
-               base_price: v('sa-base'), excise_duty: v('sa-excise'), vat_amount: v('sa-vatamt'), mrp: v('sa-mrp') });
+               base_price: v('sa-base'), excise_duty: v('sa-excise'), mfg_cost_declared: v('sa-mfgcost'), vat_amount: v('sa-vatamt'), mrp: v('sa-mrp') });
   }
   const { error } = await db.schema('sales').from('skus').insert(out);
   if (error){ say('sa-msg', error.message, false); return; }
