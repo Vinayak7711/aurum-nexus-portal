@@ -257,7 +257,7 @@
       <h2 id="od-title">Order</h2>
       <p class="sub" id="od-sub"></p>
       <div class="table-scroll"><table>
-        <thead><tr><th>SKU</th><th class="amount">Cases</th><th class="amount dir-only">Rate/case ₹</th><th class="amount dir-only">Amount ₹</th></tr></thead>
+        <thead id="od-head"><tr><th>SKU</th><th class="amount">Cases</th><th class="amount dir-only">Rate/case ₹</th><th class="amount dir-only">Amount ₹</th></tr></thead>
         <tbody id="od-lines"></tbody>
       </table></div>
       <div id="od-actions" style="margin-top:14px;"></div>
@@ -1513,9 +1513,11 @@ async function openOrderDetail(id){
     .select('*, party:parties(code,name,city)').eq('id', id).single();
   if (error){ say('od-msg','Load failed: '+error.message,false); return; }
   const { data: lines } = await S.from('order_lines')
-    .select('*, sku:skus(sku_code, units_per_case)').eq('order_id', id).order('id');
+    .select('*, sku:skus(sku_code, units_per_case, basic_price_case, excise_duty, wine_fee_case, vat_amount)').eq('order_id', id).order('id');
+  const canApproveSO = isDir() || !!(me?.permissions_json?.sales?.admin);
+  const seeMoney = canApproveSO || canFin();
   let vals = {};
-  if (isDir() && lines && lines.length){
+  if (seeMoney && lines && lines.length){
     const { data: v } = await S.from('order_values').select('*').in('line_id', lines.map(l=>l.id));
     (v||[]).forEach(x => vals[x.line_id] = x);
   }
@@ -1524,25 +1526,79 @@ async function openOrderDetail(id){
     `<span class="pill ${o.status}">${o.status}</span>` +
     (o.invoice_no ? ` · Invoice ${esc(o.invoice_no)}` : '') +
     (o.remarks ? `<br>Remarks: ${esc(o.remarks)}` : '');
+  // Per-line pricing: before approval it is previewed live from Brands & SKUs; once approved the stamped figures are shown.
+  const pricing = l => {
+    const v = vals[l.id];
+    if (v && v.basic_per_case != null) return { basic:+v.basic_per_case, exc:+v.excise_per_case, wine:+v.wine_fee_per_case, vat:+v.vat_per_case, rate:+v.rate_per_case, stamped:true, ok:true };
+    if (v) return { basic:null, exc:null, wine:null, vat:null, rate:+v.rate_per_case, stamped:true, ok:true };
+    const k = l.sku || {}; const upc = Number(k.units_per_case)||0;
+    if (k.basic_price_case == null) return { ok:false };
+    const basic = +k.basic_price_case, exc = (+k.excise_duty||0)*upc, wine = +k.wine_fee_case||0, vat = (+k.vat_amount||0)*upc;
+    return { basic, exc, wine, vat, rate: basic+exc+wine+vat, stamped:false, ok:true };
+  };
+  const H = $('od-head');
+  H.innerHTML = seeMoney
+    ? '<tr><th>SKU</th><th class="amount">Cases</th><th class="amount">Basic/case ₹</th><th class="amount">Basic ₹</th><th class="amount">Excise ₹</th><th class="amount">Wine fees ₹</th><th class="amount">VAT ₹</th><th class="amount">Total ₹</th></tr>'
+    : '<tr><th>SKU</th><th class="amount">Cases</th></tr>';
   const tb = $('od-lines'); tb.innerHTML = '';
-  let totAmt = 0, totCases = 0;
+  let totCases = 0, T = { basic:0, exc:0, wine:0, vat:0, total:0 }, missing = [], anyPreview = false;
   for (const l of (lines||[])){
-    const v = vals[l.id]; totCases += Number(l.cases);
-    if (v) totAmt += Number(v.amount);
+    const c = Number(l.cases); totCases += c;
+    if (!seeMoney){ tb.insertAdjacentHTML('beforeend', `<tr><td>${esc(l.sku?.sku_code)}</td><td class="amount">${l.cases}</td></tr>`); continue; }
+    const pr = pricing(l);
+    if (!pr.ok){ missing.push(l.sku?.sku_code); tb.insertAdjacentHTML('beforeend', `<tr><td>${esc(l.sku?.sku_code)}</td><td class="amount">${l.cases}</td><td colspan="6" style="color:#b3261e;font-size:12px;">No basic price per case set for this SKU in Brands &amp; SKUs.</td></tr>`); continue; }
+    if (!pr.stamped) anyPreview = true;
+    const bA = pr.basic!=null ? pr.basic*c : null, eA = pr.exc!=null ? pr.exc*c : null, wA = pr.wine!=null ? pr.wine*c : null, vA = pr.vat!=null ? pr.vat*c : null, tot = pr.rate*c;
+    T.basic += bA||0; T.exc += eA||0; T.wine += wA||0; T.vat += vA||0; T.total += tot;
     tb.insertAdjacentHTML('beforeend',
       `<tr><td>${esc(l.sku?.sku_code)}</td><td class="amount">${l.cases}</td>` +
-      (isDir()?`<td class="amount">${v?inr(v.rate_per_case):'—'}</td><td class="amount">${v?inr(v.amount):'—'}</td>`:'') + '</tr>');
+      `<td class="amount">${pr.basic!=null?inr(pr.basic):'—'}</td><td class="amount">${bA!=null?inr(bA):'—'}</td>` +
+      `<td class="amount">${eA!=null?inr(eA):'—'}</td><td class="amount">${wA!=null?inr(wA):'—'}</td><td class="amount">${vA!=null?inr(vA):'—'}</td>` +
+      `<td class="amount" style="font-weight:600;">${inr(tot)}</td></tr>`);
   }
-  tb.insertAdjacentHTML('beforeend',
-    `<tr><td><b>Total</b></td><td class="amount"><b>${totCases}</b></td>` +
-    (isDir()?`<td></td><td class="amount"><b>${totAmt?inr(totAmt):'—'}</b></td>`:'') + '</tr>');
+  if (seeMoney){
+    const exf = T.basic + T.exc + T.wine;
+    tb.insertAdjacentHTML('beforeend',
+      `<tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td class="amount">${totCases}</td><td></td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td></tr>` +
+      `<tr><td colspan="8" style="padding:10px 12px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">Basic (rate × cases)</div><div style="font-size:16px;font-weight:700;">₹ ${inr(T.basic)}</div></div>
+          <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">Excise duty</div><div style="font-size:16px;font-weight:700;color:#b3261e">₹ ${inr(T.exc)}</div></div>
+          <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">Wine fees</div><div style="font-size:16px;font-weight:700;">₹ ${inr(T.wine)}</div></div>
+          <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">Ex-factory (before VAT)</div><div style="font-size:16px;font-weight:700;">₹ ${inr(exf)}</div></div>
+          <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">VAT</div><div style="font-size:16px;font-weight:700;color:#1a7f37">₹ ${inr(T.vat)}</div></div>
+          <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;border:2px solid #c9a227;"><div style="font-size:11px;color:#777">Order total incl. VAT</div><div style="font-size:16px;font-weight:700;">₹ ${inr(T.total)}</div></div>
+        </div>
+        ${anyPreview ? '<p style="font-size:11.5px;color:#777;margin:8px 0 0;">Figures come live from Brands &amp; SKUs (basic price, excise duty × bottles, wine fees, VAT × bottles) and are stamped on the order at approval.</p>' : ''}
+        ${o.excise_paid_amount != null ? `<p style="font-size:12px;margin:8px 0 0;"><b>Excise duty paid by distributor:</b> ₹ ${inr(o.excise_paid_amount)} · ref ${esc(o.excise_paid_ref||'—')} · ${o.excise_paid_date||''}${o.excise_paid_note?' · '+esc(o.excise_paid_note):''}</p>` : ''}
+      </td></tr>`);
+  }
+  window.__odCalc = { T, missing, anyPreview };
 
   // stage buttons
   const A = $('od-actions'); A.innerHTML = '';
   const btn = (label, cls, fn) => { const b=document.createElement('button'); b.className='btn sm '+cls; b.style.marginRight='8px'; b.textContent=label; b.onclick=fn; A.appendChild(b); };
-  if (isDir()){
+  if (canApproveSO){
     if (o.status==='RECEIVED'){
-      btn('Approve (stamp rates)','gold', async()=>{ await act('approve_order',{p_order:id}, id); });
+      const calc = window.__odCalc || { T:{}, missing:[] };
+      A.insertAdjacentHTML('beforeend', `<div class="card" style="max-width:720px;padding:12px;margin-bottom:10px;border-left:4px solid #c9a227;">
+        <h4 class="sec" style="margin:0 0 4px;">Excise duty paid by the distributor — required before approval</h4>
+        <p style="font-size:12px;color:#777;margin:0 0 8px;">Excise duty on this order works out to <b>₹ ${inr(calc.T.exc||0)}</b>. Record what the distributor has paid and the payment details; the order cannot be approved without them.</p>
+        <div class="row2c"><div><label>Amount paid ₹ *</label><input type="number" id="od-exc-amt" min="0" step="any" value="${calc.T.exc?Number(calc.T.exc).toFixed(2):''}"></div>
+          <div><label>Challan / receipt / reference no. *</label><input type="text" id="od-exc-ref" placeholder="e.g. Excise challan no."></div></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Paid on</label><input type="date" id="od-exc-date" value="${calFmt(new Date())}"></div>
+          <div><label>Note</label><input type="text" id="od-exc-note" placeholder="Bank / mode / any remark"></div></div>
+      </div>`);
+      if (calc.missing && calc.missing.length){
+        A.insertAdjacentHTML('beforeend', `<p style="font-size:12px;color:#b3261e;margin:0 0 8px;">Cannot approve yet — set the basic price per case in Brands &amp; SKUs for: ${calc.missing.map(esc).join(', ')}.</p>`);
+      } else {
+        btn('Approve order (stamp rates from Brands & SKUs)','gold', async()=>{
+          const amt = Number($('od-exc-amt').value), ref = $('od-exc-ref').value.trim();
+          if (!(amt > 0)){ say('od-msg','Enter the excise duty amount paid by the distributor.',false); return; }
+          if (!ref){ say('od-msg','Enter the excise payment reference (challan / receipt no.).',false); return; }
+          await act('approve_order_priced',{ p_order:id, p_excise_amount: amt, p_excise_ref: ref, p_excise_date: $('od-exc-date').value||null, p_excise_note: $('od-exc-note').value.trim()||null }, id);
+        });
+      }
       btn('Cancel order','danger', async()=>{ await act('set_order_status',{p_order:id,p_status:'CANCELLED'}, id); });
     }
     if (o.status==='APPROVED'){
