@@ -9291,7 +9291,7 @@ async function schRenderMain(){
       <div id="sc-msg"></div></div>`;
   }
   html += '<div id="sc-report"></div>';
-  html += `<h4 class="sec">Schemes &nbsp;<button class="btn ghost sm" onclick="schSummary()">📈 Summary report — spend vs sales, all schemes</button></h4><div class="table-scroll"><table><thead><tr><th>Code</th><th>Scheme</th><th>Period</th><th>Brand</th><th>Categories</th><th>Slabs</th><th>Status</th><th></th></tr></thead><tbody>` +
+  html += `<h4 class="sec">Schemes &nbsp;<button class="btn ghost sm" onclick="window.__schAllOpen=false;schSummary()">📈 Summary report — spend vs sales, all schemes</button> <button class="btn ghost sm" onclick="schAllReimb()">💰 Distributor reimbursements — all schemes</button></h4><div class="table-scroll"><table><thead><tr><th>Code</th><th>Scheme</th><th>Period</th><th>Brand</th><th>Categories</th><th>Slabs</th><th>Status</th><th></th></tr></thead><tbody>` +
     ((schemes||[]).map(s=>{
       const today = todayISO();
       const state = s.status!=='ACTIVE' ? 'CLOSED' : (s.date_from>today ? 'UPCOMING' : (s.date_to<today ? 'ENDED' : 'LIVE'));
@@ -9305,7 +9305,7 @@ async function schRenderMain(){
         <td style="font-size:12px;">${s.date_from}<br>→ ${s.date_to}</td><td>${esc(bn)}</td>
         <td style="font-size:12px;">${esc(cats)}</td><td style="font-size:12px;">${esc(slabs)}</td>
         <td><span class="pill ${pill}">${state}</span></td>
-        <td style="white-space:nowrap;"><button class="mini" onclick="schReport('${s.id}')">📊 Performance</button> <button class="mini" onclick="schReimb('${s.id}')">💰 Reimbursement</button> ${canEd?`<button class="mini" onclick="schToggle('${s.id}','${s.status==='ACTIVE'?'CLOSED':'ACTIVE'}')">${s.status==='ACTIVE'?'Close':'Reopen'}</button> `:''}${dirDelBtn('sales','schemes', s.id, s.name, "schRefresh()")}</td></tr>`;
+        <td style="white-space:nowrap;"><button class="mini" onclick="schReport('${s.id}')">📊 Performance</button> <button class="mini" onclick="window.__schAllOpen=false;schReimb('${s.id}')">💰 Reimbursement</button> ${canEd?`<button class="mini" onclick="schToggle('${s.id}','${s.status==='ACTIVE'?'CLOSED':'ACTIVE'}')">${s.status==='ACTIVE'?'Close':'Reopen'}</button> `:''}${dirDelBtn('sales','schemes', s.id, s.name, "schRefresh()")}</td></tr>`;
     }).join('') || '<tr><td colspan="8" style="color:#777">No schemes announced yet' + (canEd?' — announce the first one above.':'.') + '</td></tr>') + '</tbody></table></div>';
   B.innerHTML = html;
   schSlabs = []; schDrawSlabs();
@@ -9436,50 +9436,140 @@ async function schReport(id, mode){
     '</tbody></table></div></div>';
   box.scrollIntoView({behavior:'smooth', block:'start'});
 }
-/* ---- Reimbursement report: eligible retailers deduct the benefit from the distributor's bill;
-   ---- the company then reimburses each distributor. Track and settle it here. ---- */
+/* ---- Reimbursement: what each distributor actually gave retailers under a scheme (recorded on the secondary-sale
+   ---- entries — ₹ amount or free issue) is what we reimburse to that distributor. Pending = claimed − reimbursed. ---- */
+async function schClaimsLoad(schemeId){
+  await loadMasters();
+  let q = db.schema('sales').from('secondary_sales').select('*').eq('scheme_given', true).not('scheme_id', 'is', null).order('sale_date');
+  if (schemeId) q = q.eq('scheme_id', schemeId);
+  const [{ data: rows, error }, { data: rets }, { data: paid }] = await Promise.all([
+    q, db.schema('sales').from('retailers').select('id,code,name,category'),
+    (schemeId ? db.schema('sales').from('scheme_reimbursements').select('*').eq('scheme_id', schemeId) : db.schema('sales').from('scheme_reimbursements').select('*')) ]);
+  if (error) throw error;
+  const retBy = {}; (rets||[]).forEach(r=>retBy[r.id]=r);
+  const skuBy = {}; M.skus.forEach(k=>skuBy[k.id]=k);
+  const claims = (rows||[]).map(x=>{
+    const k = skuBy[x.sku_id] || {}, upc = Number(k.units_per_case)||0, bpc = Number(k.basic_price_case)||0;
+    let cash = 0, freeVal = 0, noPrice = false;
+    if (x.scheme_type === 'FREE'){
+      const qn = Number(x.free_qty)||0;
+      if (!bpc || (x.free_unit==='BOTTLES' && !upc)) noPrice = true;
+      else freeVal = x.free_unit === 'BOTTLES' ? qn * bpc / upc : qn * bpc;
+    } else cash = Number(x.scheme_amount)||0;
+    freeVal = Math.round(freeVal * 100) / 100;
+    return { x, ret: retBy[x.retailer_id], sku: k, cash, freeVal, noPrice, total: cash + freeVal,
+             freeTxt: x.scheme_type==='FREE' ? (Number(x.free_qty)||0)+' '+(x.free_unit==='BOTTLES'?'bottle(s)':'case(s)')+' of '+(k.sku_code||'?') : '' };
+  });
+  return { claims, paid: paid || [], retBy };
+}
+function schDistName(pid){ const p = M.parties.find(x=>x.id===pid); return p ? (p.code+' — '+p.name) : '(distributor not recorded)'; }
+function schGroupByDist(claims, paid){
+  const by = {};
+  claims.forEach(c=>{ const k = c.x.party_id || 'none'; (by[k] = by[k] || { pid:k, cash:0, freeVal:0, total:0, n:0, free:[], rets:{}, noPrice:false, paid:0, pays:[] });
+    const g = by[k]; g.cash += c.cash; g.freeVal += c.freeVal; g.total += c.total; g.n++; if (c.freeTxt) g.free.push(c.freeTxt); if (c.noPrice) g.noPrice = true;
+    const rn = c.ret ? c.ret.name : '?'; g.rets[rn] = (g.rets[rn]||0) + c.total; });
+  paid.forEach(p=>{ const k = p.party_id || 'none'; (by[k] = by[k] || { pid:k, cash:0, freeVal:0, total:0, n:0, free:[], rets:{}, noPrice:false, paid:0, pays:[] });
+    by[k].paid += Number(p.amount)||0; by[k].pays.push(p); });
+  Object.values(by).forEach(g=>{ g.pending = Math.max(0, Math.round((g.total - g.paid)*100)/100); });
+  return by;
+}
+function schStatusPill(g){
+  if (g.total <= 0.005 && g.paid <= 0.005) return '<span class="pill RECEIVED">NOTHING CLAIMED</span>';
+  if (g.pending <= 0.005) return `<span class="pill DELIVERED">REIMBURSED ₹ ${inr(g.paid)}</span>`;
+  if (g.paid > 0.005) return `<span class="pill DISPATCHED">PART — ₹ ${inr(g.paid)} paid</span>`;
+  return '<span class="pill RECEIVED">PENDING</span>';
+}
 async function schReimb(id){
   const s = (window.__schemes||[]).find(x=>x.id===id); if (!s) return;
   const box = $('sc-report'); if (!box) return;
   box.innerHTML = '<p style="color:#777">Working out the reimbursements…</p>';
-  const { eligible, perDist, totSpend } = await schCompute(s);
-  const { data: settled } = await db.schema('sales').from('scheme_reimbursements').select('*').eq('scheme_id', s.id);
-  const settledBy = {}; (settled||[]).forEach(x => settledBy[x.party_id||'none'] = x);
-  const distName = pid => { const p = M.parties.find(x=>x.id===pid); return p ? (p.code+' — '+p.name) : '(distributor not recorded)'; };
-  const today = todayISO();
-  const ended = s.date_to < today || s.status !== 'ACTIVE';
+  let C; try { C = await schClaimsLoad(s.id); } catch(e){ box.innerHTML = `<div class="msg err">${esc(e.message||String(e))}</div>`; return; }
+  const { eligible } = await schCompute(s);
+  const by = schGroupByDist(C.claims, C.paid);
+  const today = todayISO(), ended = s.date_to < today || s.status !== 'ACTIVE';
   const canEd = isDir() || canMktEdit();
+  const T = Object.values(by).reduce((t,g)=>({ cash:t.cash+g.cash, freeVal:t.freeVal+g.freeVal, total:t.total+g.total, paid:t.paid+g.paid, pending:t.pending+g.pending }), { cash:0, freeVal:0, total:0, paid:0, pending:0 });
   let html = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">💰 ${esc(s.code)} — ${esc(s.name)} · reimbursement</h3>
-    <p style="font-size:12px;color:#555;margin:4px 0 8px;">${s.date_from} → ${s.date_to} · ${ended?'Scheme has ended — these amounts are final.':'⚠ Scheme is still running — amounts below are AS OF TODAY and can grow until '+s.date_to+'.'}<br>
-    How it works: the eligible retailer deducts the benefit from the <b>distributor's bill</b>, and you reimburse that amount to the <b>distributor</b>.</p>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">${s.date_from} → ${s.date_to} · ${ended?'Scheme has ended.':'⚠ Scheme is still running — more claims can come in until '+s.date_to+'.'}<br>
+    How it works: the distributor gives the retailer the scheme benefit on its bill (recorded on the secondary-sale entry — ₹ or free issue), and <b>we reimburse the distributor</b>. Free issue is valued at the bill SKU's basic price.</p>
     <button class="mini" style="margin-bottom:8px;" onclick="$('sc-report').innerHTML=''">✕ Close report</button>
-    <h4 class="sec">Eligible retailers (${eligible.length}) — total to reimburse: <b>${inr(totSpend)}</b></h4>
-    <div class="table-scroll"><table><thead><tr><th>Retailer</th><th class="amount">Cases lifted</th><th>Slab achieved</th><th class="amount">Deducts from bill ₹</th><th>Through distributor</th></tr></thead><tbody>` +
-    (eligible.sort((a,b)=>b.cases-a.cases).map(e=>`<tr><td><b>${esc((e.ret||{}).code||'')} — ${esc((e.ret||{}).name||'?')}</b>${(e.ret&&e.ret.category)?'<br><span style="font-size:11px;color:#777">'+esc(e.ret.category)+'</span>':''}</td>
-      <td class="amount">${e.cases}</td><td>${e.slab.min}+ → ${esc(e.slab.benefit)}</td><td class="amount">${inr(Number(e.slab.value)||0)}</td>
-      <td style="font-size:12px;">${esc(distName(e.mainDist))}${Object.keys(e.dists).length>1?'<br><span style="font-size:11px;color:#777">(lifted from '+Object.keys(e.dists).length+' distributors — assigned to the main one)</span>':''}</td></tr>`).join('')
-      || '<tr><td colspan="5" style="color:#777">No retailer has reached a slab yet.</td></tr>') + '</tbody></table></div>';
+    <h4 class="sec">Benefits given by distributors on bills (${C.claims.length}) — to reimburse: <b>₹ ${inr(T.total)}</b></h4>
+    <div class="table-scroll"><table><thead><tr><th>Bill date</th><th>Distributor</th><th>Retailer</th><th>Bill (SKU · cases)</th><th>Given</th><th class="amount">₹ amount</th><th class="amount">Free issue value ₹</th><th class="amount">To reimburse ₹</th></tr></thead><tbody>` +
+    (C.claims.map(c=>`<tr><td>${c.x.sale_date}</td><td>${esc(schDistName(c.x.party_id))}</td><td><b>${esc(c.ret?c.ret.name:'?')}</b>${c.ret&&c.ret.category?'<br><span style="font-size:11px;color:#777">'+esc(c.ret.category)+'</span>':''}</td>
+      <td style="font-size:12px;">${esc(c.sku.sku_code||'?')} · ${c.x.cases} case(s)</td>
+      <td style="font-size:12px;">${c.x.scheme_type==='FREE' ? esc(c.freeTxt)+' free' : '₹ amount'}${c.x.scheme_note?'<br><span style="color:#777">'+esc(c.x.scheme_note)+'</span>':''}</td>
+      <td class="amount">${c.cash?inr(c.cash):'—'}</td><td class="amount">${c.x.scheme_type==='FREE' ? (c.noPrice?'<span style="color:#b3261e">no basic price</span>':inr(c.freeVal)) : '—'}</td><td class="amount"><b>${inr(c.total)}</b></td></tr>`).join('')
+      || '<tr><td colspan="8" style="color:#777">No scheme benefit recorded on any secondary-sale bill for this scheme yet. Record it on the Retailer-wise (secondary sale) tab — “Scheme reimbursement given? → Yes”.</td></tr>') +
+    (C.claims.length ? `<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(T.cash)}</td><td class="amount">${inr(T.freeVal)}</td><td class="amount">${inr(T.total)}</td></tr>` : '') + '</tbody></table></div>';
   html += `<h4 class="sec" style="margin-top:16px;">Payable to each distributor</h4>
-    <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Amount to reimburse ₹</th><th>For retailers</th><th>Status</th><th></th></tr></thead><tbody>` +
-    (Object.entries(perDist).map(([pid, v])=>{
-      const st = settledBy[pid];
-      return `<tr><td><b>${esc(distName(pid))}</b></td><td class="amount"><b>${inr(v.amount)}</b></td>
-        <td style="font-size:12px;">${v.retailers.map(r=>esc(r.name)+' ('+inr(r.value)+')').join(', ')}</td>
-        <td>${st?'<span class="pill DELIVERED">REIMBURSED '+inr(Number(st.amount))+'</span><br><span style="font-size:11px;color:#777">'+new Date(st.settled_at).toLocaleDateString('en-IN')+'</span>':'<span class="pill RECEIVED">PENDING</span>'}</td>
-        <td>${(!st && canEd && v.amount>0)?`<button class="mini" onclick="schSettle('${s.id}','${pid}',${v.amount})">✔ Mark reimbursed</button>`:''}</td></tr>`;
-    }).join('') || '<tr><td colspan="5" style="color:#777">Nothing payable yet.</td></tr>') + '</tbody></table></div></div>';
+    <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">₹ given</th><th>Free issue given</th><th class="amount">Free issue value ₹</th><th class="amount">To reimburse ₹</th><th class="amount">Reimbursed ₹</th><th class="amount">Pending ₹</th><th>For retailers</th><th>Status</th><th></th></tr></thead><tbody>` +
+    (Object.values(by).map(g=>`<tr><td><b>${esc(schDistName(g.pid==='none'?null:g.pid))}</b></td>
+      <td class="amount">${inr(g.cash)}</td><td style="font-size:12px;">${g.free.length?esc(g.free.join(', ')):'—'}</td>
+      <td class="amount">${inr(g.freeVal)}${g.noPrice?'<br><span style="font-size:10.5px;color:#b3261e">some SKUs have no basic price</span>':''}</td>
+      <td class="amount"><b>${inr(g.total)}</b></td><td class="amount" style="color:#1a7f37">${inr(g.paid)}</td>
+      <td class="amount" style="font-weight:700;color:${g.pending>0.005?'#b3261e':'#1a7f37'}">${inr(g.pending)}</td>
+      <td style="font-size:12px;">${Object.entries(g.rets).map(([n,v])=>esc(n)+' ('+inr(v)+')').join(', ')||'—'}</td>
+      <td>${schStatusPill(g)}${g.pays.map(p=>`<br><span style="font-size:10.5px;color:#777">₹ ${inr(p.amount)} on ${new Date(p.settled_at).toLocaleDateString('en-IN')}${p.remarks?' · '+esc(p.remarks):''}</span>`).join('')}</td>
+      <td>${(canEd && g.pending>0.005)?`<button class="mini" onclick="schSettle('${s.id}','${g.pid}',${g.pending})">✔ Mark reimbursed</button>`:''}</td></tr>`).join('')
+      || '<tr><td colspan="10" style="color:#777">Nothing payable yet.</td></tr>') + '</tbody></table></div>';
+  html += `<h4 class="sec" style="margin-top:16px;">Retailers who have reached a slab (${eligible.length})</h4>
+    <div class="table-scroll"><table><thead><tr><th>Retailer</th><th class="amount">Cases lifted</th><th>Slab achieved</th><th>Lifted mainly from</th></tr></thead><tbody>` +
+    (eligible.sort((a,b)=>b.cases-a.cases).map(e=>`<tr><td><b>${esc((e.ret||{}).code||'')} — ${esc((e.ret||{}).name||'?')}</b></td><td class="amount">${e.cases}</td><td>${e.slab.min}+ → ${esc(e.slab.benefit)}</td><td style="font-size:12px;">${esc(schDistName(e.mainDist))}</td></tr>`).join('')
+      || '<tr><td colspan="4" style="color:#777">No retailer has reached a slab yet.</td></tr>') + '</tbody></table></div></div>';
   box.innerHTML = html;
   box.scrollIntoView({behavior:'smooth', block:'start'});
 }
-async function schSettle(schemeId, pid, amount){
-  if (!confirm('Mark ' + inr(amount) + ' as reimbursed to this distributor for this scheme?')) return;
-  const s = (window.__schemes||[]).find(x=>x.id===schemeId);
-  const { perDist } = await schCompute(s);
-  const v = perDist[pid] || { amount, retailers: [] };
+async function schSettle(schemeId, pid, pending){
+  const amt = Number(prompt('Amount reimbursed to this distributor now (₹). Pending: ₹ ' + inr(pending), String(pending)));
+  if (!(amt > 0)) return;
+  if (amt > pending + 0.5 && !confirm('This is more than the pending amount (₹ ' + inr(pending) + '). Record it anyway?')) return;
+  const how = prompt('How was it reimbursed? (e.g. NEFT UTR…, credit note no., goods replaced)', '') || null;
+  const C = await schClaimsLoad(schemeId);
+  const mine = C.claims.filter(c=>(c.x.party_id||'none')===pid).map(c=>({ entry: c.x.id, date: c.x.sale_date, retailer: c.ret?c.ret.name:'?', given: c.x.scheme_type==='FREE'?c.freeTxt+' free':'₹ '+c.cash, value: c.total }));
   const { error } = await db.schema('sales').from('scheme_reimbursements').insert({
-    scheme_id: schemeId, party_id: pid==='none'?null:pid, amount: v.amount, retailers: v.retailers, settled_by: me.id });
+    scheme_id: schemeId, party_id: pid==='none'?null:pid, amount: amt, retailers: mine, remarks: how, settled_by: me.id });
   if (error){ alert('Could not record: '+error.message); return; }
-  schReimb(schemeId);
+  if (window.__schAllOpen) schAllReimb(); else schReimb(schemeId);
+}
+/* ---- Every distributor, every scheme: claimed vs reimbursed vs pending ---- */
+async function schAllReimb(){
+  const box = $('sc-report'); if (!box) return;
+  window.__schAllOpen = true;
+  box.innerHTML = '<p style="color:#777">Collecting every scheme reimbursement…</p>';
+  let C; try { C = await schClaimsLoad(null); } catch(e){ box.innerHTML = `<div class="msg err">${esc(e.message||String(e))}</div>`; return; }
+  const schemes = window.__schemes || []; const schBy = {}; schemes.forEach(s=>schBy[s.id]=s);
+  const canEd = isDir() || canMktEdit();
+  // distributor → scheme groups
+  const byDS = {};
+  C.claims.forEach(c=>{ const k = (c.x.party_id||'none')+'|'+c.x.scheme_id; (byDS[k] = byDS[k] || { pid:c.x.party_id||'none', sid:c.x.scheme_id, claims:[], paid:[] }).claims.push(c); });
+  C.paid.forEach(p=>{ const k = (p.party_id||'none')+'|'+p.scheme_id; (byDS[k] = byDS[k] || { pid:p.party_id||'none', sid:p.scheme_id, claims:[], paid:[] }).paid.push(p); });
+  const rows = Object.values(byDS).map(r=>{ const g = schGroupByDist(r.claims, r.paid.map(p=>Object.assign({}, p, { party_id: r.pid==='none'?null:r.pid })))[r.pid] || { cash:0, freeVal:0, total:0, paid:0, pending:0, free:[], pays:[] }; return Object.assign(r, { g }); });
+  const byP = {}; rows.forEach(r=>{ (byP[r.pid] = byP[r.pid] || []).push(r); });
+  const G = rows.reduce((t,r)=>({ total:t.total+r.g.total, paid:t.paid+r.g.paid, pending:t.pending+r.g.pending }), { total:0, paid:0, pending:0 });
+  let html = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">💰 Distributor reimbursements — all schemes</h3>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Everything distributors gave retailers under a scheme (₹ and free issue, from the secondary-sale entries), what we have reimbursed, and what is still pending.</p>
+    <button class="mini" style="margin-bottom:8px;" onclick="window.__schAllOpen=false;$('sc-report').innerHTML=''">✕ Close report</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px;">
+      <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">To reimburse (claimed)</div><div style="font-size:17px;font-weight:700;">₹ ${inr(G.total)}</div></div>
+      <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">Reimbursed</div><div style="font-size:17px;font-weight:700;color:#1a7f37">₹ ${inr(G.paid)}</div></div>
+      <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">Pending</div><div style="font-size:17px;font-weight:700;color:${G.pending>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(G.pending)}</div></div>
+    </div>
+    <div class="table-scroll"><table><thead><tr><th>Distributor</th><th>Scheme</th><th class="amount">₹ given</th><th>Free issue</th><th class="amount">Free issue value ₹</th><th class="amount">To reimburse ₹</th><th class="amount">Reimbursed ₹</th><th class="amount">Pending ₹</th><th>Status</th><th></th></tr></thead><tbody>` +
+    (Object.keys(byP).sort((a,b)=>schDistName(a==='none'?null:a).localeCompare(schDistName(b==='none'?null:b))).map(pid=>{
+      const list = byP[pid], tot = list.reduce((t,r)=>({ total:t.total+r.g.total, paid:t.paid+r.g.paid, pending:t.pending+r.g.pending }), { total:0, paid:0, pending:0 });
+      return list.map((r,i)=>{ const s = schBy[r.sid] || {};
+        return `<tr>${i===0?`<td rowspan="${list.length+1}" style="vertical-align:top;"><b>${esc(schDistName(pid==='none'?null:pid))}</b></td>`:''}
+          <td><b>${esc(s.code||'?')}</b><br><span style="font-size:11.5px;">${esc(s.name||'')}</span></td>
+          <td class="amount">${inr(r.g.cash)}</td><td style="font-size:12px;">${r.g.free.length?esc(r.g.free.join(', ')):'—'}</td><td class="amount">${inr(r.g.freeVal)}</td>
+          <td class="amount"><b>${inr(r.g.total)}</b></td><td class="amount" style="color:#1a7f37">${inr(r.g.paid)}</td>
+          <td class="amount" style="font-weight:700;color:${r.g.pending>0.005?'#b3261e':'#1a7f37'}">${inr(r.g.pending)}</td>
+          <td>${schStatusPill(r.g)}</td>
+          <td>${(canEd && r.g.pending>0.005)?`<button class="mini" onclick="schSettle('${r.sid}','${pid}',${r.g.pending})">✔ Mark reimbursed</button>`:''}</td></tr>`; }).join('') +
+        `<tr style="background:#faf6ea;font-weight:700;"><td>Distributor total</td><td></td><td></td><td></td><td class="amount">${inr(tot.total)}</td><td class="amount">${inr(tot.paid)}</td><td class="amount">${inr(tot.pending)}</td><td></td><td></td></tr>`;
+    }).join('') || '<tr><td colspan="10" style="color:#777">No scheme benefit recorded on any secondary-sale bill yet.</td></tr>') +
+    '</tbody></table></div></div>';
+  box.innerHTML = html;
+  box.scrollIntoView({behavior:'smooth', block:'start'});
 }
 /* ---- Summary report across ALL schemes: what each scheme cost vs what sales it brought. ---- */
 async function schSummary(){
@@ -9490,8 +9580,10 @@ async function schSummary(){
   const setBy = {}; (allSet||[]).forEach(x => setBy[x.scheme_id] = (setBy[x.scheme_id]||0) + Number(x.amount));
   const rows = [];
   let gCases = 0, gSpend = 0, gSettled = 0;
+  let CL = { claims: [] }; try { CL = await schClaimsLoad(null); } catch(e){}
   for (const s of schemes){
-    const { eligible, totCases, totSpend } = await schCompute(s);
+    const { eligible, totCases } = await schCompute(s);
+    const totSpend = CL.claims.filter(c=>c.x.scheme_id===s.id).reduce((t,c)=>t+c.total,0);   // what distributors actually gave (₹ + free issue value)
     const settledAmt = setBy[s.id] || 0;
     gCases += totCases; gSpend += totSpend; gSettled += settledAmt;
     const today = todayISO();
@@ -9499,7 +9591,7 @@ async function schSummary(){
     rows.push({ s, state, eligible: eligible.length, totCases, totSpend, settledAmt });
   }
   box.innerHTML = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">📈 Scheme summary — spend vs sales</h3>
-    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Sales gained = cases lifted by the scheme's target retailers/brands in the scheme period (from the secondary-sales record). Spend = reimbursement value earned by eligible retailers. Cost per case = spend ÷ cases.</p>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Sales gained = cases lifted by the scheme's target retailers/brands in the scheme period (from the secondary-sales record). Spend = what distributors actually gave retailers under the scheme (₹ + free issue at basic price), recorded on the secondary-sale entries. Cost per case = spend ÷ cases.</p>
     <button class="mini" style="margin-bottom:8px;" onclick="$('sc-report').innerHTML=''">✕ Close report</button>
     <div class="table-scroll"><table><thead><tr><th>Scheme</th><th>Period</th><th>Status</th><th class="amount">Retailers achieved</th><th class="amount">Sales gained (cases)</th><th class="amount">Total spend ₹</th><th class="amount">Reimbursed ₹</th><th class="amount">Pending ₹</th><th class="amount">Cost / case ₹</th></tr></thead><tbody>` +
     (rows.map(r=>`<tr><td><b>${esc(r.s.code)}</b><br><span style="font-size:12px;">${esc(r.s.name)}</span></td>
