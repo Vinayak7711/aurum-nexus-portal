@@ -383,8 +383,8 @@
   <!-- ============ MODULE 16: MARKETING ============ -->
   <section id="view-mkt" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Marketing &amp; Schemes</h2>
-      <p>Set the marketing budget month-wise and week-wise, log every spend, monitor utilisation — budget vs spent vs remaining. Retailer schemes are now in Sales Report → 🎁 Scheme master.</p></div>
+    <div class="welcome"><h2>Marketing &amp; Marketing Budgets</h2>
+      <p>Set the marketing budget month-wise and week-wise, log every spend, monitor utilisation — budget vs spent vs remaining. Retailer schemes are in Sales Reports &amp; Schemes → 🎁 Scheme master.</p></div>
     <div class="subtabs">
       <button class="chip on" id="mk-budget" onclick="mktTab('budget')">Budget &amp; utilisation</button>
       <button class="chip" id="mk-spend" onclick="mktTab('spend')">Spends (where used)</button>
@@ -424,7 +424,7 @@
   <!-- ============ SALES REPORT (distributor / retailer wise, cases) ============ -->
   <section id="view-salesrep" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Sales Report</h2>
+    <div class="welcome"><h2>Sales Reports &amp; Schemes</h2>
       <p>Distributor-wise (primary sale, from the order book) and retailer-wise (secondary sale) — brand by brand, in cases. Daily, weekly, monthly or any date range — plus the retailer Scheme master.</p></div>
     <div id="salesrep-body"></div>
   </section>
@@ -683,7 +683,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_v8dCD02l_APLF6jKHVMz9Q_mPbUc9ax";
 // arrow breaking away above them. Drawn inline so it stays crisp at any size and
 // scales with the surrounding text (1.1em), and so no emoji is used twice.
 const ICO_GROWTH =
-  '<svg viewBox="0 0 24 24" role="img" aria-label="Marketing and schemes" ' +
+  '<svg viewBox="0 0 24 24" role="img" aria-label="Marketing and marketing budgets" ' +
        'style="width:1.1em;height:1.1em;vertical-align:-0.17em;overflow:visible">' +
     '<g fill="none" stroke-linecap="round">' +
       '<path d="M1.8 20.6C5.5 19.5 7.6 16.6 9.4 12.2" stroke="#16306b" stroke-width="2.3"/>' +
@@ -700,14 +700,14 @@ const MODULES = [
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing & Production', desc:'Targets, batches, QC, RM custody, FG stock', live:true, open:()=>openMfg()},
   {key:'reports', ico:'📈', name:'Sales Team — Reports & Targets', desc:'Daily activity, targets & field visits', live:true, open:()=>openReports()},
-  {key:'salesrep', ico:'📊', name:'Sales Report',    desc:'Distributor & retailer wise, brand-wise cases, schemes', live:true, open:()=>openSalesRep()},
+  {key:'salesrep', ico:'📊', name:'Sales Reports & Schemes', desc:'Distributor & retailer wise, brand-wise cases, schemes', live:true, open:()=>openSalesRep()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
   {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'calendar',ico:'📅', name:'Calendar',         desc:'Events + task, renewal & PO dates',      live:true,  open:()=>openCalendar()},
   {key:'meetings',ico:'📝', name:'Meetings',         desc:'Agendas, minutes, participants, views',  live:true,  open:()=>openMeetings()},
-  {key:'mkt',     ico:ICO_GROWTH, name:'Marketing & Schemes', desc:'Marketing budget, spends & requests', live:true, mktOnly:true, open:()=>openMkt()},
+  {key:'mkt',     ico:ICO_GROWTH, name:'Marketing & Marketing Budgets', desc:'Marketing budget, spends & requests', live:true, mktOnly:true, open:()=>openMkt()},
   {key:'notif',   ico:'🔔', name:'Notification Centre', desc:'Tasks, emails, to-dos & approvals',  live:true,  open:()=>openNotifCentre()},
   {key:'comp',    ico:'📜', name:'License & Renewal',desc:'Licences, permits, registrations, expiries', live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
@@ -9345,7 +9345,7 @@ async function schReport(id, mode){
         (schRepMode==='ret'?`<td>${sl?('✅ '+sl.min+'+ → '+esc(sl.benefit)):'—'}</td>`:'') +
         `<td style="font-size:12px;">${fmtMap(v.brands)}</td>
          <td style="font-size:12px;">${schRepMode==='dist'?fmtMap(v.rets):fmtMap(v.dists)}</td></tr>`;
-    }).join('') || `<tr><td colspan="5" style="color:#777">No lifting recorded in this scheme's period yet — the report fills up as secondary sales (distributor → retailer) are recorded in Sales Reports → 📊 Sales report.</td></tr>`) +
+    }).join('') || `<tr><td colspan="5" style="color:#777">No lifting recorded in this scheme's period yet — the report fills up as secondary sales (distributor → retailer) are recorded in Sales Reports &amp; Schemes → 🏪 Retailer-wise (secondary sale).</td></tr>`) +
     '</tbody></table></div></div>';
   box.scrollIntoView({behavior:'smooth', block:'start'});
 }
