@@ -845,7 +845,7 @@ function applyDirOnly(){
    Any Director may delete any entry in any section. Deletes warn about attached
    records first, then cascade on confirm (server-side, Director-only). */
 // MMC ledger: money coming into MMC for Aurum (+) and money MMC pays out for / to Aurum (−)
-function mmcSign(k){ return (k==='PAY_TO_MMC' || k==='DIST_BASIC') ? 1 : (k==='MMC_PAID_VENDOR' || k==='MMC_PAID_AURUM') ? -1 : 0; }
+function mmcSign(k){ return k==='PAY_TO_MMC' ? 1 : k==='MMC_PAID_VENDOR' ? -1 : 0; }   // vendor-payment account only; the basic account is kept separate
 function mmcKindLabel(k, plain){
   const L = { PAY_TO_MMC:['🏦 ','Paid to MMC (our bank)'], DIST_BASIC:['💼 ','Basic paid to MMC by distributor'], MMC_PAID_VENDOR:['🔁 ','MMC paid vendor'], MMC_PAID_AURUM:['🏦 ','MMC paid Aurum'], DIST_EXCISE:['🏭 ','Excise & wine fees (distributor)'], DIST_VAT:['🧾 ','VAT (distributor)'] }[k] || ['', k||''];
   return plain ? L[1] : L[0] + esc(L[1]);
@@ -1667,7 +1667,7 @@ async function openOrderDetail(id){
          <div id="pay-disc-wrap" style="font-size:12px;padding-top:22px;"><label style="font-weight:400;"><input type="checkbox" id="pay-disc" checked style="width:auto;"> Apply cash discount for early payment${bd&&bd.pct?' ('+bd.pct+'% today)':' (none applies today)'}</label></div>
        </div>
        <button class="btn gold sm" id="btn-add-pay" style="margin-top:10px;">Record payment</button>
-       <p style="font-size:11px;color:#777;margin:6px 0 0;">Everything is paid by the distributor to MMC and posted to the MMC ledger. The basic (${bd?bd.credit:30} days credit) is Aurum's money held by MMC — MMC pays it to Aurum or adjusts it against vendor payments it makes for us (Accounting → New entry → “Receipt from MMC”).</p>
+       <p style="font-size:11px;color:#777;margin:6px 0 0;">Everything is paid by the distributor to MMC and posted to the MMC ledger. The basic (${bd?bd.credit:30} days credit) is Aurum's money held by MMC — MMC pays it to Aurum (record it in Accounting → New entry → “Receipt from MMC”).</p>
       </div>` : '');
     window.__odPayBd = bd;
     if ($('btn-add-pay')) $('btn-add-pay').onclick = async () => {
@@ -2327,20 +2327,22 @@ async function mmcAccounts(B){
   const today = ymdStr(new Date());
   const nextVat = Object.values(byM).filter(m=>m.left>0.005).sort((x,y)=>x.due.localeCompare(y.due))[0];
   const canTerms = isDir() || !!(me?.permissions_json?.sales?.admin);
-  // MMC ↔ Aurum account (all dates): basic MMC collected for us, what MMC paid us, and the net after MMC's vendor payments for us
-  const MM = { collected:0, paidAurum:0, deposits:0, vendorPaid:0 };
-  try { const { data: ml } = await db.schema('acct').from('v_mmc_ledger').select('kind, amount, status');
+  // MMC net due (all dates) — ONLY the basic MMC received from distributors (after cash discount) less what MMC has paid Aurum.
+  // Deliberately not linked to any other MMC account (our deposits / MMC's vendor payments).
+  const MM = { collected:0, paidAurum:0, disc:0 };
+  try { const [{ data: ml }, { data: dl }] = await Promise.all([
+      db.schema('acct').from('v_mmc_ledger').select('kind, amount, status').in('kind', ['DIST_BASIC','MMC_PAID_AURUM']),
+      S.from('payments').select('amount, order_id').eq('mode', 'CASH_DISC') ]);
     (ml||[]).filter(r=>r.status!=='REJECTED').forEach(r=>{ const a = Number(r.amount);
-      if (r.kind==='DIST_BASIC') MM.collected += a; else if (r.kind==='MMC_PAID_AURUM') MM.paidAurum += a;
-      else if (r.kind==='PAY_TO_MMC') MM.deposits += a; else if (r.kind==='MMC_PAID_VENDOR') MM.vendorPaid += a; }); } catch(e){}
-  MM.basicHeld = MM.collected - MM.paidAurum;
-  MM.net = MM.deposits + MM.collected - MM.vendorPaid - MM.paidAurum;
+      if (r.kind==='DIST_BASIC') MM.collected += a; else if (r.kind==='MMC_PAID_AURUM') MM.paidAurum += a; });
+    MM.disc = (dl||[]).reduce((t,r)=>t+Number(r.amount||0),0); } catch(e){}
+  MM.net = MM.collected - MM.paidAurum;
   window.__mmcAcctMM = MM;
   const tile = (l, v, c, sub) => `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">${l}</div><div style="font-size:16px;font-weight:700;${c?'color:'+c:''}">₹ ${inr(v||0)}</div>${sub?`<div style="font-size:10.5px;color:#777">${sub}</div>`:''}</div>`;
   const red = v => v > 0.005 ? '#b3261e' : '#1a7f37';
   const slabTxt = PT.slabs.length ? PT.slabs.map(s=>`${Number(s.pct)}% if paid within ${s.paid_within_days} days`).join(' · ') : 'no cash-discount slab set yet';
   B.innerHTML = `
-    <p style="font-size:12px;color:#777;margin:0 0 8px;">Every approved sales order with the figures stamped from Brands &amp; SKUs. <b>Excise duty + wine fees</b> are paid by the distributor into MMC's excise account before approval. <b>VAT</b> is paid by the distributor to MMC — sales of a month fall due on the <b>${PT.vatDay}th of the next month</b>. The <b>basic</b> is also paid by the distributor to MMC, on <b>${PT.credit} days credit</b> from the sale (dispatch) date — early payment earns a cash discount (${esc(slabTxt)}) — and <b>MMC pays it to Aurum</b> or adjusts it against the vendor payments MMC makes for us.</p>
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">Every approved sales order with the figures stamped from Brands &amp; SKUs. <b>Excise duty + wine fees</b> are paid by the distributor into MMC's excise account before approval. <b>VAT</b> is paid by the distributor to MMC — sales of a month fall due on the <b>${PT.vatDay}th of the next month</b>. The <b>basic</b> is also paid by the distributor to MMC, on <b>${PT.credit} days credit</b> from the sale (dispatch) date — early payment earns a cash discount (${esc(slabTxt)}) — and <b>MMC pays it to Aurum</b>.</p>
     <div class="card" style="padding:12px;margin-bottom:10px;">
       <div class="row2c">
         <div><label>Distributor</label><select onchange="window.mmcParty=this.value;ratesTab('cm')"><option value="">— all distributors —</option>${parties.map(([id,p])=>`<option value="${id}"${window.mmcParty===id?' selected':''}>${esc(p?.name||'')} (${esc(p?.code||'')})</option>`).join('')}</select></div>
@@ -2377,12 +2379,13 @@ async function mmcAccounts(B){
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
       ${tile('Basic billed', T.basic)}${tile('Basic paid by distributors to MMC', T.basicMmc, '#0b57d0', T.basicDirect?'+ ₹ '+inr(T.basicDirect)+' paid direct to Aurum':'')}${tile('Cash discount allowed', T.disc, '#7a5c10')}${tile('Basic still due from distributors', T.basicLeft, red(T.basicLeft))}${tile('Basic overdue (past credit)', T.basicOverdue, T.basicOverdue>0.005?'#b3261e':'#777')}
     </div>
-    <h4 class="sec" style="margin:10px 0 6px;">MMC pays Aurum — adjustment account <span style="font-weight:400;font-size:11.5px;color:#777">(all dates)</span></h4>
+    <h4 class="sec" style="margin:10px 0 6px;">MMC net due — basic received from distributors <span style="font-weight:400;font-size:11.5px;color:#777">(all dates)</span></h4>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-      ${tile('Basic collected by MMC for Aurum', MM.collected, '#0b57d0')}${tile('MMC paid to Aurum (our bank)', MM.paidAurum, '#1a7f37')}${tile('Basic with MMC — due to Aurum', MM.basicHeld, red(MM.basicHeld))}${tile('Net due from MMC after adjustment', MM.net, MM.net>=0?'#0b57d0':'#b3261e', `our deposits ₹ ${inr(MM.deposits)} − MMC paid vendors ₹ ${inr(MM.vendorPaid)}`)}
+      ${tile('Basic received by MMC from distributors (after cash discount)', MM.collected, '#0b57d0', MM.disc?'cash discount allowed ₹ '+inr(MM.disc):'')}${tile('Less: paid by MMC to Aurum', MM.paidAurum, '#1a7f37')}
+      <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border:2px solid #c9a227;"><div style="font-size:11px;color:#777">Net due from MMC</div><div style="font-size:18px;font-weight:700;color:${red(MM.net)}">₹ ${inr(MM.net)}</div></div>
     </div>
     <div style="margin:0 0 12px;"><button class="btn gold sm" onclick="(async()=>{await openAcct();await acNewGo('mmcr');})()">➕ Record payment received from MMC</button> <button class="btn ghost sm" onclick="(async()=>{await openAcct();window.acLedType='M:';window.acLedSel='M:MMC';await acctTab('ledger');})()">📖 MMC ledger</button>
-      <span style="font-size:11.5px;color:#777;margin-left:6px;">Net due from MMC = money we sent to MMC + basic MMC collected for us − MMC's payments to vendors for us − MMC's payments to us.</span></div>
+      <span style="font-size:11.5px;color:#777;margin-left:6px;">Net due from MMC = basic the distributors paid MMC (after cash discount) − what MMC has paid Aurum. Kept on its own — not added to or deducted from any other MMC account.</span></div>
     <h4 class="sec">Distributor-wise</h4>
     <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Bills</th><th class="amount">Cases</th><th class="amount">Basic ₹</th><th class="amount">Excise ₹</th><th class="amount">Wine fees ₹</th><th class="amount">VAT ₹</th><th class="amount">Total ₹</th><th class="amount">Excise+wine paid to MMC ₹</th><th class="amount">VAT paid to MMC ₹</th><th class="amount">VAT due to MMC ₹</th><th class="amount">Basic paid to MMC ₹</th><th class="amount">Cash disc. ₹</th><th class="amount">Basic balance ₹</th><th class="amount">Basic overdue ₹</th></tr></thead><tbody>
     ${Object.keys(byP).map(k=>{ const g = byP[k], t = sumK(g.list); const cd = Number(g.party?.credit_days)>0 ? Number(g.party.credit_days) : PT.credit; return `<tr style="cursor:pointer" onclick="window.mmcParty='${k}';ratesTab('cm')"><td><b>${esc(g.party?.name||'')}</b> <span style="color:#999;font-size:11px;">${esc(g.party?.code||'')}</span><br><span style="font-size:10.5px;color:#777">${cd} days credit</span></td><td class="amount">${g.list.length}</td><td class="amount">${t.cases}</td><td class="amount">${inr(t.basic)}</td><td class="amount">${inr(t.exc)}</td><td class="amount">${inr(t.wine)}</td><td class="amount">${inr(t.vat)}</td><td class="amount" style="font-weight:600">${inr(t.total)}</td><td class="amount" style="color:#0b57d0">${inr(t.levyPaid)}${t.levyLeft>0.005?'<br><span style="font-size:10.5px;color:#b3261e">short ₹ '+inr(t.levyLeft)+'</span>':''}</td><td class="amount" style="color:#0b57d0">${inr(t.vatPaid)}</td><td class="amount" style="color:${red(t.vatLeft)}">${inr(t.vatLeft)}</td><td class="amount" style="color:#1a7f37">${inr(t.basicRecv)}</td><td class="amount">${inr(t.disc)}</td><td class="amount" style="font-weight:700;color:${red(t.basicLeft)}">${inr(t.basicLeft)}</td><td class="amount" style="color:${t.basicOverdue>0.005?'#b3261e':'#777'}">${inr(t.basicOverdue)}</td></tr>`; }).join('') || '<tr><td colspan="15" style="color:#777">No approved orders in this selection.</td></tr>'}
@@ -2443,11 +2446,9 @@ function mmcAccountsPrint(){
     ${rows.map(a=>`<tr><td>${esc(a.o.so_no)}</td><td>${a.sale}</td><td>${esc(a.o.party?.name||'')}</td><td class="amount">${a.cases}</td><td class="amount">${inr(a.basic)}</td><td class="amount">${inr(a.exc)}</td><td class="amount">${inr(a.wine)}</td><td class="amount">${inr(a.vat)}</td><td class="amount">${inr(a.total)}</td><td class="amount">${inr(a.levyPaid)}</td><td class="amount">${inr(a.vatPaid)}</td><td class="amount">${inr(a.vatLeft)}</td><td>${a.vatDue}</td><td class="amount">${inr(a.basicRecv)}</td><td class="amount">${inr(a.disc)}</td><td class="amount">${inr(a.basicLeft)}</td><td>${a.basicDue}</td></tr>`).join('')}
     <tr class="tot"><td colspan="3">Total (${rows.length} bills)</td><td class="amount">${T.cases||0}</td><td class="amount">${inr(T.basic||0)}</td><td class="amount">${inr(T.exc||0)}</td><td class="amount">${inr(T.wine||0)}</td><td class="amount">${inr(T.vat||0)}</td><td class="amount">${inr(T.total||0)}</td><td class="amount">${inr(T.levyPaid||0)}</td><td class="amount">${inr(T.vatPaid||0)}</td><td class="amount">${inr(T.vatLeft||0)}</td><td></td><td class="amount">${inr(T.basicRecv||0)}</td><td class="amount">${inr(T.disc||0)}</td><td class="amount">${inr(T.basicLeft||0)}</td><td></td></tr>
     </tbody></table>
-    ${window.__mmcAcctMM?`<h3 style="margin-top:12px;">MMC pays Aurum — adjustment account (all dates)</h3><table style="max-width:560px;"><tbody>
-      <tr><td>Money we sent to MMC</td><td class="amount">${inr(__mmcAcctMM.deposits)}</td></tr>
-      <tr><td>Add: basic collected by MMC from distributors for Aurum</td><td class="amount">${inr(__mmcAcctMM.collected)}</td></tr>
-      <tr><td>Less: MMC paid vendors for us</td><td class="amount">− ${inr(__mmcAcctMM.vendorPaid)}</td></tr>
-      <tr><td>Less: MMC paid Aurum</td><td class="amount">− ${inr(__mmcAcctMM.paidAurum)}</td></tr>
+    ${window.__mmcAcctMM?`<h3 style="margin-top:12px;">MMC net due — basic received from distributors (all dates)</h3><table style="max-width:560px;"><tbody>
+      <tr><td>Basic received by MMC from distributors (after cash discount${__mmcAcctMM.disc?' of ₹ '+inr(__mmcAcctMM.disc):''})</td><td class="amount">${inr(__mmcAcctMM.collected)}</td></tr>
+      <tr><td>Less: paid by MMC to Aurum</td><td class="amount">− ${inr(__mmcAcctMM.paidAurum)}</td></tr>
       <tr class="tot"><td>Net due from MMC</td><td class="amount">${inr(__mmcAcctMM.net)}</td></tr></tbody></table>`:''}
     <p style="font-size:11px;color:#666;margin-top:10px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
   printHtml('MMC accounts — Aurum Spirits', body);
@@ -5729,7 +5730,12 @@ async function acctTab(t){
       if (merr){ B.innerHTML = `<div class="msg err">Load failed: ${esc(merr.message)}</div>`; return; }
       const exRows = (mrows || []).filter(r=>r.kind==='DIST_EXCISE');           // excise account: paid by distributors straight to MMC
       const vtRows = (mrows || []).filter(r=>r.kind==='DIST_VAT');              // VAT account: VAT paid by distributors to MMC
-      const mm = (mrows || []).filter(r=>r.kind!=='DIST_EXCISE' && r.kind!=='DIST_VAT');
+      const bsRows = (mrows || []).filter(r=>r.kind==='DIST_BASIC' || r.kind==='MMC_PAID_AURUM');   // basic account: distributors → MMC → Aurum
+      const mm = (mrows || []).filter(r=>r.kind==='PAY_TO_MMC' || r.kind==='MMC_PAID_VENDOR');
+      let bsBal = 0; bsRows.forEach(r=>{ if (r.status !== 'REJECTED') bsBal += (r.kind==='DIST_BASIC' ? 1 : -1) * Number(r.amount); r._bal = bsBal; });
+      const bsLive = bsRows.filter(r=>r.status!=='REJECTED');
+      const totDb = bsLive.filter(r=>r.kind==='DIST_BASIC').reduce((s,r)=>s+Number(r.amount),0);
+      const totPa = bsLive.filter(r=>r.kind==='MMC_PAID_AURUM').reduce((s,r)=>s+Number(r.amount),0);
       const totEx = exRows.reduce((s,r)=>s+Number(r.amount),0);
       const totVt = vtRows.reduce((s,r)=>s+Number(r.amount),0);
       let bal = 0;
@@ -5737,9 +5743,7 @@ async function acctTab(t){
       const live = mm.filter(r=>r.status!=='REJECTED');
       const totTo = live.reduce((s,r)=>s+Number(r.paid_to_mmc||0),0);
       const totBy = live.reduce((s,r)=>s+Number(r.paid_by_mmc||0),0);
-      const totDb = live.reduce((s,r)=>s+Number(r.dist_basic||0),0);
-      const totPa = live.reduce((s,r)=>s+Number(r.paid_to_aurum||0),0);
-      const totIn = totTo + totDb, totOut = totBy + totPa;
+      const totIn = totTo, totOut = totBy;
       const pend = mm.filter(r=>r.status==='PENDING_APPROVAL').reduce((s,r)=>s+Number(r.amount),0);
       // per-vendor view of the same money
       const byV = {};
@@ -5749,13 +5753,12 @@ async function acctTab(t){
       B.innerHTML = `
       <button class="btn ghost sm" onclick="acLedBack()">‹ Back to all ledgers</button>
       ${dateBar}
-      <p style="font-size:12px;color:#777;margin:6px 0;">Money MMC holds for Aurum: what we send MMC from our banks and the basic distributors pay MMC for us come <b>in</b>; MMC's payments to vendors for us and MMC's payments to Aurum go <b>out</b>. The balance is what MMC owes Aurum after adjustment.</p>
+      <p style="font-size:12px;color:#777;margin:6px 0;">For purchase orders billed &amp; delivered to MMC: you pay MMC from your bank, and MMC pays the vendor. Money sent to MMC sits here until MMC's payment to the vendor is recorded. The basic, excise and VAT accounts below are kept separately and do not touch this balance.</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid to MMC (from our banks)</div><div style="font-size:19px;font-weight:700;color:#b3261e">₹ ${inr(totTo)}</div></div>
-        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Basic collected by MMC from distributors</div><div style="font-size:19px;font-weight:700;color:#0b57d0">₹ ${inr(totDb)}</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid by MMC to vendors</div><div style="font-size:19px;font-weight:700;color:#1a7f37">₹ ${inr(totBy)}</div></div>
-        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid by MMC to Aurum</div><div style="font-size:19px;font-weight:700;color:#1a7f37">₹ ${inr(totPa)}</div></div>
-        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Held by MMC — due to Aurum (balance)</div><div style="font-size:19px;font-weight:700;color:${bal>=0?'#0b57d0':'#b3261e'}">₹ ${inr(bal)}</div>${pend?`<div style="font-size:11px;color:#b8860b">incl. ₹ ${inr(pend)} awaiting approval</div>`:''}</div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Held by MMC (balance)</div><div style="font-size:19px;font-weight:700;color:${bal>=0?'#0b57d0':'#b3261e'}">₹ ${inr(bal)}</div>${pend?`<div style="font-size:11px;color:#b8860b">incl. ₹ ${inr(pend)} awaiting approval</div>`:''}</div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;border:2px solid #0b57d0;"><div style="font-size:12px;color:#777">Basic account — net due from MMC</div><div style="font-size:19px;font-weight:700;">₹ ${inr(bsBal)}</div><div style="font-size:11px;color:#777">received ₹ ${inr(totDb)} − paid to Aurum ₹ ${inr(totPa)} · separate</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;border:2px solid #c9a227;"><div style="font-size:12px;color:#777">Excise account — paid by distributors to MMC</div><div style="font-size:19px;font-weight:700;">₹ ${inr(totEx)}</div><div style="font-size:11px;color:#777">not our money · not in the balance above</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;border:2px solid #1a7f37;"><div style="font-size:12px;color:#777">VAT account — VAT paid by distributors to MMC</div><div style="font-size:19px;font-weight:700;">₹ ${inr(totVt)}</div><div style="font-size:11px;color:#777">not our money · not in the balance above</div></div>
       </div>
@@ -5777,6 +5780,19 @@ async function acctTab(t){
         `<td style="white-space:nowrap">${r.kind==='DIST_BASIC' ? '' : (r.kind==='PAY_TO_MMC'||r.kind==='MMC_PAID_AURUM') ? (isDir()?`<button class="mini" title="Take this line out of the MMC ledger — the bank entry ${esc(r.entry_no||'')} stays as it is" onclick="acMmcUnlink('${r.id}','${esc(r.txn_no)}')">⛓ Unlink</button>`:'') : dirDelBtn('acct','vendor_payments', r.payment_id, r.pay_no||r.txn_no, "acctTab('ledger')")}</td></tr>`).join('')
         || '<tr><td colspan="10" style="color:#777">Nothing routed through MMC in this date range yet. Record money paid to MMC from New Entry → Bank ledger entry (kind “Payment to MMC”).</td></tr>'}
       ${mm.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(totIn)}</td><td class="amount">${inr(totOut)}</td><td class="amount">${inr(bal)}</td><td colspan="2"></td></tr>`:''}
+      </tbody></table></div>
+      <h4 class="sec" style="margin-top:14px;">MMC basic account — basic paid by distributors to MMC, and MMC's payments to Aurum · ${bsRows.length} entr${bsRows.length===1?'y':'ies'}</h4>
+      <p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Basic receipts are recorded on the sales order (after cash discount); MMC's payments to Aurum from New Entry → “Receipt from MMC”. The balance is the net due from MMC — kept separate from every other MMC account.</p>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>No.</th><th>Entry</th><th>Order / bank</th><th>Reference</th><th class="amount">Basic received by MMC ₹</th><th class="amount">Paid by MMC to Aurum ₹</th><th class="amount">Net due from MMC ₹</th><th>Status</th><th></th></tr></thead><tbody>
+      ${bsRows.map(r=>`<tr style="${r.status==='REJECTED'?'opacity:.5;text-decoration:line-through;':''}"><td>${r.txn_date}</td><td><b>${esc(r.txn_no)}</b></td><td>${mmcKindLabel(r.kind)}</td>` +
+        `<td>${r.kind==='DIST_BASIC' ? `<a href="#" onclick="event.preventDefault();openOrders();show('order-detail');openOrderDetail('${r.order_id}')">${esc(r.so_no||'')}</a><br><span style="font-size:11px;color:#777">${esc(r.party_name||'')}</span>` : esc(r.bank_name||'Bank')+(r.entry_no?' · '+esc(r.entry_no):'')}</td>` +
+        `<td style="font-size:12px;">${esc(r.ref_no||'')}${r.narration?'<br><span style="color:#777">'+esc(r.narration)+'</span>':''}</td>` +
+        `<td class="amount" style="color:#0b57d0">${r.kind==='DIST_BASIC'?inr(r.amount):''}</td><td class="amount" style="color:#1a7f37">${r.kind==='MMC_PAID_AURUM'?inr(r.amount):''}</td>` +
+        `<td class="amount" style="font-weight:600;color:${r._bal>0.005?'#b3261e':'#1a7f37'}">${inr(r._bal)}</td>` +
+        `<td style="font-size:11.5px;">${r.status==='PENDING_APPROVAL'?'<span style="color:#b8860b">⏳ awaiting approval</span>':r.status==='REJECTED'?'<span style="color:#b3261e">rejected</span>':'<span style="color:#1a7f37">✔ posted</span>'}</td>` +
+        `<td>${r.kind==='MMC_PAID_AURUM' && isDir() ? `<button class="mini" title="Take this line out of the MMC basic account — the bank entry ${esc(r.entry_no||'')} stays as it is" onclick="acMmcUnlink('${r.id}','${esc(r.txn_no)}')">⛓ Unlink</button>` : ''}</td></tr>`).join('')
+        || '<tr><td colspan="10" style="color:#777">No basic received by MMC yet.</td></tr>'}
+      ${bsRows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(totDb)}</td><td class="amount">${inr(totPa)}</td><td class="amount">${inr(bsBal)}</td><td colspan="2"></td></tr>`:''}
       </tbody></table></div>
       <h4 class="sec" style="margin-top:14px;">MMC excise account — excise duty &amp; wine fees paid by distributors on approved orders · ${exRows.length} entr${exRows.length===1?'y':'ies'}</h4>
       <p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Recorded automatically when a sales order is approved. The distributor pays this into MMC's excise account directly — it never touches our banks, so it is shown on its own and reduces the distributor's dues on that order.</p>
@@ -7100,7 +7116,7 @@ function acKindChange(){
     : k==='VPAY' ? 'Money goes from your bank straight to the vendor. Posts the bank payment and reduces that vendor’s outstanding (Vendor Dues / vendor ledger).'
     : k==='MMC_PAY' ? 'Money goes from your bank to MMC. This one entry posts to the bank ledger and the MMC ledger (linked). It sits with MMC until you record “MMC paid the vendor” from the Payment via MMC card. Pick the vendor/PO if the money is for a particular PO; leave blank for a lump sum.'
     : k==='MMC_VEN' ? 'MMC has paid the vendor out of the money you sent. Reduces the vendor’s outstanding and the balance held by MMC — no bank of yours moves.'
-    : k==='MMC_RCPT' ? 'Distributors pay the basic to MMC; MMC pays it on to Aurum. This posts the money received into your bank ledger and reduces what MMC holds for Aurum in the MMC ledger (both linked). Anything MMC keeps to pay vendors for us is adjusted automatically in the MMC ledger balance.' : '';
+    : k==='MMC_RCPT' ? 'Distributors pay the basic to MMC; MMC pays it on to Aurum. This posts the money received into your bank ledger and reduces the net due from MMC in the MMC basic account (both linked). It is not mixed with the money we send MMC for vendor payments.' : '';
   if (isVen || k==='PAYMENT'){ const m = $('en-mode'); if (m && !m.value) m.value = 'NEFT'; acEnLoadPos(); }
   const ph = $('en-narr'); if (ph) ph.placeholder = isVen ? 'e.g. part payment, balance on delivery' : 'Who / what for';
 }
