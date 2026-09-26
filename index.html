@@ -540,7 +540,7 @@
       <button class="chip on" id="rt-rates" onclick="ratesTab('rates')">Billing rates</button>
       <button class="chip" id="rt-struct" onclick="ratesTab('struct')">Duty structure (MH)</button>
       <button class="chip" id="rt-out" onclick="ratesTab('out')">Outstanding</button>
-      <button class="chip" id="rt-cm" onclick="ratesTab('cm')">MMC payable</button>
+      <button class="chip" id="rt-cm" onclick="ratesTab('cm')">MMC accounts</button>
     </div>
     <div id="rates-body"></div>
   </section>
@@ -743,7 +743,7 @@ const SECTIONS = {
              ['ac-tax','Purchase tax'],['ac-vdues','Vendor dues'],['ac-recv','Distributor dues'],
              ['ac-exp','Expenses'],['ac-salary','Salary'],
              ['ac-adv','Advances'],['ac-assets','Assets']],
-  rates:    [['rt-rates','Billing rates'],['rt-struct','Duty structure'],['rt-out','Outstanding'],['rt-cm','MMC payable']],
+  rates:    [['rt-rates','Billing rates'],['rt-struct','Duty structure'],['rt-out','Outstanding'],['rt-cm','MMC accounts']],
 };
 // view id -> module key, so sections can be applied whenever a screen opens
 const VIEW_MOD = { parties:'party', reports:'reports', salesrep:'salesrep', mfg:'mfg',
@@ -2193,15 +2193,90 @@ async function ratesTab(which){
   if (which === 'out'){
     await recvLoad('rates-body');
   }
-  if (which === 'cm'){
-    const { data, error } = await S.from('cm_payables').select('*, order:orders(so_no)').order('accrued_at',{ascending:false}).limit(200);
-    if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
-    const total = (data||[]).reduce((a,r)=>a+Number(r.amount),0);
-    let html = `<div class="statgrid"><div class="stat"><div class="n">₹ ${inr(total)}</div><div class="l">Total accrued to MMC (dispatched orders)</div></div></div>`;
-    html += '<div class="table-scroll"><table><thead><tr><th>Order</th><th class="amount">Cases</th><th class="amount">CM ₹/case</th><th class="amount">Amount ₹</th><th>Accrued</th></tr></thead><tbody>';
-    for (const r of (data||[])) html += `<tr><td>${esc(r.order?.so_no)}</td><td class="amount">${r.cases}</td><td class="amount">${inr(r.cm_charge_per_case)}</td><td class="amount">${inr(r.amount)}</td><td>${r.accrued_at.slice(0,10)}</td></tr>`;
-    B.innerHTML = html + '</tbody></table></div>';
+  if (which === 'cm'){ await mmcAccounts(B); }
+}
+/* ============ MMC ACCOUNTS — distributor-wise & bill-wise ====================
+   Every approved sales order, with the figures stamped from Brands & SKUs:
+   basic, excise duty, wine fees, VAT, total; what the distributor paid into
+   MMC's excise account (excise + wine fees, before approval); what is due to
+   Aurum (basic + VAT, less receipts). Grouped by distributor, bill by bill.   */
+async function mmcAccounts(B){
+  const S = db.schema('sales');
+  window.mmcFrom = window.mmcFrom || ''; window.mmcTo = window.mmcTo || ''; window.mmcParty = window.mmcParty || '';
+  let qO = S.from('orders').select('id, so_no, order_date, status, invoice_no, approved_at, excise_paid_amount, excise_paid_ref, excise_paid_date, party_id, party:parties(code,name)')
+    .in('status', ['APPROVED','DISPATCHED','DELIVERED','CLOSED']).order('order_date',{ascending:false}).limit(1000);
+  if (window.mmcFrom) qO = qO.gte('order_date', window.mmcFrom);
+  if (window.mmcTo) qO = qO.lte('order_date', window.mmcTo);
+  const { data: ords, error } = await qO;
+  if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  const all = ords || [];
+  const ids = all.map(o=>o.id);
+  const lines = [], vals = [], pays = [];
+  for (let i = 0; i < ids.length; i += 200){
+    const chunk = ids.slice(i, i+200);
+    const { data: l } = await S.from('order_lines').select('id, order_id, cases').in('order_id', chunk); lines.push(...(l||[]));
+    const { data: p } = await S.from('payments').select('order_id, amount, mode, pay_date, ref_no').in('order_id', chunk); pays.push(...(p||[]));
   }
+  for (let i = 0; i < lines.length; i += 200){
+    const { data: v } = await S.from('order_values').select('*').in('line_id', lines.slice(i, i+200).map(l=>l.id)); vals.push(...(v||[]));
+  }
+  const lineOrder = {}; lines.forEach(l=>{ lineOrder[l.id] = l.order_id; });
+  const agg = {}; all.forEach(o=>{ agg[o.id] = { o, cases:0, basic:0, exc:0, wine:0, vat:0, total:0, levyPaid:0, otherPaid:0 }; });
+  lines.forEach(l=>{ const a = agg[l.order_id]; if (a) a.cases += Number(l.cases); });
+  vals.forEach(v=>{ const a = agg[lineOrder[v.line_id]]; if (!a) return;
+    a.basic += Number(v.basic_amount||0); a.exc += Number(v.excise_amount||0); a.wine += Number(v.wine_fee_amount||0); a.vat += Number(v.vat_amount||0); a.total += Number(v.amount||0); });
+  pays.forEach(p=>{ const a = agg[p.order_id]; if (!a) return; if (p.mode==='EXCISE_MMC') a.levyPaid += Number(p.amount); else a.otherPaid += Number(p.amount); });
+  let rows = Object.values(agg).map(a=>{ a.levyDue = a.exc + a.wine; a.levyLeft = Math.max(0, a.levyDue - a.levyPaid); a.aurumDue = a.basic + a.vat; a.balance = a.total - a.levyPaid - a.otherPaid; return a; });
+  const parties = [...new Map(rows.map(a=>[a.o.party_id, a.o.party])).entries()].sort((x,y)=>String(x[1]?.name).localeCompare(String(y[1]?.name)));
+  if (window.mmcParty) rows = rows.filter(a=>a.o.party_id===window.mmcParty);
+  const T = rows.reduce((t,a)=>{ ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','otherPaid','aurumDue','balance'].forEach(k=>t[k]=(t[k]||0)+a[k]); return t; }, {});
+  window.__mmcAcctRows = rows;
+  // group by distributor
+  const byP = {}; rows.forEach(a=>{ const k = a.o.party_id; (byP[k] = byP[k] || { party:a.o.party, list:[] }).list.push(a); });
+  const sub = list => list.reduce((t,a)=>{ ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','otherPaid','aurumDue','balance'].forEach(k=>t[k]=(t[k]||0)+a[k]); return t; }, {});
+  const tile = (l, v, c) => `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">${l}</div><div style="font-size:16px;font-weight:700;${c?'color:'+c:''}">₹ ${inr(v||0)}</div></div>`;
+  B.innerHTML = `
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">Every approved sales order with the figures stamped from Brands &amp; SKUs. <b>Excise duty + wine fees</b> are paid by the distributor into MMC's excise account before approval; <b>basic + VAT</b> is what is due to Aurum, less receipts recorded against the order.</p>
+    <div class="card" style="padding:12px;margin-bottom:10px;">
+      <div class="row2c">
+        <div><label>Distributor</label><select onchange="window.mmcParty=this.value;ratesTab('cm')"><option value="">— all distributors —</option>${parties.map(([id,p])=>`<option value="${id}"${window.mmcParty===id?' selected':''}>${esc(p?.name||'')} (${esc(p?.code||'')})</option>`).join('')}</select></div>
+        <div class="row2c"><div><label>From (order date)</label><input type="date" value="${window.mmcFrom}" onchange="window.mmcFrom=this.value;ratesTab('cm')"></div><div><label>To</label><input type="date" value="${window.mmcTo}" onchange="window.mmcTo=this.value;ratesTab('cm')"></div></div>
+      </div>
+      <div style="margin-top:8px;"><button class="btn ghost sm" onclick="mmcAccountsCsv()">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="mmcAccountsPrint()">🖨 Print / save PDF</button>${(window.mmcParty||window.mmcFrom||window.mmcTo)?` <button class="btn ghost sm" onclick="window.mmcParty='';window.mmcFrom='';window.mmcTo='';ratesTab('cm')">✕ Clear</button>`:''}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+      ${tile('Basic (rate × cases)', T.basic)}${tile('Excise duty', T.exc, '#b3261e')}${tile('Wine fees', T.wine)}${tile('VAT', T.vat, '#1a7f37')}${tile('Order total incl. VAT', T.total)}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      ${tile('Paid into MMC excise a/c (excise + wine fees)', T.levyPaid, '#0b57d0')}${tile('Excise + wine fees still unpaid', T.levyLeft, T.levyLeft?'#b3261e':'#777')}${tile('Due to Aurum (basic + VAT)', T.aurumDue)}${tile('Received by Aurum', T.otherPaid, '#1a7f37')}${tile('Balance due from distributors', T.balance, '#b3261e')}
+    </div>
+    <h4 class="sec">Distributor-wise</h4>
+    <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Bills</th><th class="amount">Cases</th><th class="amount">Basic ₹</th><th class="amount">Excise ₹</th><th class="amount">Wine fees ₹</th><th class="amount">VAT ₹</th><th class="amount">Total ₹</th><th class="amount">Paid to MMC excise ₹</th><th class="amount">Due to Aurum ₹</th><th class="amount">Received ₹</th><th class="amount">Balance ₹</th></tr></thead><tbody>
+    ${Object.keys(byP).map(k=>{ const g = byP[k], t = sub(g.list); return `<tr style="cursor:pointer" onclick="window.mmcParty='${k}';ratesTab('cm')"><td><b>${esc(g.party?.name||'')}</b> <span style="color:#999;font-size:11px;">${esc(g.party?.code||'')}</span></td><td class="amount">${g.list.length}</td><td class="amount">${t.cases}</td><td class="amount">${inr(t.basic)}</td><td class="amount">${inr(t.exc)}</td><td class="amount">${inr(t.wine)}</td><td class="amount">${inr(t.vat)}</td><td class="amount" style="font-weight:600">${inr(t.total)}</td><td class="amount" style="color:#0b57d0">${inr(t.levyPaid)}</td><td class="amount">${inr(t.aurumDue)}</td><td class="amount" style="color:#1a7f37">${inr(t.otherPaid)}</td><td class="amount" style="font-weight:700;color:${t.balance>0?'#b3261e':'#1a7f37'}">${inr(t.balance)}</td></tr>`; }).join('') || '<tr><td colspan="12" style="color:#777">No approved orders in this selection.</td></tr>'}
+    ${rows.length?`<tr style="font-weight:700;background:#faf6ea;"><td>Total</td><td class="amount">${rows.length}</td><td class="amount">${T.cases}</td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td><td class="amount">${inr(T.levyPaid)}</td><td class="amount">${inr(T.aurumDue)}</td><td class="amount">${inr(T.otherPaid)}</td><td class="amount">${inr(T.balance)}</td></tr>`:''}
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:14px;">Bill-wise${window.mmcParty?' — '+esc((byP[window.mmcParty]||{}).party?.name||''):''}</h4>
+    <div class="table-scroll"><table><thead><tr><th>Order</th><th>Date</th><th>Distributor</th><th>Status</th><th class="amount">Cases</th><th class="amount">Basic ₹</th><th class="amount">Excise ₹</th><th class="amount">Wine fees ₹</th><th class="amount">VAT ₹</th><th class="amount">Total ₹</th><th class="amount">Paid to MMC excise ₹</th><th>Excise ref</th><th class="amount">Due to Aurum ₹</th><th class="amount">Received ₹</th><th class="amount">Balance ₹</th></tr></thead><tbody>
+    ${rows.map(a=>`<tr><td><a href="#" onclick="event.preventDefault();openOrders();show('order-detail');openOrderDetail('${a.o.id}')"><b>${esc(a.o.so_no)}</b></a>${a.o.invoice_no?'<br><span style="font-size:11px;color:#777">Inv '+esc(a.o.invoice_no)+'</span>':''}</td><td>${a.o.order_date}</td><td>${esc(a.o.party?.name||'')}</td><td><span class="pill ${a.o.status}">${a.o.status}</span></td><td class="amount">${a.cases}</td><td class="amount">${inr(a.basic)}</td><td class="amount">${inr(a.exc)}</td><td class="amount">${inr(a.wine)}</td><td class="amount">${inr(a.vat)}</td><td class="amount" style="font-weight:600">${inr(a.total)}</td><td class="amount" style="color:#0b57d0">${inr(a.levyPaid)}${a.levyLeft?'<br><span style="font-size:10.5px;color:#b3261e">short ₹ '+inr(a.levyLeft)+'</span>':''}</td><td style="font-size:11.5px;">${esc(a.o.excise_paid_ref||'')}${a.o.excise_paid_date?'<br><span style="color:#777">'+a.o.excise_paid_date+'</span>':''}</td><td class="amount">${inr(a.aurumDue)}</td><td class="amount" style="color:#1a7f37">${inr(a.otherPaid)}</td><td class="amount" style="font-weight:700;color:${a.balance>0?'#b3261e':'#1a7f37'}">${inr(a.balance)}</td></tr>`).join('') || '<tr><td colspan="15" style="color:#777">No approved orders in this selection.</td></tr>'}
+    ${rows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${T.cases}</td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td><td class="amount">${inr(T.levyPaid)}</td><td></td><td class="amount">${inr(T.aurumDue)}</td><td class="amount">${inr(T.otherPaid)}</td><td class="amount">${inr(T.balance)}</td></tr>`:''}
+    </tbody></table></div>`;
+}
+function mmcAccountsCsv(){
+  const rows = window.__mmcAcctRows || []; if (!rows.length){ alert('Nothing to download.'); return; }
+  const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const out = [['Order','Date','Invoice','Distributor','Code','Status','Cases','Basic','Excise duty','Wine fees','VAT','Total','Paid to MMC excise a/c','Excise ref','Excise paid on','Due to Aurum (basic+VAT)','Received by Aurum','Balance'].join(',')];
+  rows.forEach(a=>out.push([e2(a.o.so_no), e2(a.o.order_date), e2(a.o.invoice_no||''), e2(a.o.party?.name||''), e2(a.o.party?.code||''), e2(a.o.status), a.cases, a.basic.toFixed(2), a.exc.toFixed(2), a.wine.toFixed(2), a.vat.toFixed(2), a.total.toFixed(2), a.levyPaid.toFixed(2), e2(a.o.excise_paid_ref||''), e2(a.o.excise_paid_date||''), a.aurumDue.toFixed(2), a.otherPaid.toFixed(2), a.balance.toFixed(2)].join(',')));
+  const blob = new Blob(['\ufeff' + out.join('\n')], {type:'text/csv'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'mmc-accounts.csv'; a.click();
+}
+function mmcAccountsPrint(){
+  const rows = window.__mmcAcctRows || [];
+  const T = rows.reduce((t,a)=>{ ['cases','basic','exc','wine','vat','total','levyPaid','otherPaid','aurumDue','balance'].forEach(k=>t[k]=(t[k]||0)+a[k]); return t; }, {});
+  const body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>MMC accounts — distributor &amp; bill-wise · ${window.mmcFrom||'beginning'} to ${window.mmcTo||'today'}</h2>
+    <table><thead><tr><th>Order</th><th>Date</th><th>Distributor</th><th class="amount">Cases</th><th class="amount">Basic ₹</th><th class="amount">Excise ₹</th><th class="amount">Wine fees ₹</th><th class="amount">VAT ₹</th><th class="amount">Total ₹</th><th class="amount">Paid to MMC excise ₹</th><th class="amount">Due to Aurum ₹</th><th class="amount">Received ₹</th><th class="amount">Balance ₹</th></tr></thead><tbody>
+    ${rows.map(a=>`<tr><td>${esc(a.o.so_no)}</td><td>${a.o.order_date}</td><td>${esc(a.o.party?.name||'')}</td><td class="amount">${a.cases}</td><td class="amount">${inr(a.basic)}</td><td class="amount">${inr(a.exc)}</td><td class="amount">${inr(a.wine)}</td><td class="amount">${inr(a.vat)}</td><td class="amount">${inr(a.total)}</td><td class="amount">${inr(a.levyPaid)}</td><td class="amount">${inr(a.aurumDue)}</td><td class="amount">${inr(a.otherPaid)}</td><td class="amount">${inr(a.balance)}</td></tr>`).join('')}
+    <tr class="tot"><td colspan="3">Total (${rows.length} bills)</td><td class="amount">${T.cases||0}</td><td class="amount">${inr(T.basic||0)}</td><td class="amount">${inr(T.exc||0)}</td><td class="amount">${inr(T.wine||0)}</td><td class="amount">${inr(T.vat||0)}</td><td class="amount">${inr(T.total||0)}</td><td class="amount">${inr(T.levyPaid||0)}</td><td class="amount">${inr(T.aurumDue||0)}</td><td class="amount">${inr(T.otherPaid||0)}</td><td class="amount">${inr(T.balance||0)}</td></tr>
+    </tbody></table><p style="font-size:11px;color:#666;margin-top:10px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml('MMC accounts — Aurum Spirits', body);
 }
 /* ============ DISTRIBUTOR RECEIVABLES (money owed TO us) ====================
    A receivable is born the moment goods leave for a distributor — the order is
