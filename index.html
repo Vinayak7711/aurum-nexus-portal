@@ -384,12 +384,11 @@
   <section id="view-mkt" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Marketing &amp; Schemes</h2>
-      <p>Set the marketing budget month-wise and week-wise, log every spend, monitor utilisation — budget vs spent vs remaining — and run the retailer schemes from announcement through to reimbursement.</p></div>
+      <p>Set the marketing budget month-wise and week-wise, log every spend, monitor utilisation — budget vs spent vs remaining. Retailer schemes are now in Sales Report → 🎁 Scheme master.</p></div>
     <div class="subtabs">
       <button class="chip on" id="mk-budget" onclick="mktTab('budget')">Budget &amp; utilisation</button>
       <button class="chip" id="mk-spend" onclick="mktTab('spend')">Spends (where used)</button>
       <button class="chip" id="mk-requests" onclick="mktTab('requests')">Budget requests</button>
-      <button class="chip" id="mk-schemes" onclick="mktTab('schemes')">🎁 Scheme master</button>
     </div>
     <div id="mkt-body"></div>
   </section>
@@ -426,7 +425,7 @@
   <section id="view-salesrep" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Sales Report</h2>
-      <p>Distributor-wise (primary sale, from the order book) and retailer-wise (secondary sale) — brand by brand, in cases. Daily, weekly, monthly or any date range.</p></div>
+      <p>Distributor-wise (primary sale, from the order book) and retailer-wise (secondary sale) — brand by brand, in cases. Daily, weekly, monthly or any date range — plus the retailer Scheme master.</p></div>
     <div id="salesrep-body"></div>
   </section>
 
@@ -701,14 +700,14 @@ const MODULES = [
   {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing & Production', desc:'Targets, batches, QC, RM custody, FG stock', live:true, open:()=>openMfg()},
   {key:'reports', ico:'📈', name:'Sales Team — Reports & Targets', desc:'Daily activity, targets & field visits', live:true, open:()=>openReports()},
-  {key:'salesrep', ico:'📊', name:'Sales Report',    desc:'Distributor & retailer wise, brand-wise cases', live:true, open:()=>openSalesRep()},
+  {key:'salesrep', ico:'📊', name:'Sales Report',    desc:'Distributor & retailer wise, brand-wise cases, schemes', live:true, open:()=>openSalesRep()},
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
   {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'calendar',ico:'📅', name:'Calendar',         desc:'Events + task, renewal & PO dates',      live:true,  open:()=>openCalendar()},
   {key:'meetings',ico:'📝', name:'Meetings',         desc:'Agendas, minutes, participants, views',  live:true,  open:()=>openMeetings()},
-  {key:'mkt',     ico:ICO_GROWTH, name:'Marketing & Schemes', desc:'Budget, spends & retailer schemes', live:true, mktOnly:true, open:()=>openMkt()},
+  {key:'mkt',     ico:ICO_GROWTH, name:'Marketing & Schemes', desc:'Marketing budget, spends & requests', live:true, mktOnly:true, open:()=>openMkt()},
   {key:'notif',   ico:'🔔', name:'Notification Centre', desc:'Tasks, emails, to-dos & approvals',  live:true,  open:()=>openNotifCentre()},
   {key:'comp',    ico:'📜', name:'License & Renewal',desc:'Licences, permits, registrations, expiries', live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
@@ -729,12 +728,12 @@ const SECTIONS = {
              ['ot-apps','Distributor applications'],['ot-vendors','Register vendor'],['ot-retailers','Register retailer']],
   reports:  [['rp-today','Today'],['rp-mine','My month'],['rp-team','Team'],['rp-targets','Targets'],['rp-plan','Target plan (FY)'],
              ['fld-visits','Field visits'],['fld-salesmen','Salesmen'],['fld-creds','App credentials']],
-  salesrep: [['sr-dist','Distributor-wise (primary)'],['sr-ret','Retailer-wise (secondary)']],
+  salesrep: [['sr-dist','Distributor-wise (primary)'],['sr-ret','Retailer-wise (secondary)'],['sr-sch','Scheme master']],
   brand:    [],
   mfg:      [['mt-fg','FG stock'],['mt-batches','Batches & QC'],['mt-report','Production report'],['mt-rm','Raw material'],
              ['pd-targets','Targets & completion'],['pd-log','Factory order list']],
   tasks:    [['kt-my','My tasks'],['kt-all','All tasks'],['kt-duties','Duties']],
-  mkt:      [['mk-budget','Budget & utilisation'],['mk-spend','Spends'],['mk-requests','Budget requests'],['mk-schemes','Scheme master']],
+  mkt:      [['mk-budget','Budget & utilisation'],['mk-spend','Spends'],['mk-requests','Budget requests']],
   purchase: [['pu-pos','Purchase orders'],['pu-new','New PO'],['pu-req','Material requests'],
              ['pu-grn','Receipts & QC'],['pu-store','RM store'],['pu-hist','PO history']],
   acct:     [['ac-banks','Banks'],['ac-newe','New entry'],['ac-ledger','Ledger'],
@@ -4134,7 +4133,8 @@ function bar(pct){
 /* ---- SALES REPORT — distributor-wise (primary, straight from the order book) and
    ---- retailer-wise (secondary: distributor → retailer). Brand-wise CASES only, no amounts. ---- */
 let srMode = 'dist', srPeriod = 'month';
-async function openSalesRep(){
+async function openSalesRep(mode){
+  if (mode) srMode = mode;
   window.__srB = $('salesrep-body');
   srShell(window.__srB);
   show('salesrep');
@@ -4146,8 +4146,9 @@ function srShell(B){
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
       <button class="chip ${srMode==='dist'?'on':''}" id="sr-dist" onclick="srMode='dist';srReload()">🤝 Distributor-wise (primary sale)</button>
       <button class="chip ${srMode==='ret'?'on':''}" id="sr-ret" onclick="srMode='ret';srReload()">🏪 Retailer-wise (secondary sale)</button>
+      <button class="chip ${srMode==='sch'?'on':''}" id="sr-sch" onclick="srMode='sch';srReload()">🎁 Scheme master</button>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
+    <div style="display:${srMode==='sch'?'none':'flex'};gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0;">
       <button class="chip ${srPeriod==='day'?'on':''}" onclick="srPeriod='day';srReload()">Daily (today)</button>
       <button class="chip ${srPeriod==='week'?'on':''}" onclick="srPeriod='week';srReload()">This week</button>
       <button class="chip ${srPeriod==='month'?'on':''}" onclick="srPeriod='month';srReload()">This month</button>
@@ -4168,6 +4169,7 @@ function srDates(){
 async function srRender(){
   await loadMasters();
   const box = $('sr-body'); if (!box) return;
+  if (srMode === 'sch'){ window.__mkB = box; await schRenderMain(); return; }
   const [from, to] = srDates();
   const skuBy = {}; M.skus.forEach(s=>skuBy[s.id]=s);
   const brandName = bid => ((M.brands.find(b=>b.id===bid))||{}).name || '(brand removed)';
@@ -9175,6 +9177,7 @@ function isoWeekJS(){ const d=new Date(); const t=new Date(Date.UTC(d.getFullYea
 /* ---- SCHEME MASTER — announce case-slab schemes for retailer categories for a period,
    ---- and report who lifted how much, from which distributor, which brand (from secondary sales). ---- */
 let schSlabs = [];
+function schRefresh(){ srMode = 'sch'; srReload(); }
 async function schRenderMain(){
   const B = window.__mkB; if (!B) return;
   await loadMasters();
@@ -9215,7 +9218,7 @@ async function schRenderMain(){
         <td style="font-size:12px;">${s.date_from}<br>→ ${s.date_to}</td><td>${esc(bn)}</td>
         <td style="font-size:12px;">${esc(cats)}</td><td style="font-size:12px;">${esc(slabs)}</td>
         <td><span class="pill ${pill}">${state}</span></td>
-        <td style="white-space:nowrap;"><button class="mini" onclick="schReport('${s.id}')">📊 Performance</button> <button class="mini" onclick="schReimb('${s.id}')">💰 Reimbursement</button> ${canEd?`<button class="mini" onclick="schToggle('${s.id}','${s.status==='ACTIVE'?'CLOSED':'ACTIVE'}')">${s.status==='ACTIVE'?'Close':'Reopen'}</button> `:''}${dirDelBtn('sales','schemes', s.id, s.name, "mktTab('schemes')")}</td></tr>`;
+        <td style="white-space:nowrap;"><button class="mini" onclick="schReport('${s.id}')">📊 Performance</button> <button class="mini" onclick="schReimb('${s.id}')">💰 Reimbursement</button> ${canEd?`<button class="mini" onclick="schToggle('${s.id}','${s.status==='ACTIVE'?'CLOSED':'ACTIVE'}')">${s.status==='ACTIVE'?'Close':'Reopen'}</button> `:''}${dirDelBtn('sales','schemes', s.id, s.name, "schRefresh()")}</td></tr>`;
     }).join('') || '<tr><td colspan="8" style="color:#777">No schemes announced yet' + (canEd?' — announce the first one above.':'.') + '</td></tr>') + '</tbody></table></div>';
   B.innerHTML = html;
   schSlabs = []; schDrawSlabs();
@@ -9279,12 +9282,12 @@ async function schAnnounce(){
     code, name, brand_ids: brandIds, date_from: from, date_to: to,
     categories: cats, slabs: schSlabs, notes: $('sc-notes').value.trim()||null, status: 'ACTIVE', created_by: me.id });
   if (error){ say('sc-msg','Could not announce: '+error.message,false); return; }
-  mktTab('schemes');
+  schRefresh();
 }
 async function schToggle(id, status){
   const { error } = await db.schema('sales').from('schemes').update({ status }).eq('id', id);
   if (error){ alert(error.message); return; }
-  mktTab('schemes');
+  schRefresh();
 }
 let schRepMode = 'ret';
 async function schReport(id, mode){
@@ -9426,7 +9429,8 @@ async function schSummary(){
 }
 async function openMkt(){ mktTab('budget'); show('mkt'); }
 async function mktTab(t){
-  ['budget','spend','requests','schemes'].forEach(k=>$('mk-'+k).classList.toggle('on',k===t));
+  if (t === 'schemes'){ openSalesRep('sch'); return; }   // Scheme master now lives in Sales Report
+  ['budget','spend','requests'].forEach(k=>{ const c=$('mk-'+k); if (c) c.classList.toggle('on',k===t); });
   const B=$('mkt-body'); B.innerHTML='<p style="color:#777">Loading…</p>'; const S=db.schema('sales');
   if(t==='schemes'){ window.__mkB = B; await schRenderMain(); return; }
   if(t==='budget'){
