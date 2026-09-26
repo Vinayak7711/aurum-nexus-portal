@@ -4194,10 +4194,11 @@ async function srRender(){
         bump(partyOf[l.order_id], p ? (p.code+' — '+p.name) : '(party removed)', brandName((skuBy[l.sku_id]||{}).brand_id), Number(l.cases));
       }
     } else {
-      const { data: ss, error } = await db.schema('sales').from('secondary_sales').select('*').gte('sale_date', from).lte('sale_date', to);
+      const { data: ss, error } = await db.schema('sales').from('secondary_sales').select('*').gte('sale_date', from).lte('sale_date', to).order('sale_date',{ascending:false}).order('created_at',{ascending:false});
       if (error) throw error;
       const { data: rets } = await db.schema('sales').from('retailers').select('id, code, name, category');
       const retBy = {}; (rets||[]).forEach(r=>retBy[r.id]=r);
+      window.__ssRows = ss || []; window.__ssRetBy = retBy;
       for (const s of (ss||[])){
         const r = retBy[s.retailer_id];
         bump(s.retailer_id, r ? (r.code+' — '+r.name+(r.category?' · '+r.category:'')) : '(retailer removed)', brandName((skuBy[s.sku_id]||{}).brand_id), Number(s.cases));
@@ -4214,8 +4215,9 @@ async function srRender(){
         return subs.map(([b,c],i)=>`<tr>${i===0?`<td rowspan="${subs.length+1}" style="vertical-align:top;"><b>${esc(g.name)}</b></td>`:''}<td>${esc(b)}</td><td class="amount">${c}</td></tr>`).join('') +
           `<tr style="background:#faf6ea;"><td><b>Total</b></td><td class="amount"><b>${g.tot}</b></td></tr>`;
       }).join('') || `<tr><td colspan="3" style="color:#777">${srMode==='dist'?'No orders in this period.':'No secondary sales recorded in this period'+(srCanAdd()?' — record one below.':'.')}</td></tr>`) + '</tbody></table></div>';
-    if (srMode==='ret') html += srSecForm();
+    if (srMode==='ret') html += srSecEntries() + srSecForm();
     box.innerHTML = html;
+    window.__ssEditId = null;
     if (srMode==='ret' && srCanAdd()) srSecFormInit();
   } catch(e){ box.innerHTML = `<div class="msg err">Load failed: ${esc(e.message||String(e))}</div>`; }
 }
@@ -4225,15 +4227,61 @@ function srCanAdd(){
 }
 function srSecForm(){
   if (!srCanAdd()) return '';
-  return `<div class="card" style="max-width:680px;margin-top:16px;"><h3 style="font-size:15px;">Record a secondary sale (distributor → retailer)</h3>
+  return `<div class="card" id="ss-card" style="max-width:680px;margin-top:16px;"><h3 style="font-size:15px;" id="ss-title">Record a secondary sale (distributor → retailer)</h3>
     <div class="row2c" style="margin-top:8px;"><div><label>Date</label><input type="date" id="ss-date" value="${todayISO()}"></div>
       <div><label>Distributor (seller)</label><select id="ss-dist"></select></div></div>
     <div class="row2c" style="margin-top:8px;"><div><label>Retailer (buyer)</label><select id="ss-ret"></select></div>
       <div><label>Brand</label><select id="ss-brand" onchange="ssBrandPick(this.value)"></select></div></div>
     <div class="row2c" style="margin-top:8px;"><div><label>SKU (pack)</label><select id="ss-sku" disabled><option value="">— choose a brand first —</option></select></div>
       <div><label>Cases</label><input type="number" id="ss-cases" min="1" placeholder="e.g. 10"></div></div>
-    <button class="btn gold sm" style="margin-top:10px;" onclick="ssSave()">Save secondary sale</button>
+    <button class="btn gold sm" style="margin-top:10px;" id="ss-save" onclick="ssSave()">Save secondary sale</button>
+    <button class="btn ghost sm" style="margin-top:10px;display:none;" id="ss-cancel" onclick="ssEditCancel()">Cancel edit</button>
     <div id="ss-msg"></div></div>`;
+}
+// Every secondary-sale entry in the period, with edit / delete
+function ssCanChange(x){
+  const p = (me && me.permissions_json && me.permissions_json.sales) || {};
+  return isDir() || !!(p.edit || p.admin) || (!!p.add && x.created_by === me.id);
+}
+function srSecEntries(){
+  const rows = window.__ssRows || [], retBy = window.__ssRetBy || {};
+  if (!rows.length) return '';
+  const skuBy = {}; M.skus.forEach(k=>skuBy[k.id]=k);
+  const pName = id => { const p = M.parties.find(x=>x.id===id); return p ? p.code+' — '+p.name : '—'; };
+  return `<h4 class="sec" style="margin-top:16px;">Secondary sale entries — ${rows.length} in this period</h4>
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Distributor (seller)</th><th>Retailer (buyer)</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th></th></tr></thead><tbody>` +
+    rows.map(x=>{ const r = retBy[x.retailer_id], k = skuBy[x.sku_id] || {};
+      return `<tr><td>${x.sale_date}</td><td>${esc(pName(x.party_id))}</td><td>${r ? esc(r.code+' — '+r.name) : '(retailer removed)'}</td>
+        <td>${esc(((M.brands.find(b=>b.id===k.brand_id))||{}).name||'—')}</td><td>${esc(k.sku_code||'—')}</td><td class="amount"><b>${x.cases}</b></td>
+        <td style="white-space:nowrap">${ssCanChange(x) ? `<button class="mini" onclick="ssEdit('${x.id}')">Edit</button> <button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="ssDel('${x.id}')">🗑 Delete</button>` : ''}</td></tr>`; }).join('') +
+    `</tbody></table></div>`;
+}
+async function ssEdit(id){
+  const x = (window.__ssRows||[]).find(r=>r.id===id); if (!x || !$('ss-card')) return;
+  window.__ssEditId = id;
+  $('ss-date').value = x.sale_date;
+  if (x.party_id){ if (![...$('ss-dist').options].some(o=>o.value===x.party_id)){ const p = M.parties.find(q=>q.id===x.party_id); $('ss-dist').insertAdjacentHTML('beforeend', `<option value="${x.party_id}">${esc(p?p.code+' — '+p.name:'(distributor)')}</option>`); } $('ss-dist').value = x.party_id; }
+  if (![...$('ss-ret').options].some(o=>o.value===x.retailer_id)){ const r = (window.__ssRetBy||{})[x.retailer_id]; $('ss-ret').insertAdjacentHTML('beforeend', `<option value="${x.retailer_id}">${esc(r?r.code+' — '+r.name:'(retailer)')}</option>`); }
+  $('ss-ret').value = x.retailer_id;
+  const k = M.skus.find(q=>q.id===x.sku_id);
+  if (k){ $('ss-brand').value = k.brand_id; ssBrandPick(k.brand_id);
+    if (![...$('ss-sku').options].some(o=>o.value===k.id)) $('ss-sku').insertAdjacentHTML('beforeend', `<option value="${k.id}">${esc(k.sku_code)}</option>`);
+    $('ss-sku').value = k.id; }
+  $('ss-cases').value = x.cases;
+  $('ss-title').textContent = 'Edit secondary sale — ' + x.sale_date;
+  $('ss-save').textContent = 'Update secondary sale'; $('ss-cancel').style.display = '';
+  $('ss-card').style.border = '1px solid #b8860b';
+  say('ss-msg','');
+  $('ss-card').scrollIntoView({behavior:'smooth', block:'center'});
+}
+function ssEditCancel(){ window.__ssEditId = null; srReload(); }
+async function ssDel(id){
+  const x = (window.__ssRows||[]).find(r=>r.id===id); if (!x) return;
+  const r = (window.__ssRetBy||{})[x.retailer_id], k = M.skus.find(q=>q.id===x.sku_id);
+  if (!confirm(`Delete this secondary sale?\n\n${x.sale_date} · ${r?r.name:'retailer'} · ${k?k.sku_code:''} · ${x.cases} cases\n\nThis cannot be undone.`)) return;
+  const { error } = await db.schema('sales').from('secondary_sales').delete().eq('id', id);
+  if (error){ alert('Could not delete: ' + error.message); return; }
+  srReload();
 }
 async function srSecFormInit(){
   const dists = M.parties.filter(p=>p.is_active && (p.party_type||'DISTRIBUTOR')==='DISTRIBUTOR');
@@ -4254,10 +4302,12 @@ async function ssSave(){
   if (!retId){ say('ss-msg','Choose the retailer.',false); return; }
   if (!skuId){ say('ss-msg','Choose the brand and its SKU.',false); return; }
   if (!(cases > 0)){ say('ss-msg','Enter the number of cases.',false); return; }
-  const { error } = await db.schema('sales').from('secondary_sales').insert({
-    sale_date: $('ss-date').value || todayISO(), party_id: $('ss-dist').value || null,
-    retailer_id: retId, sku_id: skuId, cases, created_by: me.id });
+  const row = { sale_date: $('ss-date').value || todayISO(), party_id: $('ss-dist').value || null, retailer_id: retId, sku_id: skuId, cases };
+  const { error } = window.__ssEditId
+    ? await db.schema('sales').from('secondary_sales').update(row).eq('id', window.__ssEditId)
+    : await db.schema('sales').from('secondary_sales').insert(Object.assign(row, { created_by: me.id }));
   if (error){ say('ss-msg','Could not save: '+error.message,false); return; }
+  window.__ssEditId = null;
   srReload();
 }
 async function openReports(){
