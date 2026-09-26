@@ -535,11 +535,9 @@
   <section id="view-rates" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Rates, Cost Card &amp; Outstanding</h2>
-      <p>Director-only. Billing rates are effective-dated — a change is a new row, history stays.</p></div>
+      <p>Director-only. Distributor outstanding and the MMC accounts.</p></div>
     <div class="subtabs">
-      <button class="chip on" id="rt-rates" onclick="ratesTab('rates')">Billing rates</button>
-      <button class="chip" id="rt-struct" onclick="ratesTab('struct')">Duty structure (MH)</button>
-      <button class="chip" id="rt-out" onclick="ratesTab('out')">Outstanding</button>
+      <button class="chip on" id="rt-out" onclick="ratesTab('out')">Outstanding</button>
       <button class="chip" id="rt-cm" onclick="ratesTab('cm')">MMC accounts</button>
     </div>
     <div id="rates-body"></div>
@@ -743,7 +741,7 @@ const SECTIONS = {
              ['ac-tax','Purchase tax'],['ac-vdues','Vendor dues'],['ac-recv','Distributor dues'],
              ['ac-exp','Expenses'],['ac-salary','Salary'],
              ['ac-adv','Advances'],['ac-assets','Assets']],
-  rates:    [['rt-rates','Billing rates'],['rt-struct','Duty structure'],['rt-out','Outstanding'],['rt-cm','MMC accounts']],
+  rates:    [['rt-out','Outstanding'],['rt-cm','MMC accounts']],
 };
 // view id -> module key, so sections can be applied whenever a screen opens
 const VIEW_MOD = { parties:'party', reports:'reports', salesrep:'salesrep', mfg:'mfg',
@@ -774,7 +772,7 @@ function secAnyExplicit(modKey){
   return list.some(([id]) => secExplicit(modKey, id));
 }
 // Tabs that are Director-only by default (shown unticked for staff until the Director ticks them).
-const DIR_ONLY_TABS = ['kt-all','fld-salesmen','fld-creds','rt-rates','rt-struct','rt-out','rt-cm'];
+const DIR_ONLY_TABS = ['kt-all','fld-salesmen','fld-creds','rt-out','rt-cm'];
 let __secBusy = false;
 function applySections(modKey){
   const list = SECTIONS[modKey];
@@ -2237,9 +2235,10 @@ $('btn-save-sku').onclick = async () => {
 };
 
 /* ================= RATES / STRUCTURE / OUTSTANDING / CM ================= */
-async function openRates(){ await loadMasters(); ratesTab('rates'); show('rates'); }
+async function openRates(){ await loadMasters(); ratesTab('out'); show('rates'); }
 async function ratesTab(which){
-  ['rates','struct','out','cm'].forEach(k => $('rt-'+k).classList.toggle('on', k===which));
+  if (which !== 'out' && which !== 'cm') which = 'out';   // Billing rates & Duty structure tabs removed
+  ['out','cm'].forEach(k => { const c = $('rt-'+k); if (c) c.classList.toggle('on', k===which); });
   const B = $('rates-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
   const S = db.schema('sales');
   if (which === 'rates'){
