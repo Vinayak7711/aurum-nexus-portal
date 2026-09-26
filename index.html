@@ -1636,7 +1636,7 @@ async function openOrderDetail(id){
     if ($('od-balance') && bd){
       $('od-balance').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
         <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #c9a227;"><div style="font-size:11px;color:#777">Basic — distributor pays MMC, MMC pays Aurum · ${bd.credit} days credit</div>
-          <div>Basic ₹ ${inr(bd.basic)}${bd.basicMmc?' − paid to MMC ₹ '+inr(bd.basicMmc):''}${bd.basicDirect?' − paid direct to Aurum ₹ '+inr(bd.basicDirect):''}${bd.disc?' − cash discount ₹ '+inr(bd.disc):''} = <b style="color:${bd.basicLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.basicLeft)}</b></div>
+          <div>Basic ₹ ${inr(bd.basic)}${bd.basicMmc?' − paid to MMC ₹ '+inr(bd.basicMmc):''}${bd.basicDirect?' − paid direct to Aurum ₹ '+inr(bd.basicDirect):''}${bd.disc?' − cash discount ₹ '+inr(bd.disc):''}${bd.otherDisc?' − other discount ₹ '+inr(bd.otherDisc):''}${bd.scheme?' − scheme ₹ '+inr(bd.scheme):''} = <b style="color:${bd.basicLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.basicLeft)}</b></div>
           <div style="font-size:11.5px;color:${bd.basicOver?'#b3261e':'#555'}">Due by <b>${bd.basicDue}</b>${bd.provisional?' (from approval date — reset on dispatch)':''}${bd.basicOver?' · overdue '+bd.basicLate+' days':''}</div>
           ${bd.discNow>0.005?`<div style="font-size:11.5px;color:#0b57d0">Early payment: ${bd.pct}% cash discount if paid by ${bd.discUntil} → pay ₹ ${inr(bd.basicLeft-bd.discNow)} to settle</div>`:''}</div>
         <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #1a7f37;"><div style="font-size:11px;color:#777">VAT — paid by the distributor to MMC</div>
@@ -1714,7 +1714,7 @@ function daysBetweenStr(a, b){ return Math.round((new Date(b+'T00:00:00') - new 
 function saleDateOf(o){ return o.dispatched_at ? String(o.dispatched_at).slice(0,10) : (o.approved_at ? String(o.approved_at).slice(0,10) : o.order_date); }
 function discSlab(days, slabs){ let best = null; (slabs||[]).forEach(s=>{ if (days <= Number(s.paid_within_days) && (!best || Number(s.pct) > Number(best.pct))) best = s; }); return best; }
 function payModeLabel(m){
-  return m==='EXCISE_MMC' ? '🏭 Excise &amp; wine fees → MMC excise a/c' : m==='VAT_MMC' ? '🧾 VAT → paid to MMC' : m==='CASH_DISC' ? '🏷 Cash discount (early payment)' : m==='BASIC_MMC' ? '💼 Basic → paid to MMC (for Aurum)' : 'Basic paid direct to Aurum · ' + esc(m||'');
+  return m==='EXCISE_MMC' ? '🏭 Excise &amp; wine fees → MMC excise a/c' : m==='VAT_MMC' ? '🧾 VAT → paid to MMC' : m==='CASH_DISC' ? '🏷 Cash discount (early payment)' : m==='BASIC_MMC' ? '💼 Basic → paid to MMC (for Aurum)' : m==='OTHER_DISC' ? '🏷 Other discount' : m==='SCHEME' ? '🎁 Scheme' : 'Basic paid direct to Aurum · ' + esc(m||'');
 }
 function odPayKind(){
   const k = $('pay-kind').value, bd = window.__odPayBd;
@@ -1728,19 +1728,20 @@ function orderTerms(o, T, pays, PT, partyCredit){
   const sum = f => (pays||[]).filter(f).reduce((s,p)=>s+Number(p.amount),0);
   const levyPaid = sum(p=>p.mode==='EXCISE_MMC'), vatPaid = sum(p=>p.mode==='VAT_MMC'), disc = sum(p=>p.mode==='CASH_DISC');
   const basicMmc = sum(p=>p.mode==='BASIC_MMC');
-  const basicDirect = sum(p=>!['EXCISE_MMC','VAT_MMC','CASH_DISC','BASIC_MMC'].includes(p.mode));
+  const otherDisc = sum(p=>p.mode==='OTHER_DISC'), scheme = sum(p=>p.mode==='SCHEME');
+  const basicDirect = sum(p=>!['EXCISE_MMC','VAT_MMC','CASH_DISC','BASIC_MMC','OTHER_DISC','SCHEME'].includes(p.mode));
   const basicRecv = basicMmc + basicDirect;
   const sale = saleDateOf(o), provisional = !o.dispatched_at, today = ymdStr(new Date());
   const credit = Number(partyCredit) > 0 ? Number(partyCredit) : PT.credit;
   const basicDue = addDaysStr(sale, credit), vatDue = vatDueStr(sale, PT.vatDay);
   const basic = Number(T.basic||0), vat = Number(T.vat||0), exc = Number(T.exc||0), wine = Number(T.wine||0);
-  const levyLeft = Math.max(0, exc + wine - levyPaid), vatLeft = vat - vatPaid, basicLeft = basic - basicRecv - disc;
+  const levyLeft = Math.max(0, exc + wine - levyPaid), vatLeft = vat - vatPaid, basicLeft = basic - basicRecv - disc - otherDisc - scheme;
   const days = Math.max(0, daysBetweenStr(sale, today));
   const slab = basicLeft > 0.005 ? discSlab(days, PT.slabs) : null;
   const pct = slab ? Number(slab.pct) : 0, discNow = slab ? Math.round(basicLeft * pct) / 100 : 0;
   const discUntil = slab ? addDaysStr(sale, slab.paid_within_days) : '';
   const basicOver = basicLeft > 0.005 && today > basicDue, vatOver = vatLeft > 0.005 && today > vatDue;
-  return { sale, provisional, credit, basicDue, vatDue, basic, vat, exc, wine, levyPaid, vatPaid, disc, basicRecv, basicMmc, basicDirect,
+  return { sale, provisional, credit, basicDue, vatDue, basic, vat, exc, wine, levyPaid, vatPaid, disc, otherDisc, scheme, basicRecv, basicMmc, basicDirect,
            levyLeft, vatLeft, basicLeft, days, pct, discNow, discUntil, basicOver, vatOver,
            basicLate: basicOver ? daysBetweenStr(basicDue, today) : 0, balance: basicLeft + vatLeft + levyLeft };
 }
@@ -1798,6 +1799,8 @@ async function orderReport(id){
       ${bd.basicMmc ? `<tr><td>Less: basic paid to MMC</td><td class="amount">− ${inr(bd.basicMmc)}</td></tr>` : ''}
       ${bd.basicDirect ? `<tr><td>Less: basic paid directly to Aurum</td><td class="amount">− ${inr(bd.basicDirect)}</td></tr>` : ''}
       ${bd.disc ? `<tr><td>Less: cash discount for early payment</td><td class="amount">− ${inr(bd.disc)}</td></tr>` : ''}
+      ${bd.otherDisc ? `<tr><td>Less: other discount</td><td class="amount">− ${inr(bd.otherDisc)}</td></tr>` : ''}
+      ${bd.scheme ? `<tr><td>Less: scheme</td><td class="amount">− ${inr(bd.scheme)}</td></tr>` : ''}
       <tr style="font-weight:700;"><td>Basic balance · due by ${bd.basicDue}</td><td class="amount">${inr(bd.basicLeft)}</td></tr>
       ${bd.discNow>0.005 ? `<tr><td colspan="2" style="font-size:11px;">Early payment: ${bd.pct}% cash discount if paid by ${bd.discUntil} — pay ₹ ${inr(bd.basicLeft-bd.discNow)} to settle.</td></tr>` : ''}
       <tr style="background:#f7f3e8;"><td colspan="2"><b>VAT — payable by the distributor to MMC</b> · due ${bd.vatDue} (19th of the month after the sale)</td></tr>
@@ -2311,12 +2314,13 @@ async function mmcAccounts(B){
   vals.forEach(v=>{ const a = agg[lineOrder[v.line_id]]; if (!a) return;
     a.T.basic += Number(v.basic_amount ?? v.amount ?? 0); a.T.exc += Number(v.excise_amount||0); a.T.wine += Number(v.wine_fee_amount||0); a.T.vat += Number(v.vat_amount||0); a.T.total += Number(v.amount||0); });
   pays.forEach(p=>{ const a = agg[p.order_id]; if (a) a.pays.push(p); });
-  const K = ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','vatPaid','vatLeft','basicRecv','basicMmc','basicDirect','disc','basicLeft','basicOverdue','vatOverdue'];
+  const K = ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','vatPaid','vatLeft','basicRecv','basicMmc','basicDirect','disc','otherDisc','scheme','basicLeft','basicOverdue','vatOverdue'];
   let rows = Object.values(agg).map(a=>{
     const t = orderTerms(a.o, a.T, a.pays, PT, a.o.party?.credit_days);
     return Object.assign(a, t, { total: a.T.total, basicOverdue: t.basicOver ? t.basicLeft : 0, vatOverdue: t.vatOver ? t.vatLeft : 0 });
   });
   const parties = [...new Map(rows.map(a=>[a.o.party_id, a.o.party])).entries()].sort((x,y)=>String(x[1]?.name).localeCompare(String(y[1]?.name)));
+  window.__mmcAllRows = rows;
   if (window.mmcParty) rows = rows.filter(a=>a.o.party_id===window.mmcParty);
   const sumK = list => list.reduce((t,a)=>{ K.forEach(k=>t[k]=(t[k]||0)+Number(a[k]||0)); return t; }, {});
   const T = sumK(rows);
@@ -2329,13 +2333,13 @@ async function mmcAccounts(B){
   const canTerms = isDir() || !!(me?.permissions_json?.sales?.admin);
   // MMC net due (all dates) — ONLY the basic MMC received from distributors (after cash discount) less what MMC has paid Aurum.
   // Deliberately not linked to any other MMC account (our deposits / MMC's vendor payments).
-  const MM = { collected:0, paidAurum:0, disc:0 };
+  const MM = { collected:0, paidAurum:0, disc:0, otherDisc:0, scheme:0 };
   try { const [{ data: ml }, { data: dl }] = await Promise.all([
       db.schema('acct').from('v_mmc_ledger').select('kind, amount, status').in('kind', ['DIST_BASIC','MMC_PAID_AURUM']),
-      S.from('payments').select('amount, order_id').eq('mode', 'CASH_DISC') ]);
+      S.from('payments').select('amount, mode').in('mode', ['CASH_DISC','OTHER_DISC','SCHEME']) ]);
     (ml||[]).filter(r=>r.status!=='REJECTED').forEach(r=>{ const a = Number(r.amount);
       if (r.kind==='DIST_BASIC') MM.collected += a; else if (r.kind==='MMC_PAID_AURUM') MM.paidAurum += a; });
-    MM.disc = (dl||[]).reduce((t,r)=>t+Number(r.amount||0),0); } catch(e){}
+    (dl||[]).forEach(r=>{ const a = Number(r.amount||0); if (r.mode==='CASH_DISC') MM.disc += a; else if (r.mode==='OTHER_DISC') MM.otherDisc += a; else MM.scheme += a; }); } catch(e){}
   MM.net = MM.collected - MM.paidAurum;
   window.__mmcAcctMM = MM;
   const tile = (l, v, c, sub) => `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">${l}</div><div style="font-size:16px;font-weight:700;${c?'color:'+c:''}">₹ ${inr(v||0)}</div>${sub?`<div style="font-size:10.5px;color:#777">${sub}</div>`:''}</div>`;
@@ -2377,14 +2381,14 @@ async function mmcAccounts(B){
     </div>
     <h4 class="sec" style="margin:10px 0 6px;">Basic — distributor pays MMC</h4>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-      ${tile('Basic billed', T.basic)}${tile('Basic paid by distributors to MMC', T.basicMmc, '#0b57d0', T.basicDirect?'+ ₹ '+inr(T.basicDirect)+' paid direct to Aurum':'')}${tile('Cash discount allowed', T.disc, '#7a5c10')}${tile('Basic still due from distributors', T.basicLeft, red(T.basicLeft))}${tile('Basic overdue (past credit)', T.basicOverdue, T.basicOverdue>0.005?'#b3261e':'#777')}
+      ${tile('Basic billed', T.basic)}${tile('Basic paid by distributors to MMC', T.basicMmc, '#0b57d0', T.basicDirect?'+ ₹ '+inr(T.basicDirect)+' paid direct to Aurum':'')}${tile('Discounts &amp; schemes allowed', T.disc + T.otherDisc + T.scheme, '#7a5c10', (T.disc||T.otherDisc||T.scheme)?`cash ₹ ${inr(T.disc)} · other ₹ ${inr(T.otherDisc)} · scheme ₹ ${inr(T.scheme)}`:'')}${tile('Basic still due from distributors', T.basicLeft, red(T.basicLeft))}${tile('Basic overdue (past credit)', T.basicOverdue, T.basicOverdue>0.005?'#b3261e':'#777')}
     </div>
     <h4 class="sec" style="margin:10px 0 6px;">MMC net due — basic received from distributors <span style="font-weight:400;font-size:11.5px;color:#777">(all dates)</span></h4>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-      ${tile('Basic received by MMC from distributors (after cash discount)', MM.collected, '#0b57d0', MM.disc?'cash discount allowed ₹ '+inr(MM.disc):'')}${tile('Less: paid by MMC to Aurum', MM.paidAurum, '#1a7f37')}
+      ${tile('Basic received by MMC from distributors (after discounts &amp; schemes)', MM.collected, '#0b57d0', [MM.disc?'cash disc ₹ '+inr(MM.disc):'', MM.otherDisc?'other disc ₹ '+inr(MM.otherDisc):'', MM.scheme?'scheme ₹ '+inr(MM.scheme):''].filter(Boolean).join(' · '))}${tile('Less: paid by MMC to Aurum', MM.paidAurum, '#1a7f37')}
       <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border:2px solid #c9a227;"><div style="font-size:11px;color:#777">Net due from MMC</div><div style="font-size:18px;font-weight:700;color:${red(MM.net)}">₹ ${inr(MM.net)}</div></div>
     </div>
-    <div style="margin:0 0 12px;"><button class="btn gold sm" onclick="(async()=>{await openAcct();await acNewGo('mmcr');})()">➕ Record payment received from MMC</button> <button class="btn ghost sm" onclick="(async()=>{await openAcct();window.acLedType='M:';window.acLedSel='M:MMC';await acctTab('ledger');})()">📖 MMC ledger</button>
+    <div style="margin:0 0 12px;">${(isDir()||canFinEdit())?`<button class="btn gold sm" onclick="mmcRcptOpen()">➕ Distributor paid MMC (basic)</button> `:''}<button class="btn ghost sm" onclick="(async()=>{await openAcct();await acNewGo('mmcr');})()">➕ Record payment received from MMC</button> <button class="btn ghost sm" onclick="(async()=>{await openAcct();window.acLedType='M:';window.acLedSel='M:MMC';await acctTab('ledger');})()">📖 MMC ledger</button>
       <span style="font-size:11.5px;color:#777;margin-left:6px;">Net due from MMC = basic the distributors paid MMC (after cash discount) − what MMC has paid Aurum. Kept on its own — not added to or deducted from any other MMC account.</span></div>
     <h4 class="sec">Distributor-wise</h4>
     <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Bills</th><th class="amount">Cases</th><th class="amount">Basic ₹</th><th class="amount">Excise ₹</th><th class="amount">Wine fees ₹</th><th class="amount">VAT ₹</th><th class="amount">Total ₹</th><th class="amount">Excise+wine paid to MMC ₹</th><th class="amount">VAT paid to MMC ₹</th><th class="amount">VAT due to MMC ₹</th><th class="amount">Basic paid to MMC ₹</th><th class="amount">Cash disc. ₹</th><th class="amount">Basic balance ₹</th><th class="amount">Basic overdue ₹</th></tr></thead><tbody>
@@ -2398,7 +2402,7 @@ async function mmcAccounts(B){
       <td class="amount">${a.cases}</td><td class="amount">${inr(a.basic)}</td><td class="amount">${inr(a.exc)}</td><td class="amount">${inr(a.wine)}</td><td class="amount">${inr(a.vat)}</td><td class="amount" style="font-weight:600">${inr(a.total)}</td>
       <td class="amount" style="color:#0b57d0">${inr(a.levyPaid)}${a.levyLeft>0.005?'<br><span style="font-size:10.5px;color:#b3261e">short ₹ '+inr(a.levyLeft)+'</span>':''}${a.o.excise_paid_ref?'<br><span style="font-size:10.5px;color:#777">ref '+esc(a.o.excise_paid_ref)+'</span>':''}</td>
       <td style="font-size:12px;white-space:nowrap;">${a.vatPaid?'paid ₹ '+inr(a.vatPaid)+'<br>':''}<b style="color:${red(a.vatLeft)}">due ₹ ${inr(a.vatLeft)}</b><br><span style="color:${a.vatOver?'#b3261e':'#777'}">by ${a.vatDue}${a.vatOver?' · overdue':''}</span></td>
-      <td style="font-size:12px;white-space:nowrap;">${a.basicMmc?'paid to MMC ₹ '+inr(a.basicMmc)+'<br>':''}${a.basicDirect?'direct to Aurum ₹ '+inr(a.basicDirect)+'<br>':''}${a.disc?'disc ₹ '+inr(a.disc)+'<br>':''}<b style="color:${red(a.basicLeft)}">bal ₹ ${inr(a.basicLeft)}</b><br><span style="color:${a.basicOver?'#b3261e':'#777'}">by ${a.basicDue}${a.basicOver?' · '+a.basicLate+' days late':''}</span></td>
+      <td style="font-size:12px;white-space:nowrap;">${a.basicMmc?'paid to MMC ₹ '+inr(a.basicMmc)+'<br>':''}${a.basicDirect?'direct to Aurum ₹ '+inr(a.basicDirect)+'<br>':''}${a.disc?'disc ₹ '+inr(a.disc)+'<br>':''}${(a.otherDisc||a.scheme)?'other disc / scheme ₹ '+inr(a.otherDisc+a.scheme)+'<br>':''}<b style="color:${red(a.basicLeft)}">bal ₹ ${inr(a.basicLeft)}</b><br><span style="color:${a.basicOver?'#b3261e':'#777'}">by ${a.basicDue}${a.basicOver?' · '+a.basicLate+' days late':''}</span>${a.basicLeft>0.005&&(isDir()||canFinEdit())?`<br><button class="mini" style="margin-top:4px;" onclick="mmcRcptOpen('${a.o.id}')">➕ Receive</button>`:''}</td>
       <td style="font-size:12px;">${a.discNow>0.005?`<span style="color:#0b57d0">${a.pct}% till ${a.discUntil}</span><br>pay ₹ ${inr(a.basicLeft-a.discNow)} (save ₹ ${inr(a.discNow)})`:(a.basicLeft>0.005?'<span style="color:#777">—</span>':'<span style="color:#1a7f37">settled</span>')}</td></tr>`).join('') || '<tr><td colspan="14" style="color:#777">No approved orders in this selection.</td></tr>'}
     ${rows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${T.cases}</td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td><td class="amount">${inr(T.levyPaid)}</td><td style="font-size:12px;">due ₹ ${inr(T.vatLeft)}</td><td style="font-size:12px;">bal ₹ ${inr(T.basicLeft)}</td><td></td></tr>`:''}
     </tbody></table></div>
@@ -2407,6 +2411,96 @@ async function mmcAccounts(B){
     ${Object.values(byM).sort((x,y)=>y.m.localeCompare(x.m)).map(m=>`<tr><td>${new Date(m.m+'-01T00:00:00').toLocaleDateString('en-IN',{month:'long',year:'numeric'})}</td><td class="amount">${m.bills}</td><td class="amount">${inr(m.vat)}</td><td class="amount" style="color:#0b57d0">${inr(m.paid)}</td><td class="amount" style="font-weight:700;color:${red(m.left)}">${inr(m.left)}</td><td style="color:${m.left>0.005&&today>m.due?'#b3261e':'inherit'}">${m.due}${m.left>0.005&&today>m.due?' · overdue':''}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">No approved orders in this selection.</td></tr>'}
     </tbody></table></div>
     <p style="font-size:11px;color:#777;margin-top:8px;">Record money on the order itself (open the bill → Payments): choose <b>Basic → paid to MMC</b>, <b>VAT → paid to MMC</b> or <b>Excise &amp; wine fees balance</b>. All of them are posted to the MMC ledger in Accounting; the cash discount is applied automatically on early basic payments. When MMC pays us, record it with <b>Record payment received from MMC</b> — it posts the bank receipt and reduces what MMC holds for us.</p>`;
+}
+/* ---- Distributor paid the basic to MMC: deductions (cash discount, other discount, scheme) + net received + payment details ---- */
+function mmcRcptOpen(orderId){
+  const all = (window.__mmcAllRows || []).filter(a=>a.basicLeft > 0.005);
+  if (!all.length){ alert('No approved bill has basic still due from a distributor.'); return; }
+  const pre = orderId ? all.find(a=>a.o.id===orderId) : null;
+  const parties = [...new Map(all.map(a=>[a.o.party_id, a.o.party])).entries()];
+  const partySel = pre ? pre.o.party_id : (window.mmcParty && parties.some(p=>p[0]===window.mmcParty) ? window.mmcParty : parties[0][0]);
+  const today = calFmt(new Date());
+  apprModal('Distributor paid MMC — basic', `
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">Record the basic a distributor has paid to MMC for Aurum. Deduct the cash discount, any other discount and scheme; the rest is the payment MMC received.</p>
+    <div class="row2c"><div><label>Distributor *</label><select id="mr-party" onchange="mmcRcptBills()">${parties.map(([id,p])=>`<option value="${id}"${id===partySel?' selected':''}>${esc(p?.name||'')} (${esc(p?.code||'')})</option>`).join('')}</select></div>
+      <div><label>Bill (sales order) *</label><select id="mr-order" onchange="mmcRcptCalc(true)"></select></div></div>
+    <div id="mr-info" style="font-size:12px;background:#faf6ea;border-radius:8px;padding:8px 10px;margin:8px 0;"></div>
+    <h4 class="sec" style="margin:8px 0 4px;">Deductions</h4>
+    <div class="row2c"><div><label>Cash discount %</label><input type="number" id="mr-cdpct" min="0" step="any" oninput="mmcRcptPct()"></div>
+      <div><label>Cash discount ₹</label><input type="number" id="mr-cd" min="0" step="any" oninput="mmcRcptCalc()"></div></div>
+    <div class="row2c" style="margin-top:6px;"><div><label>Other discount ₹</label><input type="number" id="mr-od" min="0" step="any" oninput="mmcRcptCalc()"></div>
+      <div><label>Other discount — reason</label><input type="text" id="mr-odn" placeholder="e.g. rate difference, breakage"></div></div>
+    <div class="row2c" style="margin-top:6px;"><div><label>Scheme ₹</label><input type="number" id="mr-sc" min="0" step="any" oninput="mmcRcptCalc()"></div>
+      <div><label>Scheme name / details</label><input type="text" id="mr-scn" placeholder="e.g. Diwali scheme ₹50/case"></div></div>
+    <div id="mr-net" style="font-size:12.5px;margin:8px 0;"></div>
+    <h4 class="sec" style="margin:8px 0 4px;">Payment received by MMC</h4>
+    <div class="row2c"><div><label>Amount received ₹ *</label><input type="number" id="mr-amt" min="0" step="any" oninput="mmcRcptCalc()"></div>
+      <div><label>Received on *</label><input type="date" id="mr-date" value="${today}" onchange="mmcRcptCalc(true)"></div></div>
+    <div class="row2c" style="margin-top:6px;"><div><label>Paid by *</label><select id="mr-via" onchange="mmcRcptVia()"><option value="CHEQUE">Cheque</option><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CASH">Cash</option><option value="OTHER">Other</option></select></div>
+      <div><label id="mr-ref-lbl">Cheque no. *</label><input type="text" id="mr-ref"></div></div>
+    <div class="row2c" style="margin-top:6px;"><div id="mr-cdate-wrap"><label>Cheque date</label><input type="date" id="mr-cdate" value="${today}"></div>
+      <div><label>Bank (drawn on / paid from)</label><input type="text" id="mr-bank" placeholder="e.g. HDFC Bank, Nashik"></div></div>
+    <label style="margin-top:6px;">Remarks</label><input type="text" id="mr-note" placeholder="Any note">
+    <div id="mr-bal" style="font-size:12.5px;margin:8px 0;"></div>
+    <button class="btn gold sm" id="mr-save" onclick="mmcRcptSave()">Save receipt</button>
+    <div id="mr-msg" style="font-size:12px;margin-top:6px;"></div>`);
+  const box = document.querySelector('#appr-modal > div'); if (box) box.style.maxWidth = '720px';
+  mmcRcptBills(pre ? pre.o.id : null); mmcRcptVia();
+}
+function mmcRcptBills(orderId){
+  const pid = $('mr-party').value;
+  const bills = (window.__mmcAllRows || []).filter(a=>a.o.party_id===pid && a.basicLeft > 0.005).sort((x,y)=>x.sale.localeCompare(y.sale));
+  $('mr-order').innerHTML = bills.map(a=>`<option value="${a.o.id}"${a.o.id===orderId?' selected':''}>${esc(a.o.so_no)} · sale ${a.sale} · basic due ₹ ${inr(a.basicLeft)}</option>`).join('');
+  mmcRcptCalc(true);
+}
+function mmcRcptBill(){ return (window.__mmcAllRows || []).find(a=>a.o.id===$('mr-order').value); }
+function mmcRcptVia(){
+  const v = $('mr-via').value;
+  $('mr-ref-lbl').textContent = v==='CHEQUE' ? 'Cheque no. *' : v==='CASH' ? 'Receipt no. (optional)' : v==='UPI' ? 'UPI ref no. *' : v==='OTHER' ? 'Reference no. *' : 'UTR no. *';
+  $('mr-cdate-wrap').style.visibility = v==='CHEQUE' ? 'visible' : 'hidden';
+}
+function mmcRcptPct(){ const a = mmcRcptBill(); if (!a) return; const pct = Number($('mr-cdpct').value)||0; $('mr-cd').value = pct ? (Math.round(a.basicLeft * pct) / 100).toFixed(2) : ''; mmcRcptCalc(); }
+function mmcRcptCalc(reset){
+  const a = mmcRcptBill(); if (!a) return;
+  const PT = window.__payTerms || { slabs: [] };
+  const payDate = $('mr-date').value || calFmt(new Date());
+  const days = Math.max(0, daysBetweenStr(a.sale, payDate));
+  const slab = discSlab(days, PT.slabs);
+  if (reset){
+    $('mr-cdpct').value = slab ? Number(slab.pct) : '';
+    $('mr-cd').value = slab ? (Math.round(a.basicLeft * Number(slab.pct)) / 100).toFixed(2) : '';
+  }
+  $('mr-info').innerHTML = `<b>${esc(a.o.so_no)}</b> · ${esc(a.o.party?.name||'')} · sale ${a.sale}${a.provisional?' (approval date)':''} · credit till <b>${a.basicDue}</b><br>
+    Basic billed ₹ ${inr(a.basic)}${(a.basicRecv+a.disc+a.otherDisc+a.scheme)>0.005?' · already settled ₹ '+inr(a.basicRecv+a.disc+a.otherDisc+a.scheme):''} · <b>basic still due ₹ ${inr(a.basicLeft)}</b><br>
+    Paid ${days} day(s) after the sale → ${slab ? `<span style="color:#0b57d0">cash discount slab ${Number(slab.pct)}% (within ${slab.paid_within_days} days)</span>` : '<span style="color:#777">no cash-discount slab applies</span>'}`;
+  const cd = Number($('mr-cd').value)||0, od = Number($('mr-od').value)||0, sc = Number($('mr-sc').value)||0;
+  const net = a.basicLeft - cd - od - sc;
+  $('mr-net').innerHTML = `Basic due ₹ ${inr(a.basicLeft)} − cash discount ₹ ${inr(cd)} − other discount ₹ ${inr(od)} − scheme ₹ ${inr(sc)} = <b>net payable ₹ ${inr(net)}</b>`;
+  if (document.activeElement === $('mr-amt') && !reset) $('mr-amt').dataset.auto = '0';
+  else if (reset || $('mr-amt').dataset.auto !== '0') { $('mr-amt').value = net > 0 ? net.toFixed(2) : '0'; $('mr-amt').dataset.auto = '1'; }
+  const amt = Number($('mr-amt').value)||0, bal = net - amt;
+  $('mr-bal').innerHTML = `Received ₹ ${inr(amt)} · <b style="color:${bal>0.005?'#b3261e':bal<-0.5?'#b3261e':'#1a7f37'}">${bal<-0.5?'more than the net payable by ₹ '+inr(-bal):bal>0.005?'basic still due after this receipt ₹ '+inr(bal):'bill fully settled'}</b>`;
+}
+async function mmcRcptSave(){
+  const a = mmcRcptBill(); if (!a){ say('mr-msg','Choose the bill.',false); return; }
+  const amt = Number($('mr-amt').value)||0, cd = Number($('mr-cd').value)||0, od = Number($('mr-od').value)||0, sc = Number($('mr-sc').value)||0;
+  if (amt + cd + od + sc <= 0){ say('mr-msg','Enter the amount received and / or the deductions.',false); return; }
+  if (amt + cd + od + sc > a.basicLeft + 0.5){ say('mr-msg','Received + deductions is more than the basic still due (₹ '+inr(a.basicLeft)+').',false); return; }
+  const via = $('mr-via').value, ref = $('mr-ref').value.trim();
+  if (amt > 0 && via !== 'CASH' && !ref){ say('mr-msg', via==='CHEQUE' ? 'Enter the cheque number.' : 'Enter the UTR / reference number.', false); return; }
+  if (od > 0 && !$('mr-odn').value.trim()){ say('mr-msg','Say what the other discount is for.',false); return; }
+  if (sc > 0 && !$('mr-scn').value.trim()){ say('mr-msg','Enter the scheme name / details.',false); return; }
+  $('mr-save').disabled = true;
+  const { data, error } = await db.schema('sales').rpc('record_mmc_basic_receipt', {
+    p_order: a.o.id, p_received: amt, p_cash_disc: cd, p_other_disc: od, p_scheme: sc,
+    p_other_note: $('mr-odn').value.trim()||null, p_scheme_note: $('mr-scn').value.trim()||null,
+    p_via: via, p_ref: ref||null, p_date: $('mr-date').value||null, p_cheque_date: via==='CHEQUE' ? ($('mr-cdate').value||null) : null,
+    p_bank: $('mr-bank').value.trim()||null, p_note: $('mr-note').value.trim()||null });
+  if ($('mr-save')) $('mr-save').disabled = false;
+  if (error){ say('mr-msg', error.message, false); return; }
+  apprModalClose();
+  await ratesTab('cm');
+  alert(`Saved — ${a.o.so_no}: received ₹ ${inr(amt)} by MMC, deductions ₹ ${inr(cd+od+sc)}. Basic still due on this bill: ₹ ${inr(data && data.basic_left != null ? data.basic_left : 0)}.`);
 }
 async function mmcTermsSave(){
   const c = Number($('mt-credit').value), d = Number($('mt-vatday').value);
