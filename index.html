@@ -4201,6 +4201,7 @@ async function srRender(){
       const { data: rets } = await db.schema('sales').from('retailers').select('id, code, name, category');
       const retBy = {}; (rets||[]).forEach(r=>retBy[r.id]=r);
       window.__ssRows = ss || []; window.__ssRetBy = retBy;
+      try { const { data: sch } = await db.schema('sales').from('schemes').select('id, code, name, date_from, date_to, status, slabs').order('date_from', {ascending:false}); window.__ssSchemes = sch || []; } catch(e){}
       for (const s of (ss||[])){
         const r = retBy[s.retailer_id];
         bump(s.retailer_id, r ? (r.code+' — '+r.name+(r.category?' · '+r.category:'')) : '(retailer removed)', brandName((skuBy[s.sku_id]||{}).brand_id), Number(s.cases));
@@ -4230,12 +4231,22 @@ function srCanAdd(){
 function srSecForm(){
   if (!srCanAdd()) return '';
   return `<div class="card" id="ss-card" style="max-width:680px;margin-top:16px;"><h3 style="font-size:15px;" id="ss-title">Record a secondary sale (distributor → retailer)</h3>
-    <div class="row2c" style="margin-top:8px;"><div><label>Date</label><input type="date" id="ss-date" value="${todayISO()}"></div>
+    <div class="row2c" style="margin-top:8px;"><div><label>Date</label><input type="date" id="ss-date" value="${todayISO()}" onchange="ssSchemeOpts()"></div>
       <div><label>Distributor (seller)</label><select id="ss-dist"></select></div></div>
     <div class="row2c" style="margin-top:8px;"><div><label>Retailer (buyer)</label><select id="ss-ret"></select></div>
       <div><label>Brand</label><select id="ss-brand" onchange="ssBrandPick(this.value)"></select></div></div>
     <div class="row2c" style="margin-top:8px;"><div><label>SKU (pack)</label><select id="ss-sku" disabled><option value="">— choose a brand first —</option></select></div>
       <div><label>Cases</label><input type="number" id="ss-cases" min="1" placeholder="e.g. 10"></div></div>
+    <div class="row2c" style="margin-top:8px;"><div><label>Scheme reimbursement given?</label><select id="ss-sg" onchange="ssSchemeToggle()"><option value="NO">No</option><option value="YES">Yes</option></select></div><div></div></div>
+    <div id="ss-sch-wrap" style="display:none;background:#faf6ea;border-radius:8px;padding:8px 10px;margin-top:8px;">
+      <div class="row2c"><div><label>Under which scheme *</label><select id="ss-sch"></select></div>
+        <div><label>What was given *</label><select id="ss-stype" onchange="ssSchemeToggle()"><option value="CASH">₹ Amount (rupees)</option><option value="FREE">Free issue (goods)</option></select></div></div>
+      <div class="row2c" style="margin-top:6px;">
+        <div id="ss-amt-wrap"><label>Amount ₹ *</label><input type="number" id="ss-samt" min="0" step="any" placeholder="e.g. 2000"></div>
+        <div id="ss-free-wrap" style="display:none;"><label>Free quantity *</label><div style="display:flex;gap:6px;"><input type="number" id="ss-fqty" min="0" step="any" placeholder="e.g. 1" style="flex:1;"><select id="ss-funit" style="width:120px;"><option value="CASES">cases</option><option value="BOTTLES">bottles</option></select></div></div>
+        <div><label>Details (optional)</label><input type="text" id="ss-snote" placeholder="e.g. slab 25+ cases, credit note no."></div></div>
+      <div id="ss-sch-hint" style="font-size:11.5px;color:#777;margin-top:4px;"></div>
+    </div>
     <button class="btn gold sm" style="margin-top:10px;" id="ss-save" onclick="ssSave()">Save secondary sale</button>
     <button class="btn ghost sm" style="margin-top:10px;display:none;" id="ss-cancel" onclick="ssEditCancel()">Cancel edit</button>
     <div id="ss-msg"></div></div>`;
@@ -4251,10 +4262,13 @@ function srSecEntries(){
   const skuBy = {}; M.skus.forEach(k=>skuBy[k.id]=k);
   const pName = id => { const p = M.parties.find(x=>x.id===id); return p ? p.code+' — '+p.name : '—'; };
   return `<h4 class="sec" style="margin-top:16px;">Secondary sale entries — ${rows.length} in this period</h4>
-    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Distributor (seller)</th><th>Retailer (buyer)</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th></th></tr></thead><tbody>` +
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Distributor (seller)</th><th>Retailer (buyer)</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th>Scheme reimbursement</th><th></th></tr></thead><tbody>` +
     rows.map(x=>{ const r = retBy[x.retailer_id], k = skuBy[x.sku_id] || {};
+      const sch = (window.__ssSchemes||[]).find(q=>q.id===x.scheme_id);
+      const schTxt = !x.scheme_given ? '<span style="color:#999">No</span>'
+        : `<b>${x.scheme_type==='FREE' ? (Number(x.free_qty)||0)+' '+(x.free_unit==='BOTTLES'?'bottle(s)':'case(s)')+' free' : '₹ '+inr(x.scheme_amount||0)}</b><br><span style="font-size:11px;color:#777">${sch?esc(sch.code+' — '+sch.name):'(scheme)'}${x.scheme_note?' · '+esc(x.scheme_note):''}</span>`;
       return `<tr><td>${x.sale_date}</td><td>${esc(pName(x.party_id))}</td><td>${r ? esc(r.code+' — '+r.name) : '(retailer removed)'}</td>
-        <td>${esc(((M.brands.find(b=>b.id===k.brand_id))||{}).name||'—')}</td><td>${esc(k.sku_code||'—')}</td><td class="amount"><b>${x.cases}</b></td>
+        <td>${esc(((M.brands.find(b=>b.id===k.brand_id))||{}).name||'—')}</td><td>${esc(k.sku_code||'—')}</td><td class="amount"><b>${x.cases}</b></td><td style="font-size:12.5px;">${schTxt}</td>
         <td style="white-space:nowrap">${ssCanChange(x) ? `<button class="mini" onclick="ssEdit('${x.id}')">Edit</button> <button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="ssDel('${x.id}')">🗑 Delete</button>` : ''}</td></tr>`; }).join('') +
     `</tbody></table></div>`;
 }
@@ -4270,6 +4284,13 @@ async function ssEdit(id){
     if (![...$('ss-sku').options].some(o=>o.value===k.id)) $('ss-sku').insertAdjacentHTML('beforeend', `<option value="${k.id}">${esc(k.sku_code)}</option>`);
     $('ss-sku').value = k.id; }
   $('ss-cases').value = x.cases;
+  $('ss-sg').value = x.scheme_given ? 'YES' : 'NO';
+  ssSchemeOpts(x.scheme_id || '');
+  if (x.scheme_id && ![...$('ss-sch').options].some(o=>o.value===x.scheme_id)) $('ss-sch').insertAdjacentHTML('beforeend', `<option value="${x.scheme_id}">(scheme)</option>`);
+  $('ss-sch').value = x.scheme_id || '';
+  $('ss-stype').value = x.scheme_type || 'CASH';
+  $('ss-samt').value = x.scheme_amount ?? ''; $('ss-fqty').value = x.free_qty ?? ''; $('ss-funit').value = x.free_unit || 'CASES'; $('ss-snote').value = x.scheme_note || '';
+  ssSchemeToggle();
   $('ss-title').textContent = 'Edit secondary sale — ' + x.sale_date;
   $('ss-save').textContent = 'Update secondary sale'; $('ss-cancel').style.display = '';
   $('ss-card').style.border = '1px solid #b8860b';
@@ -4291,6 +4312,30 @@ async function srSecFormInit(){
   const { data: rets } = await db.schema('sales').from('retailers').select('id,code,name,category').eq('status','ACTIVE').order('name');
   $('ss-ret').innerHTML = (rets||[]).map(r=>`<option value="${r.id}">${esc(r.code)} — ${esc(r.name)}${r.category?' · '+esc(r.category):''}</option>`).join('') || '<option value="">— add retailers in Onboarding &amp; Vendors first —</option>';
   $('ss-brand').innerHTML = '<option value="">— choose the brand —</option>' + M.brands.filter(b=>b.is_active!==false).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  try { const { data: sch } = await db.schema('sales').from('schemes').select('id, code, name, date_from, date_to, status, slabs').order('date_from', {ascending:false}); window.__ssSchemes = sch || []; }
+  catch(e){ window.__ssSchemes = []; }
+  ssSchemeOpts();
+}
+// Scheme dropdown: schemes announced in Scheme master whose period covers the sale date (others listed below, marked)
+function ssSchemeOpts(keepId){
+  const sel = $('ss-sch'); if (!sel) return;
+  const d = ($('ss-date') && $('ss-date').value) || todayISO();
+  const cur = keepId || sel.value;
+  const all = window.__ssSchemes || [];
+  const live = all.filter(x=>x.status==='ACTIVE' && x.date_from <= d && x.date_to >= d);
+  const other = all.filter(x=>!live.includes(x));
+  const opt = x => `<option value="${x.id}">${esc(x.code)} — ${esc(x.name)} (${x.date_from} → ${x.date_to})</option>`;
+  sel.innerHTML = '<option value="">— choose the scheme —</option>' +
+    (live.length ? `<optgroup label="Running on ${d}">${live.map(opt).join('')}</optgroup>` : '') +
+    (other.length ? `<optgroup label="Other schemes (not running on this date)">${other.map(opt).join('')}</optgroup>` : '');
+  if (cur) sel.value = cur;
+  const h = $('ss-sch-hint'); if (h) h.textContent = all.length ? (live.length ? '' : 'No scheme is running on this date — pick from the other schemes if it still applies.') : 'No scheme announced yet — announce one in 🎁 Scheme master first.';
+}
+function ssSchemeToggle(){
+  const yes = $('ss-sg').value === 'YES', free = $('ss-stype').value === 'FREE';
+  $('ss-sch-wrap').style.display = yes ? '' : 'none';
+  $('ss-amt-wrap').style.display = free ? 'none' : '';
+  $('ss-free-wrap').style.display = free ? '' : 'none';
 }
 function ssBrandPick(bid){
   const sel = $('ss-sku');
@@ -4304,7 +4349,15 @@ async function ssSave(){
   if (!retId){ say('ss-msg','Choose the retailer.',false); return; }
   if (!skuId){ say('ss-msg','Choose the brand and its SKU.',false); return; }
   if (!(cases > 0)){ say('ss-msg','Enter the number of cases.',false); return; }
-  const row = { sale_date: $('ss-date').value || todayISO(), party_id: $('ss-dist').value || null, retailer_id: retId, sku_id: skuId, cases };
+  const row = { sale_date: $('ss-date').value || todayISO(), party_id: $('ss-dist').value || null, retailer_id: retId, sku_id: skuId, cases,
+                scheme_given: false, scheme_id: null, scheme_type: null, scheme_amount: null, free_qty: null, free_unit: null, scheme_note: null };
+  if ($('ss-sg') && $('ss-sg').value === 'YES'){
+    const schId = $('ss-sch').value, st = $('ss-stype').value;
+    if (!schId){ say('ss-msg','Choose the scheme under which the reimbursement was given.',false); return; }
+    Object.assign(row, { scheme_given: true, scheme_id: schId, scheme_type: st, scheme_note: $('ss-snote').value.trim() || null });
+    if (st === 'CASH'){ const a = Number($('ss-samt').value); if (!(a > 0)){ say('ss-msg','Enter the scheme amount in ₹.',false); return; } row.scheme_amount = a; }
+    else { const q = Number($('ss-fqty').value); if (!(q > 0)){ say('ss-msg','Enter the free issue quantity.',false); return; } row.free_qty = q; row.free_unit = $('ss-funit').value; }
+  }
   const { error } = window.__ssEditId
     ? await db.schema('sales').from('secondary_sales').update(row).eq('id', window.__ssEditId)
     : await db.schema('sales').from('secondary_sales').insert(Object.assign(row, { created_by: me.id }));
