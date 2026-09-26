@@ -2288,6 +2288,7 @@ async function ratesTab(which){
                                early payment earns a cash discount (percentage slabs below).            */
 async function mmcAccounts(B){
   const S = db.schema('sales');
+  window.__rcptRefresh = () => ratesTab('cm');
   window.mmcFrom = window.mmcFrom || ''; window.mmcTo = window.mmcTo || ''; window.mmcParty = window.mmcParty || '';
   const PT = await loadPayTerms(true);
   let qO = S.from('orders').select('id, so_no, order_date, status, invoice_no, approved_at, dispatched_at, excise_paid_amount, excise_paid_ref, excise_paid_date, party_id, party:parties(code,name,credit_days)')
@@ -2512,7 +2513,7 @@ async function mmcRcptSave(){
   if ($('mr-save')) $('mr-save').disabled = false;
   if (error){ say('mr-msg', error.message, false); return; }
   apprModalClose();
-  await ratesTab('cm');
+  await (window.__rcptRefresh || (()=>ratesTab('cm')))();
   alert(`Saved — ${a.o.so_no}: MMC received basic ₹ ${inr(amt)} + VAT ₹ ${inr(vat)}; deductions ₹ ${inr(cd+od+sc)}. Still due on this bill: basic ₹ ${inr(data && data.basic_left != null ? data.basic_left : 0)} · VAT ₹ ${inr(data && data.vat_left != null ? data.vat_left : 0)}.`);
 }
 async function mmcTermsSave(){
@@ -2560,90 +2561,143 @@ function mmcAccountsPrint(){
     <p style="font-size:11px;color:#666;margin-top:10px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
   printHtml('MMC accounts — Aurum Spirits', body);
 }
-/* ============ DISTRIBUTOR RECEIVABLES (money owed TO us) ====================
-   A receivable is born the moment goods leave for a distributor — the order is
-   marked DISPATCHED and its billed value is frozen from the rate card. Receipts
-   recorded against that order knock it down. The same screen serves Rates →
-   Outstanding (Director) and Accounting → Distributor dues (finance), so both
-   read one number, never two.                                                 */
-let recvRows = [], recvBills = [], recvOpen = null, recvTarget = 'rates-body';
+/* ============ DISTRIBUTOR OUTSTANDING (Rates → Outstanding and Accounting → Distributor dues) ============
+   Every approved bill, what the distributor still owes on it and when it falls due:
+     · Excise duty + wine fees → to MMC's excise account, due before approval (due date = approval date)
+     · VAT                     → to MMC, due on the 19th of the month after the sale
+     · Basic                   → to MMC for Aurum, due after the credit days (default 30) from the sale
+   The same numbers as Rates → MMC accounts; one screen serves both places.                                */
+let recvRows = [], recvOpen = null, recvTarget = 'rates-body', recvView = 'all';
+async function distLoadRows(){
+  const S = db.schema('sales');
+  const PT = await loadPayTerms(true);
+  const { data: ords, error } = await S.from('orders').select('id, so_no, order_date, status, invoice_no, approved_at, dispatched_at, excise_paid_amount, excise_paid_ref, excise_paid_date, party_id, party:parties(code,name,credit_days,city)')
+    .in('status', ['APPROVED','DISPATCHED','DELIVERED','CLOSED']).order('order_date',{ascending:false}).limit(2000);
+  if (error) throw error;
+  const all = ords || [], ids = all.map(o=>o.id), lines = [], vals = [], pays = [];
+  for (let i = 0; i < ids.length; i += 200){
+    const chunk = ids.slice(i, i+200);
+    const [{ data: l }, { data: p }] = await Promise.all([S.from('order_lines').select('id, order_id, cases').in('order_id', chunk),
+                                                         S.from('payments').select('order_id, amount, mode, pay_date').in('order_id', chunk)]);
+    lines.push(...(l||[])); pays.push(...(p||[]));
+  }
+  for (let i = 0; i < lines.length; i += 200){
+    const { data: v } = await S.from('order_values').select('*').in('line_id', lines.slice(i, i+200).map(l=>l.id)); vals.push(...(v||[]));
+  }
+  const lineOrder = {}; lines.forEach(l=>{ lineOrder[l.id] = l.order_id; });
+  const agg = {}; all.forEach(o=>{ agg[o.id] = { o, cases:0, T:{ basic:0, exc:0, wine:0, vat:0, total:0 }, pays:[] }; });
+  lines.forEach(l=>{ const a = agg[l.order_id]; if (a) a.cases += Number(l.cases); });
+  vals.forEach(v=>{ const a = agg[lineOrder[v.line_id]]; if (!a) return;
+    a.T.basic += Number(v.basic_amount ?? v.amount ?? 0); a.T.exc += Number(v.excise_amount||0); a.T.wine += Number(v.wine_fee_amount||0); a.T.vat += Number(v.vat_amount||0); a.T.total += Number(v.amount||0); });
+  pays.forEach(p=>{ const a = agg[p.order_id]; if (a) a.pays.push(p); });
+  const today = ymdStr(new Date());
+  const rows = Object.values(agg).map(a=>{
+    const t = orderTerms(a.o, a.T, a.pays, PT, a.o.party?.credit_days);
+    const levyDue = a.o.approved_at ? String(a.o.approved_at).slice(0,10) : a.o.order_date;
+    const r = Object.assign(a, t, { total: a.T.total, levyDue });
+    // each amount still owed on the bill, with its due date
+    r.dues = [
+      { comp:'Basic', amt: Math.max(0, t.basicLeft), due: t.basicDue },
+      { comp:'VAT', amt: Math.max(0, t.vatLeft), due: t.vatDue },
+      { comp:'Excise & wine fees', amt: Math.max(0, t.levyLeft), due: levyDue }
+    ].filter(d=>d.amt > 0.005).map(d=>Object.assign(d, { late: daysBetweenStr(d.due, today) }));
+    r.outstanding = r.dues.reduce((s,d)=>s+d.amt,0);
+    r.overdue = r.dues.filter(d=>d.late > 0).reduce((s,d)=>s+d.amt,0);
+    return r;
+  });
+  window.__mmcAllRows = rows;
+  return { rows, PT, today };
+}
 async function recvLoad(targetId){
   recvTarget = targetId; recvOpen = null;
   const B = $(targetId); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
-  const S = db.schema('sales');
-  const [o, b] = await Promise.all([
-    S.from('v_dist_outstanding').select('*').order('outstanding', {ascending:false}),
-    S.from('v_dist_bills').select('*').order('due_date')
-  ]);
-  if (o.error){ B.innerHTML = `<div class="msg err">Could not load receivables: ${esc(o.error.message)}</div>`; return; }
-  recvRows = o.data || []; recvBills = b.data || [];
+  try { const r = await distLoadRows(); recvRows = r.rows; }
+  catch(e){ B.innerHTML = `<div class="msg err">Could not load distributor outstanding: ${esc(e.message||String(e))}</div>`; return; }
+  window.__rcptRefresh = () => recvLoad(recvTarget);
   recvDraw();
 }
 function recvToggle(pid){ recvOpen = (recvOpen === pid) ? null : pid; recvDraw(); }
 function recvDraw(){
   const B = $(recvTarget); if (!B) return;
-  const sum = k => recvRows.reduce((a, r) => a + Number(r[k] || 0), 0);
-  const totalOut = sum('outstanding'), totalOverdue = sum('overdue');
-  const withDues = recvRows.filter(r => Number(r.outstanding) > 0).length;
-  let html = `<div class="statgrid">
-    <div class="stat"><div class="n">₹ ${inr(totalOut)}</div><div class="l">Receivable from distributors</div></div>
-    <div class="stat"><div class="n" style="color:${totalOverdue > 0 ? '#b3261e' : '#1a7f37'}">₹ ${inr(totalOverdue)}</div><div class="l">Past its due date</div></div>
-    <div class="stat"><div class="n">${withDues}</div><div class="l">Distributors with dues</div></div></div>`;
+  const today = ymdStr(new Date());
+  const open = recvRows.filter(r=>r.outstanding > 0.005);
+  const dues = []; open.forEach(r=>r.dues.forEach(d=>dues.push(Object.assign({ r }, d))));
+  const sumC = (list, comp, over) => list.filter(d=>(!comp || d.comp===comp) && (over===undefined || (over ? d.late > 0 : d.late <= 0))).reduce((s,d)=>s+d.amt,0);
+  const tot = sumC(dues), totOver = sumC(dues, null, true);
+  const bOut = sumC(dues,'Basic'), vOut = sumC(dues,'VAT'), lOut = sumC(dues,'Excise & wine fees');
+  const bOver = sumC(dues,'Basic',true), vOver = sumC(dues,'VAT',true), lOver = sumC(dues,'Excise & wine fees',true);
+  const upcoming = dues.filter(d=>d.late <= 0).sort((x,y)=>x.due.localeCompare(y.due));
+  const nextDate = upcoming.length ? upcoming[0].due : null;
+  const nextAmt = nextDate ? upcoming.filter(d=>d.due===nextDate).reduce((s,d)=>s+d.amt,0) : 0;
+  const red = v => v > 0.005 ? '#b3261e' : '#1a7f37';
+  const tile = (l, v, c, sub, money=true) => `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">${l}</div><div style="font-size:17px;font-weight:700;${c?'color:'+c:''}">${money?'₹ '+inr(v||0):v}</div>${sub?`<div style="font-size:10.5px;color:#777">${sub}</div>`:''}</div>`;
+  const byP = {}; open.forEach(r=>{ const k = r.o.party_id; (byP[k] = byP[k] || { party:r.o.party, list:[] }).list.push(r); });
+  const canRcv = isDir() || canFinEdit();
+  // ageing of what is owed (by days past its own due date)
+  const bucket = d => d.late <= 0 ? 0 : d.late <= 30 ? 1 : d.late <= 60 ? 2 : d.late <= 90 ? 3 : 4;
+  const AG = [0,0,0,0,0]; dues.forEach(d=>{ AG[bucket(d)] += d.amt; });
 
-  html += `<h4 class="sec">How old the money is</h4>
-    <div class="table-scroll"><table><thead><tr>
-      <th class="amount">Not due yet ₹</th><th class="amount">1–30 days ₹</th><th class="amount">31–60 days ₹</th>
-      <th class="amount">61–90 days ₹</th><th class="amount">Over 90 days ₹</th></tr></thead><tbody>
-      <tr><td class="amount">${inr(sum('not_due'))}</td><td class="amount">${inr(sum('d1_30'))}</td>
-          <td class="amount">${inr(sum('d31_60'))}</td><td class="amount" style="color:#7a5c10">${inr(sum('d61_90'))}</td>
-          <td class="amount" style="color:#b3261e;font-weight:700">${inr(sum('d90p'))}</td></tr>
-    </tbody></table></div>`;
-
-  html += `<h4 class="sec">Distributor-wise</h4>
-    <div class="table-scroll"><table><thead><tr>
-      <th>Distributor</th><th class="amount">Billed ₹</th><th class="amount">Received ₹</th>
-      <th class="amount">Outstanding ₹</th><th class="amount">Overdue ₹</th><th>Oldest due</th>
-      <th class="amount">Open bills</th><th></th></tr></thead><tbody>`;
-  if (!recvRows.length){
-    html += `<tr><td colspan="8" style="color:#777">Nothing is outstanding yet. A distributor's bill appears here the moment their order is marked <b>Dispatched</b> in Sales &amp; Orders.</td></tr>`;
-  }
-  for (const r of recvRows){
-    const over = Number(r.overdue || 0), out = Number(r.outstanding || 0);
-    const open = recvOpen === r.party_id;
-    html += `<tr${over > 0 ? ' style="background:#fdf6ee;"' : ''}>
-      <td><b>${esc(r.code || '')}</b> ${esc(r.name || '')}${r.credit_days ? `<br><span style="font-size:11px;color:#777">${r.credit_days} days credit</span>` : ''}</td>
-      <td class="amount">${inr(r.billed)}</td><td class="amount">${inr(r.paid)}</td>
+  let html = `
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">What every distributor still owes on its approved bills — <b>basic</b> (due ${window.__payTerms?.credit||30} days from the sale), <b>VAT</b> (due on the ${window.__payTerms?.vatDay||19}th of the month after the sale) and any <b>excise duty &amp; wine fees</b> not yet paid (due before approval). All of it is paid by the distributor to MMC.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+      ${tile('Total outstanding from distributors', tot, red(tot))}${tile('Overdue (past its due date)', totOver, totOver>0.005?'#b3261e':'#777')}
+      ${tile('Distributors with dues', Object.keys(byP).length, '', '', false)}${tile('Next payment due', nextDate ? '₹ '+inr(nextAmt) : '—', '#0b57d0', nextDate ? 'on '+nextDate : 'nothing upcoming', false)}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      ${tile('Basic outstanding', bOut, red(bOut), 'overdue ₹ '+inr(bOver))}${tile('VAT outstanding', vOut, red(vOut), 'overdue ₹ '+inr(vOver))}${tile('Excise &amp; wine fees unpaid', lOut, red(lOut), 'overdue ₹ '+inr(lOver))}
+    </div>
+    <h4 class="sec">How old the money is <span style="font-weight:400;font-size:11.5px;color:#777">(days past each amount's own due date — basic, VAT and excise together)</span></h4>
+    <div class="table-scroll"><table><thead><tr><th class="amount">Not due yet ₹</th><th class="amount">1–30 days ₹</th><th class="amount">31–60 days ₹</th><th class="amount">61–90 days ₹</th><th class="amount">Over 90 days ₹</th></tr></thead><tbody>
+      <tr><td class="amount">${inr(AG[0])}</td><td class="amount">${inr(AG[1])}</td><td class="amount">${inr(AG[2])}</td><td class="amount" style="color:#7a5c10">${inr(AG[3])}</td><td class="amount" style="color:#b3261e;font-weight:700">${inr(AG[4])}</td></tr>
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:14px;">Distributor-wise outstanding</h4>
+    <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Open bills</th><th class="amount">Basic ₹</th><th class="amount">VAT ₹</th><th class="amount">Excise &amp; wine ₹</th><th class="amount">Total outstanding ₹</th><th class="amount">Overdue ₹</th><th>Next due</th><th>Oldest overdue</th><th></th></tr></thead><tbody>`;
+  const pKeys = Object.keys(byP).sort((x,y)=>{ const ox = byP[x].list.reduce((s,r)=>s+r.overdue,0), oy = byP[y].list.reduce((s,r)=>s+r.overdue,0); return oy-ox || String(byP[x].party?.name).localeCompare(String(byP[y].party?.name)); });
+  if (!pKeys.length) html += `<tr><td colspan="10" style="color:#777">Nothing is outstanding. Every approved bill is fully paid.</td></tr>`;
+  for (const k of pKeys){
+    const g = byP[k], L = []; g.list.forEach(r=>r.dues.forEach(d=>L.push(Object.assign({ r }, d))));
+    const s = c => L.filter(d=>d.comp===c).reduce((t,d)=>t+d.amt,0);
+    const out = L.reduce((t,d)=>t+d.amt,0), over = L.filter(d=>d.late>0).reduce((t,d)=>t+d.amt,0);
+    const up = L.filter(d=>d.late<=0).sort((x,y)=>x.due.localeCompare(y.due)); const nd = up[0];
+    const worst = L.filter(d=>d.late>0).sort((x,y)=>y.late-x.late)[0];
+    const cd = Number(g.party?.credit_days)>0 ? Number(g.party.credit_days) : (window.__payTerms?.credit||30);
+    const isOpen = recvOpen === k;
+    html += `<tr${over > 0.005 ? ' style="background:#fdf6ee;"' : ''}>
+      <td><b>${esc(g.party?.name||'')}</b> <span style="color:#999;font-size:11px;">${esc(g.party?.code||'')}</span><br><span style="font-size:10.5px;color:#777">${cd} days credit</span></td>
+      <td class="amount">${g.list.length}</td><td class="amount">${inr(s('Basic'))}</td><td class="amount">${inr(s('VAT'))}</td><td class="amount">${inr(s('Excise & wine fees'))}</td>
       <td class="amount"><b>${inr(out)}</b></td>
-      <td class="amount" style="color:${over > 0 ? '#b3261e' : '#777'};font-weight:${over > 0 ? '700' : '400'}">${inr(over)}</td>
-      <td>${r.oldest_due || '—'}${Number(r.worst_days) > 0 ? `<br><span style="font-size:11px;color:#b3261e">${r.worst_days} days late</span>` : ''}</td>
-      <td class="amount">${r.open_bills || 0}</td>
-      <td><button class="mini" onclick="recvToggle('${r.party_id}')">${open ? 'Hide bills' : 'Bills…'}</button></td></tr>`;
-    if (open){
-      const bills = recvBills.filter(b => b.party_id === r.party_id && Number(b.balance) !== 0);
-      html += `<tr><td colspan="8" style="background:#fbf9f4;padding:10px 12px;">
-        <div style="font-size:12px;color:#555;margin-bottom:6px;">Every dispatched order still carrying a balance. Open one to record the money when it comes in.</div>
-        <div class="table-scroll"><table><thead><tr>
-          <th>Order</th><th>Dispatched</th><th>Due on</th><th class="amount">Cases</th>
-          <th class="amount">Bill ₹</th><th class="amount">Received ₹</th><th class="amount">Balance ₹</th>
-          <th>Age</th><th></th></tr></thead><tbody>` +
-        (bills.length ? bills.map(b => {
-          const late = Number(b.days_overdue) > 0;
-          return `<tr>
-            <td><b>${esc(b.so_no || '')}</b>${b.invoice_no ? `<br><span style="font-size:11px;color:#777">Inv ${esc(b.invoice_no)}</span>` : ''}</td>
-            <td>${b.dispatched_at ? String(b.dispatched_at).slice(0,10) : '—'}</td>
-            <td>${b.due_date || '—'}</td>
-            <td class="amount">${b.cases || 0}</td>
-            <td class="amount">${inr(b.amount)}</td>
-            <td class="amount">${inr(b.paid)}</td>
-            <td class="amount"><b>${inr(b.balance)}</b></td>
-            <td style="color:${late ? '#b3261e' : '#1a7f37'}">${late ? b.days_overdue + ' days late' : 'within credit'}</td>
-            <td><button class="mini" onclick="openOrderDetail('${b.order_id}')">Open &amp; record receipt</button></td></tr>`;
-        }).join('') : '<tr><td colspan="9" style="color:#777">Every bill for this distributor is settled.</td></tr>') +
-        '</tbody></table></div></td></tr>';
+      <td class="amount" style="color:${over>0.005?'#b3261e':'#777'};font-weight:${over>0.005?'700':'400'}">${inr(over)}</td>
+      <td style="font-size:12px;">${nd ? `${nd.due}<br><span style="color:#777">${esc(nd.comp)} ₹ ${inr(nd.amt)}</span>` : '—'}</td>
+      <td style="font-size:12px;">${worst ? `<span style="color:#b3261e">${worst.late} days late</span><br><span style="color:#777">${esc(worst.comp)} · ${esc(worst.r.o.so_no)}</span>` : '<span style="color:#1a7f37">none</span>'}</td>
+      <td><button class="mini" onclick="recvToggle('${k}')">${isOpen ? 'Hide bills' : 'Bills…'}</button></td></tr>`;
+    if (isOpen){
+      const st = d => !d ? '' : d.late > 0 ? `<br><span style="color:#b3261e;font-size:11px;">${d.late} days late</span>` : `<br><span style="color:#777;font-size:11px;">due ${d.late===0?'today':'in '+(-d.late)+' days'}</span>`;
+      html += `<tr><td colspan="10" style="background:#fbf9f4;padding:10px 12px;">
+        <div class="table-scroll"><table><thead><tr><th>Bill</th><th>Sale date</th><th class="amount">Basic ₹</th><th>Basic due on</th><th class="amount">VAT ₹</th><th>VAT due on</th><th class="amount">Excise &amp; wine ₹</th><th class="amount">Total ₹</th><th></th></tr></thead><tbody>` +
+        g.list.sort((x,y)=>(x.dues.map(d=>d.due).sort()[0]||'').localeCompare(y.dues.map(d=>d.due).sort()[0]||'')).map(r=>{
+          const dB = r.dues.find(d=>d.comp==='Basic'), dV = r.dues.find(d=>d.comp==='VAT'), dL = r.dues.find(d=>d.comp==='Excise & wine fees');
+          return `<tr><td><b>${esc(r.o.so_no)}</b>${r.o.invoice_no?'<br><span style="font-size:11px;color:#777">Inv '+esc(r.o.invoice_no)+'</span>':''}</td><td>${r.sale}${r.provisional?'<br><span style="font-size:10.5px;color:#777">not dispatched</span>':''}</td>
+            <td class="amount">${dB?inr(dB.amt):'—'}</td><td style="font-size:12px;">${dB?dB.due+st(dB):'<span style="color:#1a7f37">settled</span>'}</td>
+            <td class="amount">${dV?inr(dV.amt):'—'}</td><td style="font-size:12px;">${dV?dV.due+st(dV):'<span style="color:#1a7f37">paid</span>'}</td>
+            <td class="amount">${dL?inr(dL.amt)+st(dL):'—'}</td><td class="amount"><b>${inr(r.outstanding)}</b></td>
+            <td style="white-space:nowrap;">${canRcv && (dB||dV) ? `<button class="mini" onclick="mmcRcptOpen('${r.o.id}')">➕ Receive</button> ` : ''}<button class="mini" onclick="openOrders();show('order-detail');openOrderDetail('${r.o.id}')">Open</button></td></tr>`;
+        }).join('') + '</tbody></table></div></td></tr>';
     }
   }
-  B.innerHTML = html + `</tbody></table></div>
-    <p style="font-size:11.5px;color:#777;margin-top:8px;">This is money owed <b>to</b> Aurum by distributors — the primary sale. The bill is raised automatically when an order is dispatched, and only the <b>basic</b> is counted — excise duty, wine fees and VAT are paid by the distributor to MMC. The due date is the dispatch date plus the distributor's credit days (default 30, set in Rates → MMC accounts → Payment terms); cash discounts for early payment count as settled. Receipts are recorded on the order itself, so Sales and Accounting always show the same balance. Vendor bills we have to pay are the other direction — see <b>Accounting → Vendor dues</b>.</p>`;
+  html += `</tbody></table></div>`;
+  // payment schedule — when each amount falls due
+  const sched = recvView === 'over' ? dues.filter(d=>d.late > 0) : recvView === 'next30' ? dues.filter(d=>d.late <= 0 && d.late >= -30) : dues;
+  sched.sort((x,y)=>x.due.localeCompare(y.due) || String(x.r.o.party?.name).localeCompare(String(y.r.o.party?.name)));
+  const chip = (v, l) => `<button class="chip${recvView===v?' on':''}" onclick="recvView='${v}';recvDraw()">${l}</button>`;
+  html += `<h4 class="sec" style="margin-top:14px;">When payments fall due</h4>
+    <div style="margin:0 0 6px;">${chip('all','All dues')} ${chip('over','Overdue only')} ${chip('next30','Due in the next 30 days')}</div>
+    <div class="table-scroll"><table><thead><tr><th>Due date</th><th>Distributor</th><th>Bill</th><th>For</th><th class="amount">Amount ₹</th><th>Status</th></tr></thead><tbody>
+    ${sched.map(d=>`<tr${d.late>0?' style="background:#fdf6ee;"':''}><td>${d.due}</td><td>${esc(d.r.o.party?.name||'')}</td><td><a href="#" onclick="event.preventDefault();openOrders();show('order-detail');openOrderDetail('${d.r.o.id}')">${esc(d.r.o.so_no)}</a></td><td>${esc(d.comp)}</td><td class="amount"><b>${inr(d.amt)}</b></td>
+      <td style="font-size:12px;color:${d.late>0?'#b3261e':'#555'}">${d.late>0?d.late+' days overdue':d.late===0?'due today':'due in '+(-d.late)+' days'}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">Nothing in this view.</td></tr>'}
+    ${sched.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${inr(sched.reduce((s,d)=>s+d.amt,0))}</td><td></td></tr>`:''}
+    </tbody></table></div>
+    <p style="font-size:11.5px;color:#777;margin-top:8px;">Record the money with <b>➕ Receive</b> (basic with cash discount / other discount / scheme, and VAT — one cheque or transfer can cover both) or from the bill itself. The same figures appear in Rates → MMC accounts and Accounting → Distributor dues. Vendor bills we have to pay are the other direction — see <b>Accounting → Vendor dues</b>.</p>`;
+  B.innerHTML = html;
 }
 
 async function saveRate(skuId){
