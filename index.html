@@ -297,7 +297,7 @@
     </div>
     <div id="pm-sec-r" class="hidden">
     <div class="table-scroll"><table>
-      <thead><tr><th>Code</th><th>Name</th><th>Category</th><th>District</th><th>Area</th><th>Contact</th><th>Active</th><th></th></tr></thead>
+      <thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Distributor</th><th>District</th><th>Area</th><th>Contact</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows-r"></tbody>
     </table></div>
     <p style="font-size:12px;color:#777;margin-top:6px;">New retailers are added on the <b>➕ Register retailer</b> tab above; the category shown here comes from that register.</p>
@@ -1855,21 +1855,24 @@ async function openParties(){
   const tbR = $('party-rows-r'); tbR.innerHTML = '';
   try {
     const { data: rets } = await db.schema('sales').from('retailers').select('*').order('name');
+    const dists = await rtDistList();
     let nR = 0;
     for (const r of (rets||[])){
       nR++;
       const tr = document.createElement('tr');
       if (r.status !== 'ACTIVE') tr.className = 'inactive';
       tr.innerHTML = `<td><b>${esc(r.code)}</b></td><td>${esc(r.name)}${r.license_no?'<br><span style="font-size:11px;color:#777">Lic: '+esc(r.license_no)+'</span>':''}</td>` +
-        `<td>${esc(r.category||'—')}</td><td>${esc(r.district||'—')}</td><td>${esc(r.area||'—')}</td>` +
+        `<td>${esc(r.category||'—')}</td>` +
+        `<td>${canPartyWrite() ? rtDistSelect(r, dists, "") : esc(rtDistName(r.distributor_id, dists))}</td>` +
+        `<td>${esc(r.district||'—')}</td><td>${esc(r.area||'—')}</td>` +
         `<td>${esc(r.contact_person||'—')}${r.phone?'<br><span style="font-size:11px;color:#777">'+esc(r.phone)+'</span>':''}</td>` +
         `<td>${r.status==='ACTIVE'?'✔':'✖'}</td>` +
         `<td style="white-space:nowrap"><button class="mini" onclick="onbTab('retailers')">Manage</button></td>`;
       tbR.appendChild(tr);
     }
     $('party-count-r').textContent = nR;
-    if (!nR) tbR.innerHTML = '<tr><td colspan="8" style="color:#777">No retailers yet — add them in Onboarding &amp; Vendors → 🏪 Retailers.</td></tr>';
-  } catch(e){ tbR.innerHTML = '<tr><td colspan="8" style="color:#777">Retailer list is not available to you.</td></tr>'; }
+    if (!nR) tbR.innerHTML = '<tr><td colspan="9" style="color:#777">No retailers yet — add them in Onboarding &amp; Vendors → 🏪 Retailers.</td></tr>';
+  } catch(e){ tbR.innerHTML = '<tr><td colspan="9" style="color:#777">Retailer list is not available to you.</td></tr>'; }
   // Onboarding (registration) tabs: Directors and anyone given add/edit on Party Master; everyone sees the lists.
   document.querySelectorAll('.onb-tab').forEach(el => el.classList.toggle('hidden', !canPartyWrite()));
   document.querySelectorAll('.pm-add').forEach(el => el.classList.toggle('hidden', !canPartyAct('add')));
@@ -3616,10 +3619,13 @@ async function onbTab(which){
     const { data, error } = await S.from('retailers').select('*').order('created_at',{ascending:false});
     if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
     window.__rtRows = data || [];
+    const dists = await rtDistList();
     const catOpts = '<option value="">— Category —</option>' + RETAILER_CATS.map(c=>`<option value="${c}">${c}</option>`).join('');
+    const distOpts = '<option value="">— Linked distributor —</option>' + dists.map(d=>`<option value="${d.id}">${esc(d.name)} (${esc(d.code||'')})${d.is_active?'':' · inactive'}</option>`).join('');
     let html = `<div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Add retailer</h2>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-name" placeholder="Retailer / shop name *">
       <select id="rt-cat">${catOpts}</select></div>
+      <div style="margin-top:8px;"><label style="font-size:12px;">Distributor supplying this retailer</label><select id="rt-dist">${distOpts}</select></div>
       <div style="margin-top:8px;"><input type="text" id="rt-address" placeholder="Address" style="width:100%;"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="rt-phone" placeholder="Contact number">
       <input type="text" id="rt-license" placeholder="License number"></div>
@@ -3630,18 +3636,36 @@ async function onbTab(which){
       <button class="btn gold sm" style="padding:11px;" onclick="rtAdd()">Add retailer</button></div>
       <div id="rt-msg"></div></div>
       <div id="rt-editbox"></div>`;
-    html += '<div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>District</th><th>Area</th><th>Contact</th><th>Status</th><th></th></tr></thead><tbody>';
+    html += '<div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Distributor</th><th>District</th><th>Area</th><th>Contact</th><th>Status</th><th></th></tr></thead><tbody>';
     for (const v of (data||[])){
       const pill = v.status==='ACTIVE'?'DELIVERED':'CANCELLED';
       html += `<tr><td><b>${esc(v.code)}</b></td><td>${esc(v.name)}${v.license_no?'<br><span style="font-size:11px;color:#777">Lic: '+esc(v.license_no)+'</span>':''}</td>
-        <td>${esc(v.category||'—')}</td><td>${esc(v.district||'—')}</td><td>${esc(v.area||'—')}</td>
+        <td>${esc(v.category||'—')}</td><td>${rtDistSelect(v, dists, "onbTab('retailers')")}</td><td>${esc(v.district||'—')}</td><td>${esc(v.area||'—')}</td>
         <td>${esc(v.contact_person||'—')}${v.phone?'<br><span style="font-size:11px;color:#777">'+esc(v.phone)+'</span>':''}</td>
         <td><span class="pill ${pill}">${v.status}</span></td>
         <td style="white-space:nowrap">${isDir()?`<button class="mini" onclick="rtEdit('${v.id}')">Edit</button> `:''}<button class="mini" onclick="rtStatus('${v.id}','${v.status==='ACTIVE'?'INACTIVE':'ACTIVE'}')">${v.status==='ACTIVE'?'Deactivate':'Activate'}</button> ${dirDelBtn('sales','retailers', v.id, v.name, "onbTab('retailers')")}</td></tr>`;
     }
-    html += (data||[]).length ? '' : '<tr><td colspan="8" style="color:#777">No retailers yet — add the first one above.</td></tr>';
+    html += (data||[]).length ? '' : '<tr><td colspan="9" style="color:#777">No retailers yet — add the first one above.</td></tr>';
     B.innerHTML = html + '</tbody></table></div>';
   }
+}
+// Retailer ↔ distributor link: every retailer can be tied to the distributor that supplies it.
+async function rtDistList(){
+  try { const { data } = await db.schema('sales').from('parties').select('id, code, name, is_active').eq('party_type','DISTRIBUTOR').order('name');
+    window.__rtDists = data || []; } catch(e){ window.__rtDists = window.__rtDists || []; }
+  return window.__rtDists;
+}
+function rtDistName(id, dists){ const d = (dists||window.__rtDists||[]).find(x=>x.id===id); return d ? d.name + (d.code ? ' ('+d.code+')' : '') : '—'; }
+function rtDistSelect(r, dists, after){
+  const aj = String(after||'').replace(/"/g,'&quot;');
+  return `<select style="min-width:170px;padding:6px 8px;font-size:12.5px;${r.distributor_id?'':'color:#b8860b;'}" title="Distributor supplying this retailer" onchange="rtDistSet('${r.id}', this.value, &quot;${aj}&quot;)">
+    <option value="">— not linked —</option>${(dists||[]).map(d=>`<option value="${d.id}" ${r.distributor_id===d.id?'selected':''}>${esc(d.name)}${d.is_active?'':' · inactive'}</option>`).join('')}</select>`;
+}
+async function rtDistSet(id, distId, after){
+  const { error } = await db.schema('sales').from('retailers').update({ distributor_id: distId || null }).eq('id', id);
+  if (error){ alert('Could not link the distributor: ' + error.message); }
+  else { const r = (window.__rtRows||[]).find(x=>x.id===id); if (r) r.distributor_id = distId || null; }
+  try { if (after) (new Function(after))(); } catch(e){}
 }
 const RETAILER_CATS = ['Wine Shop (FL-2)','Permit Room / Bar (FL-3)','Beer Shoppe (FL/BR-2)','Country Liquor (CL-2)','Club (E)','Supermarket / Mall','Other'];
 async function rtAdd(){
@@ -3653,7 +3677,7 @@ async function rtAdd(){
     code, name, category: $('rt-cat').value||null, address: $('rt-address').value.trim()||null,
     phone: $('rt-phone').value.trim()||null, license_no: $('rt-license').value.trim()||null,
     contact_person: $('rt-contact').value.trim()||null, district: $('rt-district').value.trim()||null,
-    whatsapp: $('rt-whatsapp').value.trim()||null,
+    whatsapp: $('rt-whatsapp').value.trim()||null, distributor_id: $('rt-dist').value||null,
     area: $('rt-area').value.trim()||null, status: 'ACTIVE', created_by: me.id });
   if (error){ say('rt-msg', error.message, false); return; }
   onbTab('retailers');
@@ -3672,6 +3696,7 @@ function rtEdit(id){
     <div class="card" style="margin-bottom:14px;max-width:680px;border:1px solid #b8860b;"><h2 style="font-size:15px;">Edit ${esc(v.code)} — ${esc(v.name)}</h2>
       <div class="row2c" style="margin-top:8px;"><div><label>Name *</label><input type="text" id="re-name" value="${esc(v.name)}"></div>
         <div><label>Category</label><select id="re-cat"><option value="">— Category —</option>${catOpts}</select></div></div>
+      <div style="margin-top:8px;"><label>Distributor supplying this retailer</label><select id="re-dist"><option value="">— Linked distributor —</option>${(window.__rtDists||[]).map(d=>`<option value="${d.id}" ${v.distributor_id===d.id?'selected':''}>${esc(d.name)} (${esc(d.code||'')})${d.is_active?'':' · inactive'}</option>`).join('')}</select></div>
       <div style="margin-top:8px;"><label>Address</label><input type="text" id="re-address" value="${esc(v.address||'')}" style="width:100%;"></div>
       <div class="row2c" style="margin-top:8px;"><div><label>Contact number</label><input type="text" id="re-phone" value="${esc(v.phone||'')}"></div>
         <div><label>License number</label><input type="text" id="re-license" value="${esc(v.license_no||'')}"></div></div>
@@ -3692,7 +3717,7 @@ async function rtEditSave(id){
     name, category: $('re-cat').value||null, address: $('re-address').value.trim()||null,
     phone: $('re-phone').value.trim()||null, license_no: $('re-license').value.trim()||null,
     contact_person: $('re-contact').value.trim()||null, district: $('re-district').value.trim()||null,
-    whatsapp: $('re-whatsapp').value.trim()||null,
+    whatsapp: $('re-whatsapp').value.trim()||null, distributor_id: $('re-dist').value||null,
     area: $('re-area').value.trim()||null }).eq('id', id);
   if (error){ say('re-msg','Save failed: '+error.message,false); return; }
   onbTab('retailers');
