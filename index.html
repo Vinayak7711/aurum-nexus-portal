@@ -2388,7 +2388,7 @@ async function mmcAccounts(B){
       ${tile('Basic received by MMC from distributors (after discounts &amp; schemes)', MM.collected, '#0b57d0', [MM.disc?'cash disc ₹ '+inr(MM.disc):'', MM.otherDisc?'other disc ₹ '+inr(MM.otherDisc):'', MM.scheme?'scheme ₹ '+inr(MM.scheme):''].filter(Boolean).join(' · '))}${tile('Less: paid by MMC to Aurum', MM.paidAurum, '#1a7f37')}
       <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border:2px solid #c9a227;"><div style="font-size:11px;color:#777">Net due from MMC</div><div style="font-size:18px;font-weight:700;color:${red(MM.net)}">₹ ${inr(MM.net)}</div></div>
     </div>
-    <div style="margin:0 0 12px;">${(isDir()||canFinEdit())?`<button class="btn gold sm" onclick="mmcRcptOpen()">➕ Distributor paid MMC (basic)</button> `:''}<button class="btn ghost sm" onclick="(async()=>{await openAcct();await acNewGo('mmcr');})()">➕ Record payment received from MMC</button> <button class="btn ghost sm" onclick="(async()=>{await openAcct();window.acLedType='M:';window.acLedSel='M:MMC';await acctTab('ledger');})()">📖 MMC ledger</button>
+    <div style="margin:0 0 12px;">${(isDir()||canFinEdit())?`<button class="btn gold sm" onclick="mmcRcptOpen()">➕ Distributor paid MMC (basic + VAT)</button> `:''}<button class="btn ghost sm" onclick="(async()=>{await openAcct();await acNewGo('mmcr');})()">➕ Record payment received from MMC</button> <button class="btn ghost sm" onclick="(async()=>{await openAcct();window.acLedType='M:';window.acLedSel='M:MMC';await acctTab('ledger');})()">📖 MMC ledger</button>
       <span style="font-size:11.5px;color:#777;margin-left:6px;">Net due from MMC = basic the distributors paid MMC (after cash discount) − what MMC has paid Aurum. Kept on its own — not added to or deducted from any other MMC account.</span></div>
     <h4 class="sec">Distributor-wise</h4>
     <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Bills</th><th class="amount">Cases</th><th class="amount">Basic ₹</th><th class="amount">Excise ₹</th><th class="amount">Wine fees ₹</th><th class="amount">VAT ₹</th><th class="amount">Total ₹</th><th class="amount">Excise+wine paid to MMC ₹</th><th class="amount">VAT paid to MMC ₹</th><th class="amount">VAT due to MMC ₹</th><th class="amount">Basic paid to MMC ₹</th><th class="amount">Cash disc. ₹</th><th class="amount">Basic balance ₹</th><th class="amount">Basic overdue ₹</th></tr></thead><tbody>
@@ -2402,7 +2402,7 @@ async function mmcAccounts(B){
       <td class="amount">${a.cases}</td><td class="amount">${inr(a.basic)}</td><td class="amount">${inr(a.exc)}</td><td class="amount">${inr(a.wine)}</td><td class="amount">${inr(a.vat)}</td><td class="amount" style="font-weight:600">${inr(a.total)}</td>
       <td class="amount" style="color:#0b57d0">${inr(a.levyPaid)}${a.levyLeft>0.005?'<br><span style="font-size:10.5px;color:#b3261e">short ₹ '+inr(a.levyLeft)+'</span>':''}${a.o.excise_paid_ref?'<br><span style="font-size:10.5px;color:#777">ref '+esc(a.o.excise_paid_ref)+'</span>':''}</td>
       <td style="font-size:12px;white-space:nowrap;">${a.vatPaid?'paid ₹ '+inr(a.vatPaid)+'<br>':''}<b style="color:${red(a.vatLeft)}">due ₹ ${inr(a.vatLeft)}</b><br><span style="color:${a.vatOver?'#b3261e':'#777'}">by ${a.vatDue}${a.vatOver?' · overdue':''}</span></td>
-      <td style="font-size:12px;white-space:nowrap;">${a.basicMmc?'paid to MMC ₹ '+inr(a.basicMmc)+'<br>':''}${a.basicDirect?'direct to Aurum ₹ '+inr(a.basicDirect)+'<br>':''}${a.disc?'disc ₹ '+inr(a.disc)+'<br>':''}${(a.otherDisc||a.scheme)?'other disc / scheme ₹ '+inr(a.otherDisc+a.scheme)+'<br>':''}<b style="color:${red(a.basicLeft)}">bal ₹ ${inr(a.basicLeft)}</b><br><span style="color:${a.basicOver?'#b3261e':'#777'}">by ${a.basicDue}${a.basicOver?' · '+a.basicLate+' days late':''}</span>${a.basicLeft>0.005&&(isDir()||canFinEdit())?`<br><button class="mini" style="margin-top:4px;" onclick="mmcRcptOpen('${a.o.id}')">➕ Receive</button>`:''}</td>
+      <td style="font-size:12px;white-space:nowrap;">${a.basicMmc?'paid to MMC ₹ '+inr(a.basicMmc)+'<br>':''}${a.basicDirect?'direct to Aurum ₹ '+inr(a.basicDirect)+'<br>':''}${a.disc?'disc ₹ '+inr(a.disc)+'<br>':''}${(a.otherDisc||a.scheme)?'other disc / scheme ₹ '+inr(a.otherDisc+a.scheme)+'<br>':''}<b style="color:${red(a.basicLeft)}">bal ₹ ${inr(a.basicLeft)}</b><br><span style="color:${a.basicOver?'#b3261e':'#777'}">by ${a.basicDue}${a.basicOver?' · '+a.basicLate+' days late':''}</span>${(a.basicLeft>0.005||a.vatLeft>0.005)&&(isDir()||canFinEdit())?`<br><button class="mini" style="margin-top:4px;" onclick="mmcRcptOpen('${a.o.id}')">➕ Receive basic / VAT</button>`:''}</td>
       <td style="font-size:12px;">${a.discNow>0.005?`<span style="color:#0b57d0">${a.pct}% till ${a.discUntil}</span><br>pay ₹ ${inr(a.basicLeft-a.discNow)} (save ₹ ${inr(a.discNow)})`:(a.basicLeft>0.005?'<span style="color:#777">—</span>':'<span style="color:#1a7f37">settled</span>')}</td></tr>`).join('') || '<tr><td colspan="14" style="color:#777">No approved orders in this selection.</td></tr>'}
     ${rows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${T.cases}</td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td><td class="amount">${inr(T.levyPaid)}</td><td style="font-size:12px;">due ₹ ${inr(T.vatLeft)}</td><td style="font-size:12px;">bal ₹ ${inr(T.basicLeft)}</td><td></td></tr>`:''}
     </tbody></table></div>
@@ -2412,20 +2412,21 @@ async function mmcAccounts(B){
     </tbody></table></div>
     <p style="font-size:11px;color:#777;margin-top:8px;">Record money on the order itself (open the bill → Payments): choose <b>Basic → paid to MMC</b>, <b>VAT → paid to MMC</b> or <b>Excise &amp; wine fees balance</b>. All of them are posted to the MMC ledger in Accounting; the cash discount is applied automatically on early basic payments. When MMC pays us, record it with <b>Record payment received from MMC</b> — it posts the bank receipt and reduces what MMC holds for us.</p>`;
 }
-/* ---- Distributor paid the basic to MMC: deductions (cash discount, other discount, scheme) + net received + payment details ---- */
+/* ---- Distributor paid MMC on a bill: basic (after cash discount / other discount / scheme) and VAT, with payment details ---- */
+function mmcDueOf(a){ return [a.basicLeft > 0.005 ? a.basicDue : null, a.vatLeft > 0.005 ? a.vatDue : null].filter(Boolean).sort()[0] || '9999-12-31'; }
 function mmcRcptOpen(orderId){
-  const all = (window.__mmcAllRows || []).filter(a=>a.basicLeft > 0.005);
-  if (!all.length){ alert('No approved bill has basic still due from a distributor.'); return; }
+  const all = (window.__mmcAllRows || []).filter(a=>a.basicLeft > 0.005 || a.vatLeft > 0.005);
+  if (!all.length){ alert('No approved bill has basic or VAT still due from a distributor.'); return; }
   const pre = orderId ? all.find(a=>a.o.id===orderId) : null;
   const parties = [...new Map(all.map(a=>[a.o.party_id, a.o.party])).entries()];
   const partySel = pre ? pre.o.party_id : (window.mmcParty && parties.some(p=>p[0]===window.mmcParty) ? window.mmcParty : parties[0][0]);
   const today = calFmt(new Date());
-  apprModal('Distributor paid MMC — basic', `
-    <p style="font-size:12px;color:#777;margin:0 0 8px;">Record the basic a distributor has paid to MMC for Aurum. Deduct the cash discount, any other discount and scheme; the rest is the payment MMC received.</p>
+  apprModal('Distributor paid MMC — basic & VAT', `
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">Record what a distributor has paid to MMC on a bill: the <b>basic</b> (after cash discount, other discount and scheme — due ${(window.__payTerms||{}).credit||30} days from the sale) and the <b>VAT</b> (due on the ${(window.__payTerms||{}).vatDay||19}th of the month after the sale). One cheque / transfer can cover both.</p>
     <div class="row2c"><div><label>Distributor *</label><select id="mr-party" onchange="mmcRcptBills()">${parties.map(([id,p])=>`<option value="${id}"${id===partySel?' selected':''}>${esc(p?.name||'')} (${esc(p?.code||'')})</option>`).join('')}</select></div>
       <div><label>Bill (sales order) *</label><select id="mr-order" onchange="mmcRcptCalc(true)"></select></div></div>
     <div id="mr-info" style="font-size:12px;background:#faf6ea;border-radius:8px;padding:8px 10px;margin:8px 0;"></div>
-    <h4 class="sec" style="margin:8px 0 4px;">Deductions</h4>
+    <h4 class="sec" style="margin:8px 0 4px;">Basic — deductions</h4>
     <div class="row2c"><div><label>Cash discount %</label><input type="number" id="mr-cdpct" min="0" step="any" oninput="mmcRcptPct()"></div>
       <div><label>Cash discount ₹</label><input type="number" id="mr-cd" min="0" step="any" oninput="mmcRcptCalc()"></div></div>
     <div class="row2c" style="margin-top:6px;"><div><label>Other discount ₹</label><input type="number" id="mr-od" min="0" step="any" oninput="mmcRcptCalc()"></div>
@@ -2434,8 +2435,10 @@ function mmcRcptOpen(orderId){
       <div><label>Scheme name / details</label><input type="text" id="mr-scn" placeholder="e.g. Diwali scheme ₹50/case"></div></div>
     <div id="mr-net" style="font-size:12.5px;margin:8px 0;"></div>
     <h4 class="sec" style="margin:8px 0 4px;">Payment received by MMC</h4>
-    <div class="row2c"><div><label>Amount received ₹ *</label><input type="number" id="mr-amt" min="0" step="any" oninput="mmcRcptCalc()"></div>
-      <div><label>Received on *</label><input type="date" id="mr-date" value="${today}" onchange="mmcRcptCalc(true)"></div></div>
+    <div class="row2c"><div><label>Basic received ₹</label><input type="number" id="mr-amt" min="0" step="any" oninput="mmcRcptCalc()"></div>
+      <div><label>VAT received ₹ <span id="mr-vat-due" style="font-weight:400;color:#777;font-size:11px;"></span></label><input type="number" id="mr-vat" min="0" step="any" oninput="mmcRcptCalc()"></div></div>
+    <div id="mr-total" style="font-size:12.5px;margin:6px 0;"></div>
+    <div class="row2c" style="margin-top:6px;"><div><label>Received on *</label><input type="date" id="mr-date" value="${today}" onchange="mmcRcptCalc(true)"></div><div></div></div>
     <div class="row2c" style="margin-top:6px;"><div><label>Paid by *</label><select id="mr-via" onchange="mmcRcptVia()"><option value="CHEQUE">Cheque</option><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CASH">Cash</option><option value="OTHER">Other</option></select></div>
       <div><label id="mr-ref-lbl">Cheque no. *</label><input type="text" id="mr-ref"></div></div>
     <div class="row2c" style="margin-top:6px;"><div id="mr-cdate-wrap"><label>Cheque date</label><input type="date" id="mr-cdate" value="${today}"></div>
@@ -2449,8 +2452,9 @@ function mmcRcptOpen(orderId){
 }
 function mmcRcptBills(orderId){
   const pid = $('mr-party').value;
-  const bills = (window.__mmcAllRows || []).filter(a=>a.o.party_id===pid && a.basicLeft > 0.005).sort((x,y)=>x.sale.localeCompare(y.sale));
-  $('mr-order').innerHTML = bills.map(a=>`<option value="${a.o.id}"${a.o.id===orderId?' selected':''}>${esc(a.o.so_no)} · sale ${a.sale} · basic due ₹ ${inr(a.basicLeft)}</option>`).join('');
+  const bills = (window.__mmcAllRows || []).filter(a=>a.o.party_id===pid && (a.basicLeft > 0.005 || a.vatLeft > 0.005)).sort((x,y)=>mmcDueOf(x).localeCompare(mmcDueOf(y)));
+  const today = calFmt(new Date());
+  $('mr-order').innerHTML = bills.map(a=>`<option value="${a.o.id}"${a.o.id===orderId?' selected':''}>${esc(a.o.so_no)} · next due ${mmcDueOf(a)}${mmcDueOf(a)<today?' (OVERDUE)':''} · basic ₹ ${inr(Math.max(0,a.basicLeft))} · VAT ₹ ${inr(Math.max(0,a.vatLeft))}</option>`).join('');
   mmcRcptCalc(true);
 }
 function mmcRcptBill(){ return (window.__mmcAllRows || []).find(a=>a.o.id===$('mr-order').value); }
@@ -2470,24 +2474,34 @@ function mmcRcptCalc(reset){
     $('mr-cdpct').value = slab ? Number(slab.pct) : '';
     $('mr-cd').value = slab ? (Math.round(a.basicLeft * Number(slab.pct)) / 100).toFixed(2) : '';
   }
-  $('mr-info').innerHTML = `<b>${esc(a.o.so_no)}</b> · ${esc(a.o.party?.name||'')} · sale ${a.sale}${a.provisional?' (approval date)':''} · credit till <b>${a.basicDue}</b><br>
-    Basic billed ₹ ${inr(a.basic)}${(a.basicRecv+a.disc+a.otherDisc+a.scheme)>0.005?' · already settled ₹ '+inr(a.basicRecv+a.disc+a.otherDisc+a.scheme):''} · <b>basic still due ₹ ${inr(a.basicLeft)}</b><br>
+  const bLate = a.basicLeft > 0.005 && payDate > a.basicDue, vLate = a.vatLeft > 0.005 && payDate > a.vatDue;
+  $('mr-info').innerHTML = `<b>${esc(a.o.so_no)}</b> · ${esc(a.o.party?.name||'')} · sale ${a.sale}${a.provisional?' (approval date)':''}<br>
+    <b>Basic</b> billed ₹ ${inr(a.basic)}${(a.basicRecv+a.disc+a.otherDisc+a.scheme)>0.005?' · already settled ₹ '+inr(a.basicRecv+a.disc+a.otherDisc+a.scheme):''} · <b>still due ₹ ${inr(Math.max(0,a.basicLeft))}</b> · due by <b style="color:${bLate?'#b3261e':'inherit'}">${a.basicDue}</b>${bLate?' (late by '+daysBetweenStr(a.basicDue, payDate)+' days)':''}<br>
+    <b>VAT</b> ₹ ${inr(a.vat)}${a.vatPaid>0.005?' · already paid ₹ '+inr(a.vatPaid):''} · <b>still due ₹ ${inr(Math.max(0,a.vatLeft))}</b> · due on <b style="color:${vLate?'#b3261e':'inherit'}">${a.vatDue}</b>${vLate?' (late by '+daysBetweenStr(a.vatDue, payDate)+' days)':''}<br>
     Paid ${days} day(s) after the sale → ${slab ? `<span style="color:#0b57d0">cash discount slab ${Number(slab.pct)}% (within ${slab.paid_within_days} days)</span>` : '<span style="color:#777">no cash-discount slab applies</span>'}`;
+  $('mr-vat-due').textContent = a.vatLeft > 0.005 ? `(due ₹ ${inr(a.vatLeft)} on ${a.vatDue})` : '(no VAT due)';
+  const basicDue = Math.max(0, a.basicLeft);
+  ['mr-cdpct','mr-cd','mr-od','mr-odn','mr-sc','mr-scn','mr-amt'].forEach(id=>{ $(id).disabled = basicDue <= 0.005; });
+  $('mr-vat').disabled = a.vatLeft <= 0.005;
   const cd = Number($('mr-cd').value)||0, od = Number($('mr-od').value)||0, sc = Number($('mr-sc').value)||0;
-  const net = a.basicLeft - cd - od - sc;
-  $('mr-net').innerHTML = `Basic due ₹ ${inr(a.basicLeft)} − cash discount ₹ ${inr(cd)} − other discount ₹ ${inr(od)} − scheme ₹ ${inr(sc)} = <b>net payable ₹ ${inr(net)}</b>`;
+  const net = basicDue - cd - od - sc;
+  if (reset) $('mr-vat').value = a.vatLeft > 0.005 ? a.vatLeft.toFixed(2) : '';
+  $('mr-net').innerHTML = `Basic due ₹ ${inr(basicDue)} − cash discount ₹ ${inr(cd)} − other discount ₹ ${inr(od)} − scheme ₹ ${inr(sc)} = <b>net payable ₹ ${inr(net)}</b>`;
   if (document.activeElement === $('mr-amt') && !reset) $('mr-amt').dataset.auto = '0';
   else if (reset || $('mr-amt').dataset.auto !== '0') { $('mr-amt').value = net > 0 ? net.toFixed(2) : '0'; $('mr-amt').dataset.auto = '1'; }
-  const amt = Number($('mr-amt').value)||0, bal = net - amt;
-  $('mr-bal').innerHTML = `Received ₹ ${inr(amt)} · <b style="color:${bal>0.005?'#b3261e':bal<-0.5?'#b3261e':'#1a7f37'}">${bal<-0.5?'more than the net payable by ₹ '+inr(-bal):bal>0.005?'basic still due after this receipt ₹ '+inr(bal):'bill fully settled'}</b>`;
+  const amt = Number($('mr-amt').value)||0, vat = Number($('mr-vat').value)||0, bal = net - amt, vbal = Math.max(0,a.vatLeft) - vat;
+  $('mr-total').innerHTML = `Total received by MMC in this payment: <b>₹ ${inr(amt + vat)}</b> (basic ₹ ${inr(amt)} + VAT ₹ ${inr(vat)})`;
+  const msg = (v, what) => v < -0.5 ? `<span style="color:#b3261e">${what}: more than due by ₹ ${inr(-v)}</span>` : v > 0.005 ? `<span style="color:#b3261e">${what} still due after this ₹ ${inr(v)}</span>` : `<span style="color:#1a7f37">${what} fully settled</span>`;
+  $('mr-bal').innerHTML = `<b>${msg(bal, 'Basic')} · ${msg(vbal, 'VAT')}</b>`;
 }
 async function mmcRcptSave(){
   const a = mmcRcptBill(); if (!a){ say('mr-msg','Choose the bill.',false); return; }
-  const amt = Number($('mr-amt').value)||0, cd = Number($('mr-cd').value)||0, od = Number($('mr-od').value)||0, sc = Number($('mr-sc').value)||0;
-  if (amt + cd + od + sc <= 0){ say('mr-msg','Enter the amount received and / or the deductions.',false); return; }
-  if (amt + cd + od + sc > a.basicLeft + 0.5){ say('mr-msg','Received + deductions is more than the basic still due (₹ '+inr(a.basicLeft)+').',false); return; }
+  const amt = Number($('mr-amt').value)||0, cd = Number($('mr-cd').value)||0, od = Number($('mr-od').value)||0, sc = Number($('mr-sc').value)||0, vat = Number($('mr-vat').value)||0;
+  if (amt + cd + od + sc + vat <= 0){ say('mr-msg','Enter the basic and / or VAT received, or the deductions.',false); return; }
+  if (amt + cd + od + sc > Math.max(0,a.basicLeft) + 0.5){ say('mr-msg','Basic received + deductions is more than the basic still due (₹ '+inr(Math.max(0,a.basicLeft))+').',false); return; }
+  if (vat > Math.max(0,a.vatLeft) + 0.5){ say('mr-msg','VAT received is more than the VAT still due (₹ '+inr(Math.max(0,a.vatLeft))+').',false); return; }
   const via = $('mr-via').value, ref = $('mr-ref').value.trim();
-  if (amt > 0 && via !== 'CASH' && !ref){ say('mr-msg', via==='CHEQUE' ? 'Enter the cheque number.' : 'Enter the UTR / reference number.', false); return; }
+  if ((amt > 0 || vat > 0) && via !== 'CASH' && !ref){ say('mr-msg', via==='CHEQUE' ? 'Enter the cheque number.' : 'Enter the UTR / reference number.', false); return; }
   if (od > 0 && !$('mr-odn').value.trim()){ say('mr-msg','Say what the other discount is for.',false); return; }
   if (sc > 0 && !$('mr-scn').value.trim()){ say('mr-msg','Enter the scheme name / details.',false); return; }
   $('mr-save').disabled = true;
@@ -2495,12 +2509,12 @@ async function mmcRcptSave(){
     p_order: a.o.id, p_received: amt, p_cash_disc: cd, p_other_disc: od, p_scheme: sc,
     p_other_note: $('mr-odn').value.trim()||null, p_scheme_note: $('mr-scn').value.trim()||null,
     p_via: via, p_ref: ref||null, p_date: $('mr-date').value||null, p_cheque_date: via==='CHEQUE' ? ($('mr-cdate').value||null) : null,
-    p_bank: $('mr-bank').value.trim()||null, p_note: $('mr-note').value.trim()||null });
+    p_bank: $('mr-bank').value.trim()||null, p_note: $('mr-note').value.trim()||null, p_vat: vat });
   if ($('mr-save')) $('mr-save').disabled = false;
   if (error){ say('mr-msg', error.message, false); return; }
   apprModalClose();
   await ratesTab('cm');
-  alert(`Saved — ${a.o.so_no}: received ₹ ${inr(amt)} by MMC, deductions ₹ ${inr(cd+od+sc)}. Basic still due on this bill: ₹ ${inr(data && data.basic_left != null ? data.basic_left : 0)}.`);
+  alert(`Saved — ${a.o.so_no}: MMC received basic ₹ ${inr(amt)} + VAT ₹ ${inr(vat)}; deductions ₹ ${inr(cd+od+sc)}. Still due on this bill: basic ₹ ${inr(data && data.basic_left != null ? data.basic_left : 0)} · VAT ₹ ${inr(data && data.vat_left != null ? data.vat_left : 0)}.`);
 }
 async function mmcTermsSave(){
   const c = Number($('mt-credit').value), d = Number($('mt-vatday').value);
