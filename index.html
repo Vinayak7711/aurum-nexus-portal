@@ -3346,8 +3346,7 @@ async function mfgTab(which){
       .sort((x,y)=>String(x.code).localeCompare(String(y.code)));
     window.__rm = { mmc: mmcList, store: storeList, items: live };
     window.rmQ = window.rmQ || { mmc:'', store:'' };
-    const today = ymdStr(new Date()), d30 = addDaysStr(today, -30);
-    window.rmIss = window.rmIss || { from: d30, to: today, item: '', status: '' };
+    window.rmIss = window.rmIss || { from: '', to: '', item: '', status: '', searched: false };
     const itemOpts = [...new Map((allIssues||[]).map(r=>[r.rm_item_id, r.item])).entries()].sort((x,y)=>String(x[1]?.code).localeCompare(String(y[1]?.code)));
     window.__rmIssues = allIssues || [];
     const tools = k => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;">
@@ -3360,11 +3359,11 @@ async function mfgTab(which){
       ${tools('store')}<div class="table-scroll" id="rm-pos-store"></div>
       <h4 class="sec" style="margin-top:16px;">Material issued to MMC</h4>
       <div class="card" style="padding:10px 12px;margin:4px 0 8px;"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
-        <div><label>From</label><input type="date" id="rmi-from" value="${window.rmIss.from}" onchange="window.rmIss.from=this.value;rmIssDraw()"></div>
-        <div><label>To</label><input type="date" id="rmi-to" value="${window.rmIss.to}" onchange="window.rmIss.to=this.value;rmIssDraw()"></div>
-        <div style="min-width:220px;flex:1;"><label>Item</label><select onchange="window.rmIss.item=this.value;rmIssDraw()"><option value="">— all items —</option>${itemOpts.map(([id,it])=>`<option value="${id}"${window.rmIss.item===id?' selected':''}>${esc(it?.code||'')} — ${esc(it?.name||'')}</option>`).join('')}</select></div>
-        <div><label>Receipt at MMC</label><select onchange="window.rmIss.status=this.value;rmIssDraw()"><option value="">All</option><option value="P"${window.rmIss.status==='P'?' selected':''}>Pending confirmation</option><option value="R"${window.rmIss.status==='R'?' selected':''}>Received</option></select></div>
-        <div><button class="btn ghost sm" onclick="window.rmIss.from='';window.rmIss.to='';$('rmi-from').value='';$('rmi-to').value='';rmIssDraw()">All dates</button></div>
+        <div><label>From</label><input type="date" id="rmi-from" value="${window.rmIss.from}"></div>
+        <div><label>To</label><input type="date" id="rmi-to" value="${window.rmIss.to}"></div>
+        <div style="min-width:220px;flex:1;"><label>Item</label><select id="rmi-item"><option value="">— all items —</option>${itemOpts.map(([id,it])=>`<option value="${id}"${window.rmIss.item===id?' selected':''}>${esc(it?.code||'')} — ${esc(it?.name||'')}</option>`).join('')}</select></div>
+        <div><label>Receipt at MMC</label><select id="rmi-status"><option value="">All</option><option value="P"${window.rmIss.status==='P'?' selected':''}>Pending confirmation</option><option value="R"${window.rmIss.status==='R'?' selected':''}>Received</option></select></div>
+        <div style="display:flex;gap:6px;"><button class="btn gold sm" style="padding:10px 16px;" onclick="rmIssSearch()">🔍 Search</button><button class="btn ghost sm" onclick="rmIssClear()">Clear</button></div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><span id="rmi-sum" style="font-size:12px;color:#555;align-self:center;"></span><span style="flex:1"></span><button class="btn ghost sm" onclick="rmCsv('iss')">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="rmPrint('iss')">🖨 Print / save PDF</button></div></div>
       <div class="table-scroll" id="rm-iss"></div>`;
@@ -3379,8 +3378,20 @@ function rmRows(k){
   if (!(window.rmZero||{})[k]) list = list.filter(r => Number(k==='mmc' ? r.balance : r.store_balance) !== 0);
   return q ? list.filter(r => (String(r.code)+' '+String(r.name)).toLowerCase().includes(q)) : list;
 }
+function rmIssSearch(){
+  const F = window.rmIss;
+  F.from = $('rmi-from').value; F.to = $('rmi-to').value; F.item = $('rmi-item').value; F.status = $('rmi-status').value;
+  if (F.from && F.to && F.from > F.to){ alert('The From date is after the To date.'); return; }
+  F.searched = true; rmIssDraw();
+}
+function rmIssClear(){
+  window.rmIss = { from: '', to: '', item: '', status: '', searched: false };
+  ['rmi-from','rmi-to','rmi-item','rmi-status'].forEach(id => { if ($(id)) $(id).value = ''; });
+  rmIssDraw();
+}
 function rmIssRows(){
   const F = window.rmIss || {};
+  if (!F.searched) return (window.__rmIssues||[]).slice(0, 5);   // default: only the last five issues
   return (window.__rmIssues||[]).filter(r => (!F.from || r.issue_date >= F.from) && (!F.to || r.issue_date <= F.to) && (!F.item || r.rm_item_id === F.item)
     && (!F.status || (F.status==='R' ? !!r.received_at : !r.received_at)));
 }
@@ -3401,7 +3412,8 @@ function rmIssDraw(){
   const box = $('rm-iss'); if (!box) return;
   const rows = rmIssRows(), F = window.rmIss || {};
   const tot = {}; rows.forEach(r => { const u = r.item?.unit || ''; tot[u] = (tot[u]||0) + Number(r.qty||0); });
-  $('rmi-sum').textContent = `${rows.length} issue(s)${F.from||F.to?' · '+(F.from||'beginning')+' to '+(F.to||'today'):' · all dates'}` + (F.item ? ' · total qty ' + Object.entries(tot).map(([u,q])=>q+(u?' '+u:'')).join(', ') : '');
+  $('rmi-sum').innerHTML = !F.searched ? `Showing the <b>last ${rows.length}</b> of ${(window.__rmIssues||[]).length} issue(s). Choose dates / item and press <b>Search</b> to see more.`
+    : `<b>${rows.length}</b> issue(s) found${F.from||F.to?' · '+(F.from||'beginning')+' to '+(F.to||'today'):' · all dates'}` + (F.item ? ' · total qty ' + Object.entries(tot).map(([u,q])=>q+(u?' '+u:'')).join(', ') : '');
   box.innerHTML = `<table><thead><tr><th>Date</th><th>Item</th><th class="amount">Qty</th><th>Unit</th><th>Challan</th><th>Vehicle</th><th>Received at MMC</th></tr></thead><tbody>` +
     (rows.map(r=>`<tr><td>${r.issue_date}</td><td><b>${esc(r.item?.code||'')}</b> ${esc(r.item?.name||'')}</td><td class="amount">${r.qty}</td><td>${esc(r.item?.unit||'')}</td><td>${esc(r.challan_no||'—')}</td><td>${esc(r.vehicle||'—')}</td>
       <td>${r.received_at ? '✔ '+r.received_at.slice(0,10) : `<button class="mini" onclick="rmReceive('${r.id}')">Confirm receipt</button>`}</td></tr>`).join('')
@@ -3409,7 +3421,7 @@ function rmIssDraw(){
 }
 function rmSheet(k){
   if (k === 'iss'){ const F = window.rmIss || {};
-    return { title: 'Material issued to MMC' + (F.from||F.to ? ' — '+(F.from||'beginning')+' to '+(F.to||'today') : ''), file: 'rm-issued-to-mmc',
+    return { title: 'Material issued to MMC' + (!F.searched ? ' — last 5 issues' : (F.from||F.to ? ' — '+(F.from||'beginning')+' to '+(F.to||'today') : '')), file: 'rm-issued-to-mmc',
       head: ['Date','Item code','Item','Qty','Unit','Challan','Vehicle','Received at MMC'],
       rows: rmIssRows().map(r=>[r.issue_date, r.item?.code||'', r.item?.name||'', r.qty, r.item?.unit||'', r.challan_no||'', r.vehicle||'', r.received_at ? r.received_at.slice(0,10) : 'Pending']) }; }
   if (k === 'mmc') return { title: 'Raw material at MMC', file: 'rm-at-mmc', head: ['Item code','Item','Issued to MMC','Consumed','At MMC (balance)','Unit'],
