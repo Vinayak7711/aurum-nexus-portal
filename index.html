@@ -533,7 +533,7 @@
   <!-- ============ MODULE 1: RATES & OUTSTANDING (Director) ============ -->
   <section id="view-rates" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>Rates, Cost Card &amp; Outstanding</h2>
+    <div class="welcome"><h2>MMC Accounts &amp; Distributor Outstanding</h2>
       <p>Director-only. Distributor outstanding and the MMC accounts.</p></div>
     <div class="subtabs">
       <button class="chip on" id="rt-out" onclick="ratesTab('out')">Outstanding</button>
@@ -697,7 +697,7 @@ const MODULES = [
   {key:'sales',   ico:'🧾', name:'Sales & Orders',   desc:'Distributor orders, approval, dispatch', live:true,  open:()=>openOrders()},
   {key:'party',   ico:'🤝', name:'Party Master & Onboarding', desc:'Distributors, vendors, retailers + applications', live:true,  open:()=>openParties()},
   {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Deccan Crest, Frost 91 family, packs',   live:true,  open:()=>openBrands()},
-  {key:'rates',   ico:'💰', name:'Rates & Outstanding', desc:'Cost card, billing rates, dues',      live:true,  dirOnly:true, open:()=>openRates()},
+  {key:'rates',   ico:'💰', name:'MMC Accounts & Distributor Outstanding', desc:'Distributor outstanding, MMC accounts, payment terms',      live:true,  dirOnly:true, open:()=>openRates()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing & Production', desc:'Targets, batches, QC, RM custody, FG stock', live:true, open:()=>openMfg()},
   {key:'reports', ico:'📈', name:'Sales Team — Reports & Targets', desc:'Daily activity, targets & field visits', live:true, open:()=>openReports()},
   {key:'salesrep', ico:'📊', name:'Sales Reports & Schemes', desc:'Distributor & retailer wise, brand-wise cases, schemes', live:true, open:()=>openSalesRep()},
@@ -1695,7 +1695,7 @@ async function openOrderDetail(id){
    Excise duty + wine fees → MMC excise account, before approval.
    VAT                     → paid by the distributor to MMC; sales of a month are due on the 19th of the next month.
    Basic                   → paid by the distributor to MMC (30 days credit from the sale / dispatch date); MMC pays Aurum;
-                             early payment earns a cash discount (slabs in Rates → MMC accounts → Payment terms). */
+                             early payment earns a cash discount (slabs in MMC Accounts &amp; Distributor Outstanding → MMC accounts → Payment terms). */
 async function loadPayTerms(force){
   if (window.__payTerms && !force) return window.__payTerms;
   const S = db.schema('sales');
@@ -2563,12 +2563,12 @@ function mmcAccountsPrint(){
     <p style="font-size:11px;color:#666;margin-top:10px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
   printHtml('MMC accounts — Aurum Spirits', body);
 }
-/* ============ DISTRIBUTOR OUTSTANDING (Rates → Outstanding and Accounting → Distributor dues) ============
+/* ============ DISTRIBUTOR OUTSTANDING (MMC Accounts &amp; Distributor Outstanding → Outstanding and Accounting → Distributor dues) ============
    Every approved bill, what the distributor still owes on it and when it falls due:
      · Excise duty + wine fees → to MMC's excise account, due before approval (due date = approval date)
      · VAT                     → to MMC, due on the 19th of the month after the sale
      · Basic                   → to MMC for Aurum, due after the credit days (default 30) from the sale
-   The same numbers as Rates → MMC accounts; one screen serves both places.                                */
+   The same numbers as MMC Accounts &amp; Distributor Outstanding → MMC accounts; one screen serves both places.                                */
 let recvRows = [], recvOpen = null, recvTarget = 'rates-body', recvView = 'all';
 async function distLoadRows(){
   const S = db.schema('sales');
@@ -2698,7 +2698,7 @@ function recvDraw(){
       <td style="font-size:12px;color:${d.late>0?'#b3261e':'#555'}">${d.late>0?d.late+' days overdue':d.late===0?'due today':'due in '+(-d.late)+' days'}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">Nothing in this view.</td></tr>'}
     ${sched.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${inr(sched.reduce((s,d)=>s+d.amt,0))}</td><td></td></tr>`:''}
     </tbody></table></div>
-    <p style="font-size:11.5px;color:#777;margin-top:8px;">Record the money with <b>➕ Receive</b> (basic with cash discount / other discount / scheme, and VAT — one cheque or transfer can cover both) or from the bill itself. The same figures appear in Rates → MMC accounts and Accounting → Distributor dues. Vendor bills we have to pay are the other direction — see <b>Accounting → Vendor dues</b>.</p>`;
+    <p style="font-size:11.5px;color:#777;margin-top:8px;">Record the money with <b>➕ Receive</b> (basic with cash discount / other discount / scheme, and VAT — one cheque or transfer can cover both) or from the bill itself. The same figures appear in MMC Accounts &amp; Distributor Outstanding → MMC accounts and Accounting → Distributor dues. Vendor bills we have to pay are the other direction — see <b>Accounting → Vendor dues</b>.</p>`;
   B.innerHTML = html;
 }
 
@@ -5699,7 +5699,7 @@ async function acctTab(t){
   const A = db.schema('acct');
 
   // Money owed TO us by distributors — the mirror image of Vendor dues. Same
-  // screen the Director sees under Rates → Outstanding, reading the same views.
+  // screen the Director sees under MMC Accounts &amp; Distributor Outstanding → Outstanding, reading the same views.
   if (t === 'recv'){
     if (!canFin() && !secExplicit('acct','ac-recv')){ B.innerHTML = '<div class="msg err">Distributor dues are visible to the Director and to Accounts (finance-view permission).</div>'; return; }
     await recvLoad('acct-body');
@@ -6127,7 +6127,7 @@ async function acctTab(t){
       ${exRows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(totEx)}</td></tr>`:''}
       </tbody></table></div>
       <h4 class="sec" style="margin-top:14px;">MMC VAT account — VAT paid by distributors to MMC · ${vtRows.length} entr${vtRows.length===1?'y':'ies'}</h4>
-      <p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Recorded when a VAT payment is entered on a sales order (mode “VAT paid to MMC”). VAT on sales made in a month falls due on the 19th of the next month — see Rates → MMC accounts for what is still due.</p>
+      <p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Recorded when a VAT payment is entered on a sales order (mode “VAT paid to MMC”). VAT on sales made in a month falls due on the 19th of the next month — see MMC Accounts &amp; Distributor Outstanding → MMC accounts for what is still due.</p>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>No.</th><th>Order</th><th>Distributor</th><th>Reference</th><th class="amount">VAT ₹</th></tr></thead><tbody>
       ${vtRows.map(r=>`<tr><td>${r.txn_date}</td><td><b>${esc(r.txn_no)}</b></td><td><a href="#" onclick="event.preventDefault();openOrders();show('order-detail');openOrderDetail('${r.order_id}')">${esc(r.so_no||'—')}</a></td><td>${esc(r.party_name||'—')}</td><td style="font-size:12px;">${esc(r.ref_no||'')}${r.narration?'<br><span style="color:#777">'+esc(r.narration)+'</span>':''}</td><td class="amount" style="font-weight:600;">${inr(r.amount)}</td></tr>`).join('')
         || '<tr><td colspan="6" style="color:#777">No VAT payments to MMC recorded yet.</td></tr>'}
