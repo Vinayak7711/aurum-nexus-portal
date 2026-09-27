@@ -6587,7 +6587,7 @@ async function acctTab(t){
     const fyStart = (now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear()-1) + '-04-01';
     B.innerHTML = `
       <h4 class="sec">Tax paid on purchases — input credit ledger</h4>
-      <p style="font-size:12px;color:#777;margin:4px 0 10px;">GST / VAT / sales tax collected by vendors on your purchase orders, plus TDS you deducted while paying expenses. Pick a date range and, if you want, a single tax type.</p>
+      <p style="font-size:12px;color:#777;margin:4px 0 10px;">GST / VAT / sales tax collected by vendors on your purchase orders, plus TDS you deducted while paying vendors and expenses. Pick a date range and, if you want, a single tax type.</p>
       <div class="row2c">
         <div class="row2c"><div><label>From date</label><input type="date" id="tx-from" value="${fyStart}"></div>
         <div><label>To date</label><input type="date" id="tx-to" value="${calFmt(now)}"></div></div>
@@ -7593,7 +7593,43 @@ async function acTaxRun(){
       `<td class="amount">${inr(r.taxable)}</td><td>${esc(TAX_LBL[r.tax_type]||r.tax_type)}</td><td class="amount">${Number(r.tax_rate)}</td>` +
       `<td class="amount" style="font-weight:600;color:#1a7f37">${inr(r.tax)}</td><td style="font-size:12px;">${esc(r.po_status)}</td></tr>`).join('')
       || '<tr><td colspan="9" style="color:#777">Nothing to show — place POs with a tax type &amp; rate and they will appear here.</td></tr>'}
-    </tbody></table></div>`;
+    </tbody></table></div>` + ((!ty || ty === 'TDS') ? '<div id="tx-tds" style="margin-top:16px;"><p style="color:#777">Loading TDS…</p></div>' : '');
+  if (!ty || ty === 'TDS') await acTdsVendors(from, to);
+}
+/* TDS deducted from vendors while paying them — month-wise, vendor-wise (payable to the government) */
+async function acTdsVendors(from, to){
+  const box = $('tx-tds'); if (!box) return;
+  const { data, error } = await db.schema('acct').from('tds_deductions').select('*').neq('status','REJECTED').gte('deduct_date', from).lte('deduct_date', to).order('deduct_date');
+  if (error){ box.innerHTML = `<div class="msg err">Could not load TDS: ${esc(error.message)}</div>`; return; }
+  const rows = data || [];
+  const vIds = [...new Set(rows.map(r=>r.vendor_id))], pIds = [...new Set(rows.map(r=>r.po_id).filter(Boolean))];
+  const vBy = {}, pBy = {};
+  if (vIds.length){ const { data: vs } = await db.schema('sales').from('vendors').select('id,name,code').in('id', vIds); (vs||[]).forEach(v=>vBy[v.id]=v); }
+  if (pIds.length){ const { data: ps } = await db.schema('mfg').from('purchase_orders').select('id,po_no').in('id', pIds); (ps||[]).forEach(p=>pBy[p.id]=p.po_no); }
+  window.__tdsRows = rows.map(r=>Object.assign({}, r, { vendor: (vBy[r.vendor_id]||{}).name || '?', po_no: pBy[r.po_id] || '' }));
+  const mName = m => new Date(m+'-01T00:00:00').toLocaleDateString('en-IN',{month:'long',year:'numeric'});
+  const byM = {}; window.__tdsRows.forEach(r=>{ const m = r.deduct_date.slice(0,7); const v = r.vendor;
+    ((byM[m] = byM[m] || {})[v] = byM[m][v] || { bill:0, tds:0, n:0, pending:0 }); const g = byM[m][v];
+    g.bill += Number(r.bill_amount); g.tds += Number(r.tds_amount); g.n++; if (r.status==='PENDING') g.pending += Number(r.tds_amount); });
+  const tot = window.__tdsRows.reduce((t,r)=>t+Number(r.tds_amount),0);
+  box.innerHTML = `<h4 class="sec">TDS deducted from vendors — payable to the government</h4>
+    <p style="font-size:12px;color:#777;margin:4px 0 8px;">TDS deducted while paying vendors (Accounting → New Entry → Vendor payment → “TDS deducted from this bill”), month-wise and vendor-wise. Total in this period: <b>₹ ${inr(tot)}</b>. <button class="btn ghost sm" onclick="acTdsCsv()">⬇ Download (CSV / Excel)</button></p>
+    <div class="table-scroll"><table><thead><tr><th>Month</th><th>Vendor</th><th class="amount">Payments</th><th class="amount">Bill amount ₹</th><th class="amount">TDS deducted ₹</th></tr></thead><tbody>
+    ${Object.keys(byM).sort().map(m=>{ const vs = byM[m], mt = Object.values(vs).reduce((t,g)=>t+g.tds,0);
+      return Object.keys(vs).sort().map((v,i)=>`<tr>${i===0?`<td rowspan="${Object.keys(vs).length+1}" style="vertical-align:top;"><b>${mName(m)}</b></td>`:''}<td>${esc(v)}</td><td class="amount">${vs[v].n}</td><td class="amount">${inr(vs[v].bill)}</td><td class="amount" style="font-weight:700;color:#b8860b">${inr(vs[v].tds)}${vs[v].pending>0.004?'<br><span style="font-size:10.5px;color:#777">₹ '+inr(vs[v].pending)+' awaiting approval</span>':''}</td></tr>`).join('')
+        + `<tr style="background:#faf6ea;font-weight:700;"><td>Month total</td><td></td><td></td><td class="amount">${inr(mt)}</td></tr>`; }).join('') || '<tr><td colspan="5" style="color:#777">No TDS deducted from vendors in this period.</td></tr>'}
+    </tbody></table></div>
+    ${rows.length?`<h4 class="sec" style="margin-top:12px;">TDS detail</h4><div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Vendor</th><th>PO</th><th>Section</th><th class="amount">Bill ₹</th><th class="amount">Rate %</th><th class="amount">TDS ₹</th><th>Status</th></tr></thead><tbody>
+    ${window.__tdsRows.map(r=>`<tr><td>${esc(r.tds_no||'')}</td><td>${r.deduct_date}</td><td>${esc(r.vendor)}</td><td>${esc(r.po_no||'—')}</td><td>${esc(r.section||'—')}</td><td class="amount">${inr(r.bill_amount)}</td><td class="amount">${r.tds_rate!=null?Number(r.tds_rate):'—'}</td><td class="amount" style="font-weight:600;color:#b8860b">${inr(r.tds_amount)}</td><td style="font-size:12px;">${r.status==='PENDING'?'awaiting approval':'deducted'}</td></tr>`).join('')}
+    </tbody></table></div>`:''}`;
+}
+function acTdsCsv(){
+  const rows = window.__tdsRows || []; if (!rows.length){ alert('Nothing to download.'); return; }
+  const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const out = [['TDS no','Date','Month','Vendor','PO','Section','Bill amount','Rate %','TDS','Status'].map(e2).join(',')];
+  rows.forEach(r=>out.push([r.tds_no, r.deduct_date, r.deduct_date.slice(0,7), r.vendor, r.po_no, r.section||'', Number(r.bill_amount).toFixed(2), r.tds_rate??'', Number(r.tds_amount).toFixed(2), r.status==='PENDING'?'Awaiting approval':'Deducted'].map(e2).join(',')));
+  const blob = new Blob(['\ufeff' + out.join('\n')], { type:'text/csv;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'tds-deducted-from-vendors.csv'; a.click();
 }
 async function acPettyDecide(id, approve){
   const note = prompt(approve ? 'Approve this cash expense?\nOptional note:' : 'Reject this cash expense?\nOptional reason:', '');
@@ -7661,11 +7697,20 @@ async function acEntryForm(kind){
       <option value="RECOVERY">Advance recovery (cash in)</option>
       <option value="OTHER">Other</option>
       </optgroup></select></div>
-    <div><label>Amount ₹ *</label><input type="number" id="en-amt" min="0.01" step="any"></div></div>
+    <div><label>Amount ₹ *</label><input type="number" id="en-amt" min="0.01" step="any" oninput="acEnTdsCalc(true)"></div></div>
     <div id="en-vendor-wrap" style="display:none">
       <div class="row2c"><div><label id="en-vendor-lbl">Vendor *</label><select id="en-vendor" onchange="acEnLoadPos()">${vendorOpts}</select></div>
       <div><label>Against purchase order</label><select id="en-po" onchange="acEnPoChange()"><option value="">— none / not yet —</option></select></div></div>
       <div id="en-ponote" style="font-size:12px;color:#777;margin:4px 0 8px;"></div>
+      <div id="en-tds-wrap" style="display:none;margin:0 0 8px;">
+        <label style="display:flex;align-items:center;gap:6px;font-weight:600;margin:0;"><input type="checkbox" id="en-tds-on" style="width:auto;" onchange="acEnTdsToggle()"> TDS deducted from this bill</label>
+        <div id="en-tds-box" style="display:none;border:1px solid #e3d9b8;background:#faf6ea;border-radius:10px;padding:10px 12px;margin-top:6px;">
+          <p style="font-size:11.5px;color:#555;margin:0 0 6px;">Enter the <b>bill amount</b> in Amount above. The TDS is deducted from it — the bank pays the balance, the vendor's outstanding is cleared by the full bill, and the TDS is recorded against this vendor for the month (Accounting → Purchase Tax → TDS).</p>
+          <div class="row2c"><div><label>TDS section</label><select id="en-tds-sec"><option value="194C">194C — Contractors</option><option value="194J">194J — Professional / technical fees</option><option value="194I">194I — Rent</option><option value="194H">194H — Commission / brokerage</option><option value="194Q">194Q — Purchase of goods</option><option value="OTHER">Other</option></select></div>
+            <div class="row2c"><div><label>Rate %</label><input type="number" id="en-tds-rate" min="0" max="99" step="any" oninput="acEnTdsCalc(true)"></div><div><label>TDS amount ₹ *</label><input type="number" id="en-tds-amt" min="0" step="any" oninput="acEnTdsCalc(false)"></div></div></div>
+          <div id="en-tds-sum" style="font-size:12.5px;margin-top:6px;"></div>
+        </div>
+      </div>
       <div id="en-manual-wrap" style="display:none"><label>Payee name — if the party is not in the vendor list</label><input type="text" id="en-payee-manual" placeholder="Type the name of the person / firm being paid">
         <p style="font-size:11.5px;color:#777;margin:4px 0 8px;">Leave the vendor as "— choose the vendor —" and type the payee here. The payment is posted to the bank ledger under this name (no vendor dues are touched).</p></div>
     </div>
@@ -7692,6 +7737,7 @@ function acKindChange(){
   $('en-counter-wrap').style.display = k==='TRANSFER'?'block':'none';
   $('en-dir-wrap').style.display = k==='OTHER'?'block':'none';
   $('en-vendor-wrap').style.display = (isVen || k==='PAYMENT') ? 'block' : 'none';
+  if ($('en-tds-wrap')) $('en-tds-wrap').style.display = (k==='VPAY' || k==='PAYMENT') ? '' : 'none';
   acEnManualToggle();
   $('en-bank-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
   $('en-mode-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
@@ -7730,6 +7776,17 @@ async function acEnLoadPos(){
   }).join('');
   if (!window.__enPos.length) $('en-ponote').textContent = isMmc ? 'This vendor has no purchase order marked "billed & delivered to MMC" — you can still record the amount without a PO.' : 'This vendor has no purchase order yet — you can still record the payment without a PO.';
 }
+function acEnTdsToggle(){
+  const on = $('en-tds-on').checked; $('en-tds-box').style.display = on ? '' : 'none';
+  if (on) acEnTdsCalc(true);
+}
+function acEnTdsCalc(fromRate){
+  if (!$('en-tds-on') || !$('en-tds-on').checked) return;
+  const bill = Number($('en-amt').value)||0, rate = Number($('en-tds-rate').value)||0;
+  if (fromRate && rate > 0) $('en-tds-amt').value = (Math.round(bill * rate) / 100).toFixed(2);
+  const tds = Number($('en-tds-amt').value)||0;
+  $('en-tds-sum').innerHTML = bill > 0 ? `Bill ₹ ${inr(bill)} − TDS ₹ ${inr(tds)} = <b>paid from bank ₹ ${inr(bill - tds)}</b>` + (tds >= bill ? ' <span style="color:#b3261e">— TDS must be less than the bill</span>' : '') : '<span style="color:#777">Enter the bill amount above.</span>';
+}
 function acEnPoChange(){
   const k = $('en-kind').value, psel = $('en-po'), note = $('en-ponote'); if (!psel) return;
   const po = (window.__enPos||[]).find(p=>p.po_id === psel.value);
@@ -7743,6 +7800,7 @@ function acEnPoChange(){
     txt = `PO value ₹${inr(po.po_value)} · sent to MMC ₹${inr(po.to_mmc)} · MMC has paid the vendor ₹${inr(po.by_mmc)} · <b>with MMC for this PO ₹${inr(left>0?left:0)}</b>`; }
   if (note) note.innerHTML = txt;
   if (left > 0) $('en-amt').value = left;
+  acEnTdsCalc(true);
 }
 // Warn before posting when an entry of the same amount already sits within 3 days (a likely double entry)
 async function acDupWarn(amt, date, dir){
@@ -7790,6 +7848,7 @@ async function acEntrySave(){
     const manual = ($('en-payee-manual') ? $('en-payee-manual').value.trim() : '');
     if (!vid && !(k === 'VPAY' && manual) && k !== 'MMC_PAY'){ say('en-msg', k === 'VPAY' ? 'Choose the vendor from the list, or type the payee name in the box below the vendor.' : 'Choose the vendor.', false); return; }
     let res, msg;
+    if (k === 'VPAY' && !vid && $('en-tds-on') && $('en-tds-on').checked){ say('en-msg','TDS can be recorded only against a vendor from the list — choose the vendor.',false); return; }
     if (k === 'VPAY' && !vid){
       // payee not in the vendor master: a plain bank payment under the typed name (no vendor dues involved)
       if (!$('en-bank').value){ say('en-msg','Choose the bank the money goes from.',false); return; }
@@ -7799,7 +7858,15 @@ async function acEntrySave(){
       alert(canFinApprove() ? 'Payment to ' + manual + ' posted in the bank ledger.' : 'Submitted — the payment to ' + manual + ' waits for approval by the Accounts head or Director.');
       window.acLedSel = ''; acctTab('ledger'); return;
     }
-    if (k === 'VPAY'){
+    if (k === 'VPAY' && $('en-tds-on') && $('en-tds-on').checked){
+      if (!$('en-bank').value){ say('en-msg','Choose the bank the money goes from.',false); return; }
+      const tds = Number($('en-tds-amt').value)||0;
+      if (!(tds > 0)){ say('en-msg','Enter the TDS amount (or untick “TDS deducted”).',false); return; }
+      if (tds >= amt){ say('en-msg','TDS must be less than the bill amount.',false); return; }
+      res = await db.schema('acct').rpc('vendor_pay_bank_tds', { p_vendor: vid, p_bill: amt, p_tds: tds, p_bank: $('en-bank').value, p_po: po, p_date: $('en-date').value||null,
+        p_mode: $('en-mode').value||'NEFT', p_ref: ref, p_note: note, p_section: $('en-tds-sec').value||null, p_rate: Number($('en-tds-rate').value)||null });
+      msg = (res.data && res.data.posted ? 'Vendor payment posted — ' : 'Sent for approval — ') + `bill ₹ ${inr(amt)}, TDS ₹ ${inr(tds)} deducted, ₹ ${inr(amt - tds)} ${res.data && res.data.posted ? 'paid from the bank' : 'to be paid from the bank once approved'}. The vendor's outstanding is cleared by ₹ ${inr(amt)} and the TDS is recorded against the vendor for ${new Date(($('en-date').value||calFmt(new Date()))+'T00:00:00').toLocaleDateString('en-IN',{month:'long',year:'numeric'})}.`;
+    } else if (k === 'VPAY'){
       if (!$('en-bank').value){ say('en-msg','Choose the bank the money goes from.',false); return; }
       res = await db.schema('acct').rpc('vendor_pay_bank', { p_vendor: vid, p_amount: amt, p_bank: $('en-bank').value, p_po: po, p_date: $('en-date').value||null, p_mode: $('en-mode').value||'NEFT', p_ref: ref, p_note: note });
       msg = res.data && res.data.posted ? 'Vendor payment posted — the bank ledger and the vendor’s outstanding are updated.' : 'Sent for approval — it appears under Vendor Dues → Waiting for approval until the approving authority releases it.';
