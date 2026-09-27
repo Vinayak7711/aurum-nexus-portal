@@ -3316,9 +3316,9 @@ async function mfgTab(which){
     return;
   }
   if (which === 'rm'){
-    const [{ data: stock, error: e1 }, { data: issues }, { data: store }] = await Promise.all([
+    const [{ data: stock, error: e1 }, { data: allIssues }, { data: store }] = await Promise.all([
       MF.from('v_rm_stock').select('*').order('code'),
-      MF.from('rm_issues').select('*, item:rm_item_id(code,name)').order('created_at',{ascending:false}).limit(50),
+      MF.from('rm_issues').select('*, item:rm_item_id(code,name,unit)').order('issue_date',{ascending:false}).order('created_at',{ascending:false}).limit(5000),
       MF.from('v_rm_store').select('*')
     ]);
     if (e1){ B.innerHTML = `<div class="msg err">${esc(e1.message)}</div>`; return; }
@@ -3340,18 +3340,96 @@ async function mfgTab(which){
       <div class="row2c" style="margin-top:8px;"><input type="text" id="ri-challan" placeholder="Challan no.">
       <button class="btn gold sm" style="padding:11px;" onclick="rmIssue()">Record issue</button></div>
       <div id="mfg-msg3"></div></div>`;
-    html += '<h4 class="sec">Raw material position</h4><p style="font-size:12px;color:#777;margin:4px 0 8px;">Received purchases sit in the <b>company store</b>; what you send to MMC moves to <b>At MMC</b> and falls as batches consume it. Materials with nothing anywhere are hidden until stock arrives.</p><div class="table-scroll"><table><thead><tr><th>Item</th><th class="amount">In company store</th><th class="amount">Issued to MMC</th><th class="amount">Consumed</th><th class="amount"><b>At MMC (balance)</b></th><th>Unit</th></tr></thead><tbody>';
-    for (const r of live){
-      const s = storeBy[r.rm_item_id] || {};
-      html += `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount" style="font-weight:600;color:${Number(s.store_balance||0)>0?'#1a7f37':'#777'}">${Number(s.store_balance||0)}</td><td class="amount">${r.issued}</td><td class="amount">${r.consumed}</td><td class="amount"><b>${r.balance}</b></td><td>${r.unit}</td></tr>`;
-    }
-    if (!live.length) html += '<tr><td colspan="6" style="color:#777">No materials in hand yet — a material appears here the moment a purchase is received into the store.</td></tr>';
-    html += '</tbody></table></div><h4 class="sec">Recent issues</h4><div class="table-scroll"><table><thead><tr><th>Date</th><th>Item</th><th class="amount">Qty</th><th>Challan</th><th>Received at MMC</th></tr></thead><tbody>';
-    for (const r of (issues||[]))
-      html += `<tr><td>${r.issue_date}</td><td>${esc(r.item?.code)}</td><td class="amount">${r.qty}</td><td>${esc(r.challan_no||'—')}</td>
-        <td>${r.received_at ? '✔ '+r.received_at.slice(0,10) : `<button class="mini" onclick="rmReceive('${r.id}')">Confirm receipt</button>`}</td></tr>`;
-    B.innerHTML = html + '</tbody></table></div>';
+    // Two separate lists: what is lying at MMC, and what is in our company store
+    const mmcList = (stock||[]).filter(r => Number(r.issued||0) !== 0 || Number(r.consumed||0) !== 0 || Number(r.balance||0) !== 0);
+    const storeList = (store||[]).filter(r => Number(r.received||0) !== 0 || Number(r.issued_to_mmc||0) !== 0 || Number(r.store_balance||0) !== 0)
+      .sort((x,y)=>String(x.code).localeCompare(String(y.code)));
+    window.__rm = { mmc: mmcList, store: storeList, items: live };
+    window.rmQ = window.rmQ || { mmc:'', store:'' };
+    const today = ymdStr(new Date()), d30 = addDaysStr(today, -30);
+    window.rmIss = window.rmIss || { from: d30, to: today, item: '', status: '' };
+    const itemOpts = [...new Map((allIssues||[]).map(r=>[r.rm_item_id, r.item])).entries()].sort((x,y)=>String(x[1]?.code).localeCompare(String(y[1]?.code)));
+    window.__rmIssues = allIssues || [];
+    const tools = k => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;">
+        <input type="text" placeholder="🔍 Search item" value="${esc(window.rmQ[k])}" oninput="window.rmQ['${k}']=this.value;rmPosDraw('${k}')" style="max-width:240px;padding:7px;font-size:12.5px;">
+        <span style="flex:1"></span><button class="btn ghost sm" onclick="rmCsv('${k}')">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="rmPrint('${k}')">🖨 Print / save PDF</button></div>`;
+    html += `<h4 class="sec">Raw material at MMC</h4><p style="font-size:12px;color:#777;margin:4px 0 0;">What has been sent to MMC, what the batches have consumed, and the balance lying at MMC.</p>
+      ${tools('mmc')}<div class="table-scroll" id="rm-pos-mmc"></div>
+      <h4 class="sec" style="margin-top:16px;">Raw material in company store</h4><p style="font-size:12px;color:#777;margin:4px 0 0;">Purchases received into our store, what has been sent to MMC from it, and the balance still in the store.</p>
+      ${tools('store')}<div class="table-scroll" id="rm-pos-store"></div>
+      <h4 class="sec" style="margin-top:16px;">Material issued to MMC</h4>
+      <div class="card" style="padding:10px 12px;margin:4px 0 8px;"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+        <div><label>From</label><input type="date" id="rmi-from" value="${window.rmIss.from}" onchange="window.rmIss.from=this.value;rmIssDraw()"></div>
+        <div><label>To</label><input type="date" id="rmi-to" value="${window.rmIss.to}" onchange="window.rmIss.to=this.value;rmIssDraw()"></div>
+        <div style="min-width:220px;flex:1;"><label>Item</label><select onchange="window.rmIss.item=this.value;rmIssDraw()"><option value="">— all items —</option>${itemOpts.map(([id,it])=>`<option value="${id}"${window.rmIss.item===id?' selected':''}>${esc(it?.code||'')} — ${esc(it?.name||'')}</option>`).join('')}</select></div>
+        <div><label>Receipt at MMC</label><select onchange="window.rmIss.status=this.value;rmIssDraw()"><option value="">All</option><option value="P"${window.rmIss.status==='P'?' selected':''}>Pending confirmation</option><option value="R"${window.rmIss.status==='R'?' selected':''}>Received</option></select></div>
+        <div><button class="btn ghost sm" onclick="window.rmIss.from='';window.rmIss.to='';$('rmi-from').value='';$('rmi-to').value='';rmIssDraw()">All dates</button></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><span id="rmi-sum" style="font-size:12px;color:#555;align-self:center;"></span><span style="flex:1"></span><button class="btn ghost sm" onclick="rmCsv('iss')">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="rmPrint('iss')">🖨 Print / save PDF</button></div></div>
+      <div class="table-scroll" id="rm-iss"></div>`;
+    B.innerHTML = html;
+    rmPosDraw('mmc'); rmPosDraw('store'); rmIssDraw();
   }
+}
+/* ---- Raw material: separate lists (at MMC / company store) and the issue register, with filters, download and print ---- */
+function rmRows(k){
+  const q = String((window.rmQ||{})[k]||'').trim().toLowerCase();
+  const list = (window.__rm||{})[k] || [];
+  return q ? list.filter(r => (String(r.code)+' '+String(r.name)).toLowerCase().includes(q)) : list;
+}
+function rmIssRows(){
+  const F = window.rmIss || {};
+  return (window.__rmIssues||[]).filter(r => (!F.from || r.issue_date >= F.from) && (!F.to || r.issue_date <= F.to) && (!F.item || r.rm_item_id === F.item)
+    && (!F.status || (F.status==='R' ? !!r.received_at : !r.received_at)));
+}
+function rmPosDraw(k){
+  const box = $('rm-pos-' + k); if (!box) return;
+  const rows = rmRows(k);
+  if (k === 'mmc'){
+    box.innerHTML = `<table><thead><tr><th>Item</th><th class="amount">Issued to MMC</th><th class="amount">Consumed</th><th class="amount"><b>At MMC (balance)</b></th><th>Unit</th></tr></thead><tbody>` +
+      (rows.map(r=>`<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${Number(r.issued||0)}</td><td class="amount">${Number(r.consumed||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.balance)<0?'#b3261e':'inherit'}">${Number(r.balance||0)}</td><td>${esc(r.unit||'')}</td></tr>`).join('')
+       || '<tr><td colspan="5" style="color:#777">No material at MMC' + (window.rmQ.mmc?' matching the search':'') + '.</td></tr>') + '</tbody></table>';
+  } else {
+    box.innerHTML = `<table><thead><tr><th>Item</th><th class="amount">Received in store</th><th class="amount">Sent to MMC</th><th class="amount"><b>In company store (balance)</b></th><th>Unit</th></tr></thead><tbody>` +
+      (rows.map(r=>`<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${Number(r.received||0)}</td><td class="amount">${Number(r.issued_to_mmc||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.store_balance)<0?'#b3261e':Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance||0)}</td><td>${esc(r.unit||'')}</td></tr>`).join('')
+       || '<tr><td colspan="5" style="color:#777">Nothing in the company store' + (window.rmQ.store?' matching the search':'') + '.</td></tr>') + '</tbody></table>';
+  }
+}
+function rmIssDraw(){
+  const box = $('rm-iss'); if (!box) return;
+  const rows = rmIssRows(), F = window.rmIss || {};
+  const tot = {}; rows.forEach(r => { const u = r.item?.unit || ''; tot[u] = (tot[u]||0) + Number(r.qty||0); });
+  $('rmi-sum').textContent = `${rows.length} issue(s)${F.from||F.to?' · '+(F.from||'beginning')+' to '+(F.to||'today'):' · all dates'}` + (F.item ? ' · total qty ' + Object.entries(tot).map(([u,q])=>q+(u?' '+u:'')).join(', ') : '');
+  box.innerHTML = `<table><thead><tr><th>Date</th><th>Item</th><th class="amount">Qty</th><th>Unit</th><th>Challan</th><th>Vehicle</th><th>Received at MMC</th></tr></thead><tbody>` +
+    (rows.map(r=>`<tr><td>${r.issue_date}</td><td><b>${esc(r.item?.code||'')}</b> ${esc(r.item?.name||'')}</td><td class="amount">${r.qty}</td><td>${esc(r.item?.unit||'')}</td><td>${esc(r.challan_no||'—')}</td><td>${esc(r.vehicle||'—')}</td>
+      <td>${r.received_at ? '✔ '+r.received_at.slice(0,10) : `<button class="mini" onclick="rmReceive('${r.id}')">Confirm receipt</button>`}</td></tr>`).join('')
+     || '<tr><td colspan="7" style="color:#777">No material issued to MMC for this selection.</td></tr>') + '</tbody></table>';
+}
+function rmSheet(k){
+  if (k === 'iss'){ const F = window.rmIss || {};
+    return { title: 'Material issued to MMC' + (F.from||F.to ? ' — '+(F.from||'beginning')+' to '+(F.to||'today') : ''), file: 'rm-issued-to-mmc',
+      head: ['Date','Item code','Item','Qty','Unit','Challan','Vehicle','Received at MMC'],
+      rows: rmIssRows().map(r=>[r.issue_date, r.item?.code||'', r.item?.name||'', r.qty, r.item?.unit||'', r.challan_no||'', r.vehicle||'', r.received_at ? r.received_at.slice(0,10) : 'Pending']) }; }
+  if (k === 'mmc') return { title: 'Raw material at MMC', file: 'rm-at-mmc', head: ['Item code','Item','Issued to MMC','Consumed','At MMC (balance)','Unit'],
+      rows: rmRows('mmc').map(r=>[r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||'']) };
+  return { title: 'Raw material in company store', file: 'rm-company-store', head: ['Item code','Item','Received in store','Sent to MMC','In company store (balance)','Unit'],
+      rows: rmRows('store').map(r=>[r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||'']) };
+}
+function rmCsv(k){
+  const S = rmSheet(k); if (!S.rows.length){ alert('Nothing to download.'); return; }
+  const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const out = [S.head.map(e2).join(',')].concat(S.rows.map(r=>r.map(e2).join(',')));
+  const blob = new Blob(['﻿' + out.join('\n')], { type:'text/csv;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = S.file + '-' + ymdStr(new Date()) + '.csv'; a.click();
+}
+function rmPrint(k){
+  const S = rmSheet(k); if (!S.rows.length){ alert('Nothing to print.'); return; }
+  const num = i => typeof S.rows[0][i] === 'number';
+  const body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>${esc(S.title)}</h2>
+    <table><thead><tr>${S.head.map((h,i)=>`<th${num(i)?' class="amount"':''}>${esc(h)}</th>`).join('')}</tr></thead><tbody>
+    ${S.rows.map(r=>`<tr>${r.map((v,i)=>`<td${num(i)?' class="amount"':''}>${esc(String(v))}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    <p style="font-size:11px;color:#666;margin-top:10px;">${S.rows.length} row(s) · printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml(S.title + ' — Aurum Spirits', body);
 }
 /* ================= MODULE 13: PRODUCTION SECTION ================= */
 // Production now lives inside Manufacturing — this keeps every old entry point
