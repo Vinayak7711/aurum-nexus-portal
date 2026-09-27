@@ -538,6 +538,7 @@
     <div class="subtabs">
       <button class="chip on" id="rt-out" onclick="ratesTab('out')">Outstanding</button>
       <button class="chip" id="rt-cm" onclick="ratesTab('cm')">MMC accounts</button>
+      <button class="chip" id="rt-led" onclick="ratesTab('led')">Distributor ledger</button>
     </div>
     <div id="rates-body"></div>
   </section>
@@ -740,7 +741,7 @@ const SECTIONS = {
              ['ac-tax','Purchase tax'],['ac-vdues','Vendor dues'],['ac-recv','Distributor dues'],
              ['ac-exp','Expenses'],['ac-salary','Salary'],
              ['ac-adv','Advances'],['ac-assets','Assets']],
-  rates:    [['rt-out','Outstanding'],['rt-cm','MMC accounts']],
+  rates:    [['rt-out','Outstanding'],['rt-cm','MMC accounts'],['rt-led','Distributor ledger']],
 };
 // view id -> module key, so sections can be applied whenever a screen opens
 const VIEW_MOD = { parties:'party', reports:'reports', salesrep:'salesrep', mfg:'mfg',
@@ -771,7 +772,7 @@ function secAnyExplicit(modKey){
   return list.some(([id]) => secExplicit(modKey, id));
 }
 // Tabs that are Director-only by default (shown unticked for staff until the Director ticks them).
-const DIR_ONLY_TABS = ['kt-all','fld-salesmen','fld-creds','rt-out','rt-cm'];
+const DIR_ONLY_TABS = ['kt-all','fld-salesmen','fld-creds','rt-out','rt-cm','rt-led'];
 let __secBusy = false;
 function applySections(modKey){
   const list = SECTIONS[modKey];
@@ -1633,7 +1634,7 @@ async function openOrderDetail(id){
     if ($('od-balance') && bd){
       $('od-balance').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
         <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #c9a227;"><div style="font-size:11px;color:#777">Basic — distributor pays MMC, MMC pays Aurum · ${bd.credit} days credit</div>
-          <div>Basic ₹ ${inr(bd.basic)}${bd.basicMmc?' − paid to MMC ₹ '+inr(bd.basicMmc):''}${bd.basicDirect?' − paid direct to Aurum ₹ '+inr(bd.basicDirect):''}${bd.disc?' − cash discount ₹ '+inr(bd.disc):''}${bd.otherDisc?' − other discount ₹ '+inr(bd.otherDisc):''}${bd.scheme?' − scheme ₹ '+inr(bd.scheme):''} = <b style="color:${bd.basicLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.basicLeft)}</b></div>
+          <div>Basic ₹ ${inr(bd.basic)}${bd.basicMmc?' − paid to MMC ₹ '+inr(bd.basicMmc):''}${bd.basicDirect?' − paid direct to Aurum ₹ '+inr(bd.basicDirect):''}${bd.disc?' − cash discount ₹ '+inr(bd.disc):''}${bd.otherDisc?' − other discount ₹ '+inr(bd.otherDisc):''}${bd.scheme?' − scheme ₹ '+inr(bd.scheme):''}${bd.schReimb?' − scheme reimbursement adjusted ₹ '+inr(bd.schReimb):''} = <b style="color:${bd.basicLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.basicLeft)}</b></div>
           <div style="font-size:11.5px;color:${bd.basicOver?'#b3261e':'#555'}">Due by <b>${bd.basicDue}</b>${bd.provisional?' (from approval date — reset on dispatch)':''}${bd.basicOver?' · overdue '+bd.basicLate+' days':''}</div>
           ${bd.discNow>0.005?`<div style="font-size:11.5px;color:#0b57d0">Early payment: ${bd.pct}% cash discount if paid by ${bd.discUntil} → pay ₹ ${inr(bd.basicLeft-bd.discNow)} to settle</div>`:''}</div>
         <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #1a7f37;"><div style="font-size:11px;color:#777">VAT — paid by the distributor to MMC</div>
@@ -1673,7 +1674,7 @@ function daysBetweenStr(a, b){ return Math.round((new Date(b+'T00:00:00') - new 
 function saleDateOf(o){ return o.dispatched_at ? String(o.dispatched_at).slice(0,10) : (o.approved_at ? String(o.approved_at).slice(0,10) : o.order_date); }
 function discSlab(days, slabs){ let best = null; (slabs||[]).forEach(s=>{ if (days <= Number(s.paid_within_days) && (!best || Number(s.pct) > Number(best.pct))) best = s; }); return best; }
 function payModeLabel(m){
-  return m==='EXCISE_MMC' ? '🏭 Excise &amp; wine fees → MMC excise a/c' : m==='VAT_MMC' ? '🧾 VAT → paid to MMC' : m==='CASH_DISC' ? '🏷 Cash discount (early payment)' : m==='BASIC_MMC' ? '💼 Basic → paid to MMC (for Aurum)' : m==='OTHER_DISC' ? '🏷 Other discount' : m==='SCHEME' ? '🎁 Scheme' : 'Basic paid direct to Aurum · ' + esc(m||'');
+  return m==='EXCISE_MMC' ? '🏭 Excise &amp; wine fees → MMC excise a/c' : m==='VAT_MMC' ? '🧾 VAT → paid to MMC' : m==='CASH_DISC' ? '🏷 Cash discount (early payment)' : m==='BASIC_MMC' ? '💼 Basic → paid to MMC (for Aurum)' : m==='OTHER_DISC' ? '🏷 Other discount' : m==='SCHEME' ? '🎁 Scheme' : m==='SCHEME_REIMB' ? '🎁 Scheme reimbursement adjusted against basic' : 'Basic paid direct to Aurum · ' + esc(m||'');
 }
 function odPayKind(){
   const k = $('pay-kind').value, bd = window.__odPayBd;
@@ -1687,20 +1688,20 @@ function orderTerms(o, T, pays, PT, partyCredit){
   const sum = f => (pays||[]).filter(f).reduce((s,p)=>s+Number(p.amount),0);
   const levyPaid = sum(p=>p.mode==='EXCISE_MMC'), vatPaid = sum(p=>p.mode==='VAT_MMC'), disc = sum(p=>p.mode==='CASH_DISC');
   const basicMmc = sum(p=>p.mode==='BASIC_MMC');
-  const otherDisc = sum(p=>p.mode==='OTHER_DISC'), scheme = sum(p=>p.mode==='SCHEME');
-  const basicDirect = sum(p=>!['EXCISE_MMC','VAT_MMC','CASH_DISC','BASIC_MMC','OTHER_DISC','SCHEME'].includes(p.mode));
+  const otherDisc = sum(p=>p.mode==='OTHER_DISC'), scheme = sum(p=>p.mode==='SCHEME'), schReimb = sum(p=>p.mode==='SCHEME_REIMB');
+  const basicDirect = sum(p=>!['EXCISE_MMC','VAT_MMC','CASH_DISC','BASIC_MMC','OTHER_DISC','SCHEME','SCHEME_REIMB'].includes(p.mode));
   const basicRecv = basicMmc + basicDirect;
   const sale = saleDateOf(o), provisional = !o.dispatched_at, today = ymdStr(new Date());
   const credit = Number(partyCredit) > 0 ? Number(partyCredit) : PT.credit;
   const basicDue = addDaysStr(sale, credit), vatDue = vatDueStr(sale, PT.vatDay);
   const basic = Number(T.basic||0), vat = Number(T.vat||0), exc = Number(T.exc||0), wine = Number(T.wine||0);
-  const levyLeft = Math.max(0, exc + wine - levyPaid), vatLeft = vat - vatPaid, basicLeft = basic - basicRecv - disc - otherDisc - scheme;
+  const levyLeft = Math.max(0, exc + wine - levyPaid), vatLeft = vat - vatPaid, basicLeft = basic - basicRecv - disc - otherDisc - scheme - schReimb;
   const days = Math.max(0, daysBetweenStr(sale, today));
   const slab = basicLeft > 0.005 ? discSlab(days, PT.slabs) : null;
   const pct = slab ? Number(slab.pct) : 0, discNow = slab ? Math.round(basicLeft * pct) / 100 : 0;
   const discUntil = slab ? addDaysStr(sale, slab.paid_within_days) : '';
   const basicOver = basicLeft > 0.005 && today > basicDue, vatOver = vatLeft > 0.005 && today > vatDue;
-  return { sale, provisional, credit, basicDue, vatDue, basic, vat, exc, wine, levyPaid, vatPaid, disc, otherDisc, scheme, basicRecv, basicMmc, basicDirect,
+  return { sale, provisional, credit, basicDue, vatDue, basic, vat, exc, wine, levyPaid, vatPaid, disc, otherDisc, scheme, schReimb, basicRecv, basicMmc, basicDirect,
            levyLeft, vatLeft, basicLeft, days, pct, discNow, discUntil, basicOver, vatOver,
            basicLate: basicOver ? daysBetweenStr(basicDue, today) : 0, balance: basicLeft + vatLeft + levyLeft };
 }
@@ -1760,6 +1761,7 @@ async function orderReport(id){
       ${bd.disc ? `<tr><td>Less: cash discount for early payment</td><td class="amount">− ${inr(bd.disc)}</td></tr>` : ''}
       ${bd.otherDisc ? `<tr><td>Less: other discount</td><td class="amount">− ${inr(bd.otherDisc)}</td></tr>` : ''}
       ${bd.scheme ? `<tr><td>Less: scheme</td><td class="amount">− ${inr(bd.scheme)}</td></tr>` : ''}
+      ${bd.schReimb ? `<tr><td>Less: scheme reimbursement adjusted</td><td class="amount">− ${inr(bd.schReimb)}</td></tr>` : ''}
       <tr style="font-weight:700;"><td>Basic balance · due by ${bd.basicDue}</td><td class="amount">${inr(bd.basicLeft)}</td></tr>
       ${bd.discNow>0.005 ? `<tr><td colspan="2" style="font-size:11px;">Early payment: ${bd.pct}% cash discount if paid by ${bd.discUntil} — pay ₹ ${inr(bd.basicLeft-bd.discNow)} to settle.</td></tr>` : ''}
       <tr style="background:#f7f3e8;"><td colspan="2"><b>VAT — payable by the distributor to MMC</b> · due ${bd.vatDue} (19th of the month after the sale)</td></tr>
@@ -2201,8 +2203,8 @@ $('btn-save-sku').onclick = async () => {
 /* ================= RATES / STRUCTURE / OUTSTANDING / CM ================= */
 async function openRates(){ await loadMasters(); ratesTab('out'); show('rates'); }
 async function ratesTab(which){
-  if (which !== 'out' && which !== 'cm') which = 'out';   // Billing rates & Duty structure tabs removed
-  ['out','cm'].forEach(k => { const c = $('rt-'+k); if (c) c.classList.toggle('on', k===which); });
+  if (!['out','cm','led'].includes(which)) which = 'out';   // Billing rates & Duty structure tabs removed
+  ['out','cm','led'].forEach(k => { const c = $('rt-'+k); if (c) c.classList.toggle('on', k===which); });
   const B = $('rates-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
   const S = db.schema('sales');
   if (which === 'rates'){
@@ -2243,6 +2245,7 @@ async function ratesTab(which){
     await recvLoad('rates-body');
   }
   if (which === 'cm'){ await mmcAccounts(B); }
+  if (which === 'led'){ await distLedger(B); }
 }
 /* ============ MMC ACCOUNTS — distributor-wise & bill-wise ====================
    Every approved sales order with the figures stamped from Brands & SKUs.
@@ -2278,7 +2281,7 @@ async function mmcAccounts(B){
   vals.forEach(v=>{ const a = agg[lineOrder[v.line_id]]; if (!a) return;
     a.T.basic += Number(v.basic_amount ?? v.amount ?? 0); a.T.exc += Number(v.excise_amount||0); a.T.wine += Number(v.wine_fee_amount||0); a.T.vat += Number(v.vat_amount||0); a.T.total += Number(v.amount||0); });
   pays.forEach(p=>{ const a = agg[p.order_id]; if (a) a.pays.push(p); });
-  const K = ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','vatPaid','vatLeft','basicRecv','basicMmc','basicDirect','disc','otherDisc','scheme','basicLeft','basicOverdue','vatOverdue'];
+  const K = ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','vatPaid','vatLeft','basicRecv','basicMmc','basicDirect','disc','otherDisc','scheme','schReimb','basicLeft','basicOverdue','vatOverdue'];
   let rows = Object.values(agg).map(a=>{
     const t = orderTerms(a.o, a.T, a.pays, PT, a.o.party?.credit_days);
     return Object.assign(a, t, { total: a.T.total, basicOverdue: t.basicOver ? t.basicLeft : 0, vatOverdue: t.vatOver ? t.vatLeft : 0 });
@@ -2345,7 +2348,7 @@ async function mmcAccounts(B){
     </div>
     <h4 class="sec" style="margin:10px 0 6px;">Basic — distributor pays MMC</h4>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-      ${tile('Basic billed', T.basic)}${tile('Basic paid by distributors to MMC', T.basicMmc, '#0b57d0', T.basicDirect?'+ ₹ '+inr(T.basicDirect)+' paid direct to Aurum':'')}${tile('Discounts &amp; schemes allowed', T.disc + T.otherDisc + T.scheme, '#7a5c10', (T.disc||T.otherDisc||T.scheme)?`cash ₹ ${inr(T.disc)} · other ₹ ${inr(T.otherDisc)} · scheme ₹ ${inr(T.scheme)}`:'')}${tile('Basic still due from distributors', T.basicLeft, red(T.basicLeft))}${tile('Basic overdue (past credit)', T.basicOverdue, T.basicOverdue>0.005?'#b3261e':'#777')}
+      ${tile('Basic billed', T.basic)}${tile('Basic paid by distributors to MMC', T.basicMmc, '#0b57d0', T.basicDirect?'+ ₹ '+inr(T.basicDirect)+' paid direct to Aurum':'')}${tile('Discounts &amp; schemes allowed', T.disc + T.otherDisc + T.scheme, '#7a5c10', (T.disc||T.otherDisc||T.scheme)?`cash ₹ ${inr(T.disc)} · other ₹ ${inr(T.otherDisc)} · scheme ₹ ${inr(T.scheme)}`:'')}${tile('Scheme reimbursements adjusted', T.schReimb, '#7a5c10', 'deducted from basic payable')}${tile('Basic still due from distributors', T.basicLeft, red(T.basicLeft))}${tile('Basic overdue (past credit)', T.basicOverdue, T.basicOverdue>0.005?'#b3261e':'#777')}
     </div>
     <h4 class="sec" style="margin:10px 0 6px;">MMC net due — basic received from distributors <span style="font-weight:400;font-size:11.5px;color:#777">(all dates)</span></h4>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
@@ -2366,7 +2369,7 @@ async function mmcAccounts(B){
       <td class="amount">${a.cases}</td><td class="amount">${inr(a.basic)}</td><td class="amount">${inr(a.exc)}</td><td class="amount">${inr(a.wine)}</td><td class="amount">${inr(a.vat)}</td><td class="amount" style="font-weight:600">${inr(a.total)}</td>
       <td class="amount" style="color:#0b57d0">${inr(a.levyPaid)}${a.levyLeft>0.005?'<br><span style="font-size:10.5px;color:#b3261e">short ₹ '+inr(a.levyLeft)+'</span>':''}${a.o.excise_paid_ref?'<br><span style="font-size:10.5px;color:#777">ref '+esc(a.o.excise_paid_ref)+'</span>':''}</td>
       <td style="font-size:12px;white-space:nowrap;">${a.vatPaid?'paid ₹ '+inr(a.vatPaid)+'<br>':''}<b style="color:${red(a.vatLeft)}">due ₹ ${inr(a.vatLeft)}</b><br><span style="color:${a.vatOver?'#b3261e':'#777'}">by ${a.vatDue}${a.vatOver?' · overdue':''}</span></td>
-      <td style="font-size:12px;white-space:nowrap;">${a.basicMmc?'paid to MMC ₹ '+inr(a.basicMmc)+'<br>':''}${a.basicDirect?'direct to Aurum ₹ '+inr(a.basicDirect)+'<br>':''}${a.disc?'disc ₹ '+inr(a.disc)+'<br>':''}${(a.otherDisc||a.scheme)?'other disc / scheme ₹ '+inr(a.otherDisc+a.scheme)+'<br>':''}<b style="color:${red(a.basicLeft)}">bal ₹ ${inr(a.basicLeft)}</b><br><span style="color:${a.basicOver?'#b3261e':'#777'}">by ${a.basicDue}${a.basicOver?' · '+a.basicLate+' days late':''}</span>${(a.basicLeft>0.005||a.vatLeft>0.005)&&(isDir()||canFinEdit())?`<br><button class="mini" style="margin-top:4px;" onclick="mmcRcptOpen('${a.o.id}')">➕ Receive basic / VAT</button>`:''}</td>
+      <td style="font-size:12px;white-space:nowrap;">${a.basicMmc?'paid to MMC ₹ '+inr(a.basicMmc)+'<br>':''}${a.basicDirect?'direct to Aurum ₹ '+inr(a.basicDirect)+'<br>':''}${a.disc?'disc ₹ '+inr(a.disc)+'<br>':''}${(a.otherDisc||a.scheme)?'other disc / scheme ₹ '+inr(a.otherDisc+a.scheme)+'<br>':''}${a.schReimb?'<span style="color:#7a5c10">scheme reimb. adj. ₹ '+inr(a.schReimb)+'</span><br>':''}<b style="color:${red(a.basicLeft)}">bal ₹ ${inr(a.basicLeft)}</b><br><span style="color:${a.basicOver?'#b3261e':'#777'}">by ${a.basicDue}${a.basicOver?' · '+a.basicLate+' days late':''}</span>${(a.basicLeft>0.005||a.vatLeft>0.005)&&(isDir()||canFinEdit())?`<br><button class="mini" style="margin-top:4px;" onclick="mmcRcptOpen('${a.o.id}')">➕ Receive basic / VAT</button>`:''}</td>
       <td style="font-size:12px;">${a.discNow>0.005?`<span style="color:#0b57d0">${a.pct}% till ${a.discUntil}</span><br>pay ₹ ${inr(a.basicLeft-a.discNow)} (save ₹ ${inr(a.discNow)})`:(a.basicLeft>0.005?'<span style="color:#777">—</span>':'<span style="color:#1a7f37">settled</span>')}</td></tr>`).join('') || '<tr><td colspan="14" style="color:#777">No approved orders in this selection.</td></tr>'}
     ${rows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${T.cases}</td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td><td class="amount">${inr(T.levyPaid)}</td><td style="font-size:12px;">due ₹ ${inr(T.vatLeft)}</td><td style="font-size:12px;">bal ₹ ${inr(T.basicLeft)}</td><td></td></tr>`:''}
     </tbody></table></div>
@@ -2440,7 +2443,7 @@ function mmcRcptCalc(reset){
   }
   const bLate = a.basicLeft > 0.005 && payDate > a.basicDue, vLate = a.vatLeft > 0.005 && payDate > a.vatDue;
   $('mr-info').innerHTML = `<b>${esc(a.o.so_no)}</b> · ${esc(a.o.party?.name||'')} · sale ${a.sale}${a.provisional?' (approval date)':''}<br>
-    <b>Basic</b> billed ₹ ${inr(a.basic)}${(a.basicRecv+a.disc+a.otherDisc+a.scheme)>0.005?' · already settled ₹ '+inr(a.basicRecv+a.disc+a.otherDisc+a.scheme):''} · <b>still due ₹ ${inr(Math.max(0,a.basicLeft))}</b> · due by <b style="color:${bLate?'#b3261e':'inherit'}">${a.basicDue}</b>${bLate?' (late by '+daysBetweenStr(a.basicDue, payDate)+' days)':''}<br>
+    <b>Basic</b> billed ₹ ${inr(a.basic)}${(a.basicRecv+a.disc+a.otherDisc+a.scheme+a.schReimb)>0.005?' · already settled ₹ '+inr(a.basicRecv+a.disc+a.otherDisc+a.scheme+a.schReimb)+(a.schReimb?' (incl. scheme reimbursement ₹ '+inr(a.schReimb)+')':''):''} · <b>still due ₹ ${inr(Math.max(0,a.basicLeft))}</b> · due by <b style="color:${bLate?'#b3261e':'inherit'}">${a.basicDue}</b>${bLate?' (late by '+daysBetweenStr(a.basicDue, payDate)+' days)':''}<br>
     <b>VAT</b> ₹ ${inr(a.vat)}${a.vatPaid>0.005?' · already paid ₹ '+inr(a.vatPaid):''} · <b>still due ₹ ${inr(Math.max(0,a.vatLeft))}</b> · due on <b style="color:${vLate?'#b3261e':'inherit'}">${a.vatDue}</b>${vLate?' (late by '+daysBetweenStr(a.vatDue, payDate)+' days)':''}<br>
     Paid ${days} day(s) after the sale → ${slab ? `<span style="color:#0b57d0">cash discount slab ${Number(slab.pct)}% (within ${slab.paid_within_days} days)</span>` : '<span style="color:#777">no cash-discount slab applies</span>'}`;
   $('mr-vat-due').textContent = a.vatLeft > 0.005 ? `(due ₹ ${inr(a.vatLeft)} on ${a.vatDue})` : '(no VAT due)';
@@ -2542,7 +2545,7 @@ async function distLoadRows(){
   for (let i = 0; i < ids.length; i += 200){
     const chunk = ids.slice(i, i+200);
     const [{ data: l }, { data: p }] = await Promise.all([S.from('order_lines').select('id, order_id, cases').in('order_id', chunk),
-                                                         S.from('payments').select('order_id, amount, mode, pay_date').in('order_id', chunk)]);
+                                                         S.from('payments').select('id, order_id, amount, mode, pay_date, ref_no, remarks, pay_via, cheque_date, bank_name, scheme_reimb_id').in('order_id', chunk)]);
     lines.push(...(l||[])); pays.push(...(p||[]));
   }
   for (let i = 0; i < lines.length; i += 200){
@@ -2571,6 +2574,135 @@ async function distLoadRows(){
   });
   window.__mmcAllRows = rows;
   return { rows, PT, today };
+}
+/* ============ DISTRIBUTOR LEDGER (MMC Accounts & Distributor Outstanding → Distributor ledger) ============
+   One running account per distributor: every approved bill (basic, VAT, excise + wine fees) as a debit and
+   everything that settles it as a credit — money paid to MMC, cash / other discounts, schemes on the bill and
+   scheme reimbursements adjusted against the basic — so it is clear what was deducted and under what.        */
+let ledParty = '', ledComp = 'all';
+async function canMarkReimb(){
+  if (isDir()) return true;
+  if (window.__canMarkSR == null){ try { const { data } = await db.schema('sales').rpc('can_mark_scheme_reimb'); window.__canMarkSR = !!data; } catch(e){ window.__canMarkSR = false; } }
+  return window.__canMarkSR;
+}
+async function distLedger(B){
+  B.innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
+  let rows; try { rows = (await distLoadRows()).rows; } catch(e){ B.innerHTML = `<div class="msg err">Could not load: ${esc(e.message||String(e))}</div>`; return; }
+  window.__rcptRefresh = () => ratesTab('led');
+  const S = db.schema('sales');
+  const [{ data: reimb }, { data: schs }] = await Promise.all([
+    S.from('scheme_reimbursements').select('id, scheme_id, party_id, amount, adjusted_amount, reimb_date, remarks, settled_at'),
+    S.from('schemes').select('id, code, name') ]);
+  const schBy = {}; (schs||[]).forEach(x=>schBy[x.id]=x);
+  const rbBy = {}; (reimb||[]).forEach(r=>rbBy[r.id]=r);
+  const canMark = await canMarkReimb();
+  // distributors
+  const P = {};
+  rows.forEach(a=>{ const k = a.o.party_id; (P[k] = P[k] || { pid:k, party:a.o.party, list:[], credit:0 }).list.push(a); });
+  (reimb||[]).forEach(r=>{ if (!r.party_id) return; const c = Number(r.amount) - Number(r.adjusted_amount||0);
+    const pm = (M.parties||[]).find(x=>x.id===r.party_id);
+    (P[r.party_id] = P[r.party_id] || { pid:r.party_id, party: pm ? { name: pm.name, code: pm.code } : { name:'?' }, list:[], credit:0 }).credit += c > 0.004 ? c : 0; });
+  const parts = Object.values(P).sort((x,y)=>String(x.party?.name).localeCompare(String(y.party?.name)));
+  if (ledParty && !P[ledParty]) ledParty = '';
+  const sumL = (list, k) => list.reduce((t,a)=>t+Number(a[k]||0),0);
+  const pSum = g => { const l = g.list; const billed = sumL(l,'basic')+sumL(l,'vat')+sumL(l,'exc')+sumL(l,'wine');
+    const paid = sumL(l,'basicRecv')+sumL(l,'vatPaid')+sumL(l,'levyPaid'); const ded = sumL(l,'disc')+sumL(l,'otherDisc')+sumL(l,'scheme')+sumL(l,'schReimb');
+    return { billed, paid, ded, schReimb: sumL(l,'schReimb'), basicLeft: sumL(l,'basicLeft'), out: l.reduce((t,a)=>t+a.outstanding,0), over: l.reduce((t,a)=>t+a.overdue,0) }; };
+  const tile = (l, v, c, sub) => `<div class="card" style="flex:1;min-width:140px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">${l}</div><div style="font-size:16px;font-weight:700;${c?'color:'+c:''}">₹ ${inr(v||0)}</div>${sub?`<div style="font-size:10.5px;color:#777">${sub}</div>`:''}</div>`;
+  const sel = `<div class="card" style="padding:12px;margin-bottom:10px;"><div class="row2c">
+      <div><label>Distributor</label><select onchange="ledParty=this.value;ratesTab('led')"><option value="">— all distributors (summary) —</option>${parts.map(g=>`<option value="${g.pid}"${ledParty===g.pid?' selected':''}>${esc(g.party?.name||'')} (${esc(g.party?.code||'')})</option>`).join('')}</select></div>
+      <div></div></div></div>`;
+  if (!ledParty){
+    const G = parts.map(g=>Object.assign({ g }, pSum(g)));
+    const tot = k => G.reduce((t,x)=>t+x[k],0);
+    B.innerHTML = `<p style="font-size:12px;color:#777;margin:0 0 8px;">Each distributor's running account: bills (basic, VAT, excise + wine fees) against what was paid to MMC and what was <b>deducted</b> — cash discount, other discount, scheme on the bill, and <b>scheme reimbursements adjusted against the basic</b>. Choose a distributor to see the full ledger.</p>${sel}
+      <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Bills</th><th class="amount">Billed ₹</th><th class="amount">Paid to MMC ₹</th><th class="amount">Deductions ₹</th><th class="amount">of which scheme reimb. ₹</th><th class="amount">Outstanding ₹</th><th class="amount">Overdue ₹</th><th class="amount">Scheme credit not yet adjusted ₹</th></tr></thead><tbody>
+      ${G.map(x=>`<tr style="cursor:pointer" onclick="ledParty='${x.g.pid}';ratesTab('led')"><td><b>${esc(x.g.party?.name||'')}</b> <span style="color:#999;font-size:11px;">${esc(x.g.party?.code||'')}</span></td><td class="amount">${x.g.list.length}</td><td class="amount">${inr(x.billed)}</td><td class="amount" style="color:#0b57d0">${inr(x.paid)}</td><td class="amount" style="color:#7a5c10">${inr(x.ded)}</td><td class="amount">${inr(x.schReimb)}</td><td class="amount" style="font-weight:700;color:${x.out>0.005?'#b3261e':'#1a7f37'}">${inr(x.out)}</td><td class="amount" style="color:${x.over>0.005?'#b3261e':'#777'}">${inr(x.over)}</td><td class="amount">${x.g.credit>0.005?inr(x.g.credit):'—'}</td></tr>`).join('') || '<tr><td colspan="9" style="color:#777">No approved bills yet.</td></tr>'}
+      ${G.length?`<tr style="font-weight:700;background:#faf6ea;"><td>Total</td><td class="amount">${G.reduce((t,x)=>t+x.g.list.length,0)}</td><td class="amount">${inr(tot('billed'))}</td><td class="amount">${inr(tot('paid'))}</td><td class="amount">${inr(tot('ded'))}</td><td class="amount">${inr(tot('schReimb'))}</td><td class="amount">${inr(tot('out'))}</td><td class="amount">${inr(tot('over'))}</td><td class="amount">${inr(G.reduce((t,x)=>t+x.g.credit,0))}</td></tr>`:''}
+      </tbody></table></div>`;
+    return;
+  }
+  const g = P[ledParty], sm = pSum(g);
+  // build entries: comp amounts b (basic), v (VAT), l (excise + wine)
+  const E = [];
+  const DIRECT = ['NEFT','RTGS','UPI','CHEQUE','CASH','OTHER'];
+  g.list.forEach(a=>{
+    E.push({ date:a.sale, ord:0, so:a.o.so_no, oid:a.o.id, type:'Bill', part:`Sale bill ${esc(a.o.so_no)}${a.o.invoice_no?' · Inv '+esc(a.o.invoice_no):''} · ${a.cases} case(s)<br><span style="font-size:10.5px;color:#777">basic ₹ ${inr(a.basic)} · VAT ₹ ${inr(a.vat)} · excise ₹ ${inr(a.exc)} · wine fees ₹ ${inr(a.wine)}${a.provisional?' · approved, not yet dispatched':''}</span>`,
+             dr:{ b:a.basic, v:a.vat, l:a.exc+a.wine }, cr:{ b:0, v:0, l:0 } });
+    (a.pays||[]).forEach(p=>{
+      const amt = Number(p.amount)||0, m = p.mode, cr = { b:0, v:0, l:0 };
+      let type = 'Payment', part = '';
+      const inst = [p.pay_via, p.ref_no, p.cheque_date?'dt '+p.cheque_date:'', p.bank_name].filter(Boolean).map(esc).join(' · ');
+      if (m==='EXCISE_MMC'){ cr.l = amt; part = 'Excise duty &amp; wine fees paid into MMC excise a/c'; }
+      else if (m==='VAT_MMC'){ cr.v = amt; part = 'VAT paid to MMC'; }
+      else if (m==='BASIC_MMC'){ cr.b = amt; part = 'Basic paid to MMC (for Aurum)'; }
+      else if (DIRECT.includes(m)){ cr.b = amt; part = 'Basic paid direct to Aurum · ' + esc(m); }
+      else if (m==='CASH_DISC'){ cr.b = amt; type = 'Deduction'; part = 'Cash discount (early payment)'; }
+      else if (m==='OTHER_DISC'){ cr.b = amt; type = 'Deduction'; part = 'Other discount'; }
+      else if (m==='SCHEME'){ cr.b = amt; type = 'Deduction'; part = 'Scheme given on the bill'; }
+      else if (m==='SCHEME_REIMB'){ cr.b = amt; type = 'Deduction'; const r = rbBy[p.scheme_reimb_id] || {}, sc = schBy[r.scheme_id] || {};
+        part = `Scheme reimbursement adjusted against basic — <b>${esc(sc.code||'')} ${esc(sc.name||'')}</b>${r.amount?` <span style="font-size:10.5px;color:#777">(reimbursement ₹ ${inr(r.amount)} marked ${r.reimb_date||''}${r.remarks?' · '+esc(r.remarks):''})</span>`:''}`; }
+      else { cr.b = amt; part = esc(m); }
+      const note = p.remarks && m!=='SCHEME_REIMB' ? `<br><span style="font-size:10.5px;color:#777">${esc(p.remarks)}</span>` : '';
+      E.push({ date:p.pay_date || a.sale, ord:1, so:a.o.so_no, oid:a.o.id, type, mode:m, part: part + (inst && ['BASIC_MMC','VAT_MMC'].concat(DIRECT).includes(m) ? ` <span style="font-size:10.5px;color:#777">· ${inst}</span>` : '') + note, dr:{ b:0, v:0, l:0 }, cr });
+    });
+  });
+  (reimb||[]).filter(r=>r.party_id===ledParty && Number(r.amount) - Number(r.adjusted_amount||0) > 0.004).forEach(r=>{
+    const sc = schBy[r.scheme_id] || {}, c = Number(r.amount) - Number(r.adjusted_amount||0);
+    E.push({ date:r.reimb_date, ord:2, so:'', type:'Credit', mode:'SCHEME_CREDIT', part:`Scheme reimbursement — <b>${esc(sc.code||'')} ${esc(sc.name||'')}</b> · credit not yet adjusted (no basic outstanding when marked)<br><span style="font-size:10.5px;color:#777">reimbursement ₹ ${inr(r.amount)}${Number(r.adjusted_amount)>0.004?' · adjusted so far ₹ '+inr(r.adjusted_amount):''} — it is adjusted against the next bills</span>`, dr:{ b:0, v:0, l:0 }, cr:{ b:c, v:0, l:0 } });
+  });
+  E.sort((x,y)=> x.date===y.date ? (x.ord-y.ord || String(x.so).localeCompare(String(y.so))) : String(x.date).localeCompare(String(y.date)));
+  const pick = o => ledComp==='b' ? o.b : ledComp==='v' ? o.v : ledComp==='l' ? o.l : o.b + o.v + o.l;
+  let bal = 0; const L = [];
+  E.forEach(e=>{ const d = pick(e.dr), c = pick(e.cr); if (d <= 0.004 && c <= 0.004) return; bal += d - c; L.push(Object.assign({}, e, { d, c, bal })); });
+  window.__ledRows = L; window.__ledName = g.party?.name || '';
+  const DR = L.reduce((t,e)=>t+e.d,0), CR = L.reduce((t,e)=>t+e.c,0);
+  const ded = E.filter(e=>e.type==='Deduction' || e.type==='Credit');
+  const dedBy = {}; ded.forEach(e=>{ const k = e.mode==='SCHEME_CREDIT' ? 'SCHEME_REIMB' : e.mode; dedBy[k] = (dedBy[k]||0) + e.cr.b; });
+  const dLbl = { CASH_DISC:'Cash discount', OTHER_DISC:'Other discount', SCHEME:'Scheme on bill', SCHEME_REIMB:'Scheme reimbursement' };
+  const chip = (k, l) => `<button class="chip${ledComp===k?' on':''}" onclick="ledComp='${k}';ratesTab('led')">${l}</button>`;
+  const typeCol = t => t==='Bill' ? '#333' : t==='Deduction' || t==='Credit' ? '#7a5c10' : '#0b57d0';
+  B.innerHTML = `<p style="font-size:12px;color:#777;margin:0 0 8px;">Running account of the distributor: every approved bill is a <b>debit</b>; money paid to MMC and every <b>deduction</b> (cash discount, other discount, scheme on the bill, scheme reimbursement adjusted against the basic) is a <b>credit</b>.</p>${sel}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      ${tile('Billed (basic + VAT + excise &amp; wine)', sm.billed)}${tile('Paid to MMC / Aurum', sm.paid, '#0b57d0')}${tile('Deductions', sm.ded, '#7a5c10', Object.entries(dedBy).filter(([k,v])=>v>0.004).map(([k,v])=>(dLbl[k]||k)+' ₹ '+inr(v)).join(' · '))}${tile('Outstanding', sm.out, sm.out>0.005?'#b3261e':'#1a7f37', 'basic ₹ '+inr(Math.max(0,sm.basicLeft))+(sm.over>0.005?' · overdue ₹ '+inr(sm.over):''))}${g.credit>0.005?tile('Scheme credit not yet adjusted', g.credit, '#7a5c10', 'adjusted against the next bills'):''}
+    </div>
+    <div style="margin:0 0 8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${chip('all','All')}${chip('b','Basic')}${chip('v','VAT')}${chip('l','Excise &amp; wine fees')}
+      <span style="flex:1"></span><button class="btn ghost sm" onclick="ledCsv()">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="ledPrint()">🖨 Print / save PDF</button>
+      ${(canMark && g.credit>0.005 && sm.basicLeft>0.005)?`<button class="btn gold sm" onclick="ledApplyCredit('${g.pid}')">Adjust scheme credit against open bills</button>`:''}</div>
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Bill</th><th>Particulars</th><th>Type</th><th class="amount">Debit ₹</th><th class="amount">Credit ₹</th><th class="amount">Balance ₹</th></tr></thead><tbody>
+    ${L.map(e=>`<tr><td style="white-space:nowrap">${e.date||''}</td><td>${e.oid?`<a href="#" onclick="event.preventDefault();openOrders();show('order-detail');openOrderDetail('${e.oid}')">${esc(e.so)}</a>`:'—'}</td><td style="font-size:12px;">${e.part}</td><td><span style="font-size:11.5px;font-weight:600;color:${typeCol(e.type)}">${e.type}</span></td><td class="amount">${e.d>0.004?inr(e.d):''}</td><td class="amount" style="color:${typeCol(e.type)}">${e.c>0.004?inr(e.c):''}</td><td class="amount" style="font-weight:600">${inr(e.bal)}</td></tr>`).join('') || '<tr><td colspan="7" style="color:#777">Nothing in this ledger yet.</td></tr>'}
+    ${L.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total · closing balance</td><td class="amount">${inr(DR)}</td><td class="amount">${inr(CR)}</td><td class="amount" style="color:${DR-CR>0.005?'#b3261e':'#1a7f37'}">${inr(DR-CR)}</td></tr>`:''}
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:14px;">Deductions — what was deducted and under what</h4>
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Bill</th><th>Deduction</th><th>Under / details</th><th class="amount">₹</th></tr></thead><tbody>
+    ${ded.map(e=>`<tr><td>${e.date||''}</td><td>${esc(e.so||'—')}</td><td><b>${dLbl[e.mode==='SCHEME_CREDIT'?'SCHEME_REIMB':e.mode]||esc(e.mode)}</b>${e.mode==='SCHEME_CREDIT'?'<br><span style="font-size:10.5px;color:#777">credit, not yet adjusted</span>':''}</td><td style="font-size:12px;">${e.part}</td><td class="amount" style="font-weight:600">${inr(e.cr.b)}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#777">No deductions for this distributor.</td></tr>'}
+    ${ded.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total deductions</td><td class="amount">${inr(ded.reduce((t,e)=>t+e.cr.b,0))}</td></tr>`:''}
+    </tbody></table></div>`;
+}
+async function ledApplyCredit(pid){
+  const { data, error } = await db.schema('sales').rpc('apply_scheme_credit', { p_party: pid });
+  if (error){ alert('Could not adjust: ' + error.message); return; }
+  await ratesTab('led');
+  alert(Number(data) > 0.004 ? `₹ ${inr(data)} of scheme credit adjusted against the open basic.` : 'Nothing could be adjusted — no basic is outstanding on an approved bill.');
+}
+function ledPlain(h){ const d = document.createElement('div'); d.innerHTML = String(h||'').replace(/<br\s*\/?>/gi,' · '); return d.textContent.replace(/\s+/g,' ').trim(); }
+function ledCsv(){
+  const L = window.__ledRows || []; if (!L.length){ alert('Nothing to download.'); return; }
+  const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"', f = v => Number(v||0).toFixed(2);
+  const out = [['Date','Bill','Particulars','Type','Debit','Credit','Balance'].join(',')];
+  L.forEach(e=>out.push([e2(e.date), e2(e.so), e2(ledPlain(e.part)), e2(e.type), f(e.d), f(e.c), f(e.bal)].join(',')));
+  const blob = new Blob(['﻿' + out.join('\n')], { type:'text/csv;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'distributor-ledger-' + (window.__ledName||'').replace(/[^a-z0-9]+/gi,'-') + '.csv'; a.click();
+}
+function ledPrint(){
+  const L = window.__ledRows || []; if (!L.length){ alert('Nothing to print.'); return; }
+  const DR = L.reduce((t,e)=>t+e.d,0), CR = L.reduce((t,e)=>t+e.c,0);
+  const body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Distributor ledger — ${esc(window.__ledName||'')}${ledComp!=='all'?' · '+({b:'Basic',v:'VAT',l:'Excise & wine fees'})[ledComp]:''}</h2>
+    <table><thead><tr><th>Date</th><th>Bill</th><th>Particulars</th><th>Type</th><th class="amount">Debit ₹</th><th class="amount">Credit ₹</th><th class="amount">Balance ₹</th></tr></thead><tbody>
+    ${L.map(e=>`<tr><td>${e.date||''}</td><td>${esc(e.so||'')}</td><td>${esc(ledPlain(e.part))}</td><td>${e.type}</td><td class="amount">${e.d>0.004?inr(e.d):''}</td><td class="amount">${e.c>0.004?inr(e.c):''}</td><td class="amount">${inr(e.bal)}</td></tr>`).join('')}
+    <tr class="tot"><td colspan="4">Total · closing balance</td><td class="amount">${inr(DR)}</td><td class="amount">${inr(CR)}</td><td class="amount">${inr(DR-CR)}</td></tr></tbody></table>
+    <p style="font-size:11px;color:#666;margin-top:10px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+  printHtml('Distributor ledger — ' + (window.__ledName||''), body);
 }
 async function recvLoad(targetId){
   recvTarget = targetId; recvOpen = null;
@@ -9494,11 +9626,12 @@ async function schReimb(id){
   const { eligible } = await schCompute(s);
   const by = schGroupByDist(C.claims, C.paid);
   const today = todayISO(), ended = s.date_to < today || s.status !== 'ACTIVE';
-  const canEd = isDir() || canMktEdit();
+  const canEd = await canMarkReimb();   // only the Directors or Pradeep
   const T = Object.values(by).reduce((t,g)=>({ cash:t.cash+g.cash, freeVal:t.freeVal+g.freeVal, total:t.total+g.total, paid:t.paid+g.paid, pending:t.pending+g.pending }), { cash:0, freeVal:0, total:0, paid:0, pending:0 });
   let html = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">💰 ${esc(s.code)} — ${esc(s.name)} · reimbursement</h3>
     <p style="font-size:12px;color:#555;margin:4px 0 8px;">${s.date_from} → ${s.date_to} · ${ended?'Scheme has ended.':'⚠ Scheme is still running — more claims can come in until '+s.date_to+'.'}<br>
-    How it works: the distributor gives the retailer the scheme benefit on its bill (recorded on the secondary-sale entry — ₹ or free issue), and <b>we reimburse the distributor</b>. Free issue is valued at the bill SKU's <b>landed cost</b> — basic + excise duty + wine fees + VAT.</p>
+    How it works: the distributor gives the retailer the scheme benefit on its bill (recorded on the secondary-sale entry — ₹ or free issue), and <b>we reimburse the distributor</b>. Free issue is valued at the bill SKU's <b>landed cost</b> — basic + excise duty + wine fees + VAT.<br>
+    <b>✔ Mark reimbursed</b> (Directors or Pradeep only) deducts the amount from the distributor's <b>basic payable to MMC</b> (oldest bill first) — see MMC Accounts &amp; Distributor Outstanding → Distributor ledger.</p>
     <button class="mini" style="margin-bottom:8px;" onclick="$('sc-report').innerHTML=''">✕ Close report</button>
     <h4 class="sec">Benefits given by distributors on bills (${C.claims.length}) — to reimburse: <b>₹ ${inr(T.total)}</b></h4>
     <div class="table-scroll"><table><thead><tr><th>Bill date</th><th>Distributor</th><th>Retailer</th><th>Bill (SKU · cases)</th><th>Given</th><th class="amount">₹ amount</th><th class="amount">Free issue value ₹</th><th class="amount">To reimburse ₹</th></tr></thead><tbody>` +
@@ -9516,7 +9649,7 @@ async function schReimb(id){
       <td class="amount"><b>${inr(g.total)}</b></td><td class="amount" style="color:#1a7f37">${inr(g.paid)}</td>
       <td class="amount" style="font-weight:700;color:${g.pending>0.005?'#b3261e':'#1a7f37'}">${inr(g.pending)}</td>
       <td style="font-size:12px;">${Object.entries(g.rets).map(([n,v])=>esc(n)+' ('+inr(v)+')').join(', ')||'—'}</td>
-      <td>${schStatusPill(g)}${g.pays.map(p=>`<br><span style="font-size:10.5px;color:#777">₹ ${inr(p.amount)} on ${new Date(p.settled_at).toLocaleDateString('en-IN')}${p.remarks?' · '+esc(p.remarks):''}</span>`).join('')}</td>
+      <td>${schStatusPill(g)}${g.pays.map(p=>schPayLine(p, canEd, s.id)).join('')}</td>
       <td>${(canEd && g.pending>0.005)?`<button class="mini" onclick="schSettle('${s.id}','${g.pid}',${g.pending})">✔ Mark reimbursed</button>`:''}</td></tr>`).join('')
       || '<tr><td colspan="10" style="color:#777">Nothing payable yet.</td></tr>') + '</tbody></table></div>';
   html += `<h4 class="sec" style="margin-top:16px;">Retailers who have reached a slab (${eligible.length})</h4>
@@ -9526,17 +9659,61 @@ async function schReimb(id){
   box.innerHTML = html;
   box.scrollIntoView({behavior:'smooth', block:'start'});
 }
+function schPayLine(p, canEd, schemeId){
+  const adj = Number(p.adjusted_amount||0), cr = Number(p.amount) - adj;
+  return `<br><span style="font-size:10.5px;color:#777">₹ ${inr(p.amount)} on ${p.reimb_date || new Date(p.settled_at).toLocaleDateString('en-IN')}${p.remarks?' · '+esc(p.remarks):''}<br>
+    → deducted from basic payable ₹ ${inr(adj)}${cr>0.004?` · <span style="color:#7a5c10">credit ₹ ${inr(cr)} to adjust on next bills</span>`:''}</span>${canEd?` <button class="mini" style="font-size:10px;padding:1px 6px;" onclick="schUndo('${p.id}','${schemeId}')">Undo</button>`:''}`;
+}
 async function schSettle(schemeId, pid, pending){
-  const amt = Number(prompt('Amount reimbursed to this distributor now (₹). Pending: ₹ ' + inr(pending), String(pending)));
-  if (!(amt > 0)) return;
+  if (!(await canMarkReimb())){ alert('Only the Directors or Pradeep can mark a scheme reimbursement.'); return; }
+  if (pid === 'none'){ alert('These benefits have no distributor recorded on the secondary-sale entry — edit those entries and choose the distributor first.'); return; }
+  const s = (window.__schemes||[]).find(x=>x.id===schemeId) || {};
+  apprModal('Mark scheme reimbursed', `<p style="font-size:12px;color:#777;margin:0 0 8px;">Checking the distributor's outstanding…</p>`);
+  let basicOut = 0, bills = [];
+  try { const { rows } = await distLoadRows(); bills = rows.filter(a=>a.o.party_id===pid && a.basicLeft > 0.005).sort((x,y)=>x.sale.localeCompare(y.sale)); basicOut = bills.reduce((t,a)=>t+a.basicLeft,0); } catch(e){}
+  const today = calFmt(new Date());
+  const html = `
+    <p style="font-size:12px;margin:0 0 8px;"><b>${esc(s.code||'')} — ${esc(s.name||'')}</b><br>Distributor: <b>${esc(schDistName(pid))}</b><br>
+      Pending reimbursement: <b>₹ ${inr(pending)}</b></p>
+    <div style="font-size:12px;background:#faf6ea;border-radius:8px;padding:8px 10px;margin:0 0 8px;">
+      Once marked, this amount is <b>deducted from the distributor's basic payable to MMC</b>, oldest bill first, and shows in <b>MMC Accounts &amp; Distributor Outstanding → Distributor ledger</b>.<br>
+      Basic outstanding now: <b>₹ ${inr(basicOut)}</b>${bills.length?' on '+bills.map(a=>esc(a.o.so_no)+' (₹ '+inr(a.basicLeft)+')').join(', '):' — nothing open; the amount will be held as credit and adjusted against the next bills'}.</div>
+    <div class="row2c"><div><label>Amount reimbursed ₹ *</label><input type="number" id="sr-amt" min="0" step="any" value="${Number(pending).toFixed(2)}" oninput="schSettleCalc(${basicOut})"></div>
+      <div><label>Date *</label><input type="date" id="sr-date" value="${today}"></div></div>
+    <label style="margin-top:6px;">Remarks</label><input type="text" id="sr-note" placeholder="e.g. adjusted against basic — approved by …">
+    <div id="sr-calc" style="font-size:12.5px;margin:8px 0;"></div>
+    <button class="btn gold sm" id="sr-save" onclick="schSettleSave('${schemeId}','${pid}',${pending})">✔ Mark reimbursed</button>
+    <div id="sr-msg" style="font-size:12px;margin-top:6px;"></div>`;
+  apprModal('Mark scheme reimbursed', html);
+  const b2 = document.querySelector('#appr-modal > div'); if (b2) b2.style.maxWidth = '620px';
+  schSettleCalc(basicOut);
+}
+function schSettleCalc(basicOut){
+  const amt = Number($('sr-amt').value)||0, adj = Math.min(amt, basicOut), cr = amt - adj;
+  $('sr-calc').innerHTML = amt > 0 ? `Deducted from basic payable now: <b>₹ ${inr(adj)}</b>${cr>0.004?` · held as credit for the next bills: <b style="color:#7a5c10">₹ ${inr(cr)}</b>`:''} · basic outstanding after: <b>₹ ${inr(basicOut-adj)}</b>` : '';
+}
+async function schSettleSave(schemeId, pid, pending){
+  const amt = Number($('sr-amt').value)||0;
+  if (!(amt > 0)){ say('sr-msg','Enter the amount reimbursed.',false); return; }
   if (amt > pending + 0.5 && !confirm('This is more than the pending amount (₹ ' + inr(pending) + '). Record it anyway?')) return;
-  const how = prompt('How was it reimbursed? (e.g. NEFT UTR…, credit note no., goods replaced)', '') || null;
-  const C = await schClaimsLoad(schemeId);
-  const mine = C.claims.filter(c=>(c.x.party_id||'none')===pid).map(c=>({ entry: c.x.id, date: c.x.sale_date, retailer: c.ret?c.ret.name:'?', given: c.x.scheme_type==='FREE'?c.freeTxt+' free':'₹ '+c.cash, value: c.total }));
-  const { error } = await db.schema('sales').from('scheme_reimbursements').insert({
-    scheme_id: schemeId, party_id: pid==='none'?null:pid, amount: amt, retailers: mine, remarks: how, settled_by: me.id });
-  if (error){ alert('Could not record: '+error.message); return; }
-  if (window.__schAllOpen) schAllReimb(); else schReimb(schemeId);
+  $('sr-save').disabled = true;
+  let mine = [];
+  try { const C = await schClaimsLoad(schemeId);
+    mine = C.claims.filter(c=>(c.x.party_id||'none')===pid).map(c=>({ entry: c.x.id, date: c.x.sale_date, retailer: c.ret?c.ret.name:'?', given: c.x.scheme_type==='FREE'?c.freeTxt+' free':'₹ '+c.cash, value: c.total })); } catch(e){}
+  const { data, error } = await db.schema('sales').rpc('mark_scheme_reimbursed', {
+    p_scheme: schemeId, p_party: pid, p_amount: amt, p_note: $('sr-note').value.trim()||null, p_retailers: mine, p_date: $('sr-date').value||null });
+  if ($('sr-save')) $('sr-save').disabled = false;
+  if (error){ say('sr-msg', error.message, false); return; }
+  apprModalClose();
+  if (window.__schAllOpen) await schAllReimb(); else await schReimb(schemeId);
+  const adj = Number(data && data.adjusted || 0), cr = Number(data && data.credit || 0);
+  alert(`Marked reimbursed — ₹ ${inr(amt)}. Deducted from the distributor's basic payable to MMC: ₹ ${inr(adj)}${cr>0.004?'; ₹ '+inr(cr)+' held as credit for the next bills':''}.`);
+}
+async function schUndo(id, schemeId){
+  if (!confirm('Undo this reimbursement? It is removed and its deduction from the distributor\'s basic is reversed.')) return;
+  const { error } = await db.schema('sales').rpc('undo_scheme_reimbursed', { p_id: id });
+  if (error){ alert('Could not undo: ' + error.message); return; }
+  if (window.__schAllOpen) await schAllReimb(); else await schReimb(schemeId);
 }
 /* ---- Every distributor, every scheme: claimed vs reimbursed vs pending ---- */
 async function schAllReimb(){
@@ -9545,7 +9722,7 @@ async function schAllReimb(){
   box.innerHTML = '<p style="color:#777">Collecting every scheme reimbursement…</p>';
   let C; try { C = await schClaimsLoad(null); } catch(e){ box.innerHTML = `<div class="msg err">${esc(e.message||String(e))}</div>`; return; }
   const schemes = window.__schemes || []; const schBy = {}; schemes.forEach(s=>schBy[s.id]=s);
-  const canEd = isDir() || canMktEdit();
+  const canEd = await canMarkReimb();   // only the Directors or Pradeep
   // distributor → scheme groups
   const byDS = {};
   C.claims.forEach(c=>{ const k = (c.x.party_id||'none')+'|'+c.x.scheme_id; (byDS[k] = byDS[k] || { pid:c.x.party_id||'none', sid:c.x.scheme_id, claims:[], paid:[] }).claims.push(c); });
@@ -9554,7 +9731,7 @@ async function schAllReimb(){
   const byP = {}; rows.forEach(r=>{ (byP[r.pid] = byP[r.pid] || []).push(r); });
   const G = rows.reduce((t,r)=>({ total:t.total+r.g.total, paid:t.paid+r.g.paid, pending:t.pending+r.g.pending }), { total:0, paid:0, pending:0 });
   let html = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">💰 Distributor reimbursements — all schemes</h3>
-    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Everything distributors gave retailers under a scheme (₹ and free issue, from the secondary-sale entries), what we have reimbursed, and what is still pending.</p>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Everything distributors gave retailers under a scheme (₹ and free issue, from the secondary-sale entries), what we have reimbursed, and what is still pending. <b>✔ Mark reimbursed</b> (Directors or Pradeep only) deducts the amount from that distributor's basic payable to MMC.</p>
     <button class="mini" style="margin-bottom:8px;" onclick="window.__schAllOpen=false;$('sc-report').innerHTML=''">✕ Close report</button>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px;">
       <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">To reimburse (claimed)</div><div style="font-size:17px;font-weight:700;">₹ ${inr(G.total)}</div></div>
@@ -9570,7 +9747,7 @@ async function schAllReimb(){
           <td class="amount">${inr(r.g.cash)}</td><td style="font-size:12px;">${r.g.free.length?esc(r.g.free.join(', ')):'—'}</td><td class="amount">${inr(r.g.freeVal)}</td>
           <td class="amount"><b>${inr(r.g.total)}</b></td><td class="amount" style="color:#1a7f37">${inr(r.g.paid)}</td>
           <td class="amount" style="font-weight:700;color:${r.g.pending>0.005?'#b3261e':'#1a7f37'}">${inr(r.g.pending)}</td>
-          <td>${schStatusPill(r.g)}</td>
+          <td>${schStatusPill(r.g)}${(r.g.pays||[]).map(p=>schPayLine(p, canEd, r.sid)).join('')}</td>
           <td>${(canEd && r.g.pending>0.005)?`<button class="mini" onclick="schSettle('${r.sid}','${pid}',${r.g.pending})">✔ Mark reimbursed</button>`:''}</td></tr>`; }).join('') +
         `<tr style="background:#faf6ea;font-weight:700;"><td>Distributor total</td><td></td><td></td><td></td><td class="amount">${inr(tot.total)}</td><td class="amount">${inr(tot.paid)}</td><td class="amount">${inr(tot.pending)}</td><td></td><td></td></tr>`;
     }).join('') || '<tr><td colspan="10" style="color:#777">No scheme benefit recorded on any secondary-sale bill yet.</td></tr>') +
