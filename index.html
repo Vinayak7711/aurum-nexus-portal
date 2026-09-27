@@ -10035,15 +10035,16 @@ async function mktTab(t){
        <p style="font-size:12px;color:#777;margin:2px 0 10px;">Raise a request with the amount, purpose and how it will be utilised. The Director or Accounts will approve or reject it.</p>
        <div class="row2c"><div><label>Amount ₹</label><input type="number" id="mr-amt" min="0"></div>
        <div><label>Category</label><select id="mr-cat">${mktCatOpts(true)}</select></div></div>
-       <div class="row2c"><div><label>For month (optional)</label><input type="month" id="mr-period"></div>
-       <div><label>Needed by (optional)</label><input type="date" id="mr-needed"></div></div>
+       <div class="row2c"><div><label>Budget time frame — from *</label><input type="date" id="mr-from"></div>
+       <div><label>To *</label><input type="date" id="mr-to"></div></div>
+       <div class="row2c"><div><label>Needed by (optional)</label><input type="date" id="mr-needed"></div><div></div></div>
        <label>Purpose / description</label><input type="text" id="mr-desc" placeholder="e.g. Q3 Instagram + influencer campaign">
        <label>Utilisation (how it will be spent)</label><textarea id="mr-util" rows="2" placeholder="e.g. Ads ₹30k, influencer ₹20k"></textarea>
        <button class="btn gold sm" style="margin-top:10px;" onclick="mktReqSave()">Submit request</button><div id="mr-msg"></div></div>`;
     }
     const stColor={PENDING_APPROVAL:'#7a5c10',APPROVED:'#1f7a4d',REJECTED:'#b3382c'};
     const stLabel={PENDING_APPROVAL:'Pending',APPROVED:'Approved',REJECTED:'Rejected'};
-    html+='<div class="table-scroll"><table><thead><tr><th>Code</th><th>Category</th><th class="amount">Amount ₹</th><th>Purpose / utilisation</th><th>For</th><th>Requested by</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+    html+='<div class="table-scroll"><table><thead><tr><th>Code</th><th>Category</th><th class="amount">Amount ₹</th><th>Purpose / utilisation</th><th>Time frame</th><th>Requested by</th><th>Status</th><th>Action</th></tr></thead><tbody>';
     html+=(data||[]).map(r=>{
       const st=`<span style="font-weight:700;color:${stColor[r.status]||'#555'}">${stLabel[r.status]||r.status}</span>`;
       const decided = r.status!=='PENDING_APPROVAL' ? `<br><span style="font-size:11px;color:#777">by ${esc(r.decided_by_name||'—')}${r.decision_note?': '+esc(r.decision_note):''}</span>` : '';
@@ -10056,7 +10057,7 @@ async function mktTab(t){
       }
       return `<tr><td><b>${esc(r.req_code)}</b></td><td>${esc(mktCatLbl(r.category))}</td><td class="amount">${inr(r.amount)}</td>
         <td>${esc(r.description||'—')}${r.utilization?'<br><span style="font-size:11px;color:#777">'+esc(r.utilization)+'</span>':''}</td>
-        <td>${r.period||'—'}${r.needed_by?'<br><span style="font-size:11px;color:#777">by '+r.needed_by+'</span>':''}</td>
+        <td>${r.date_from?`<b>${r.date_from}</b><br>to <b>${r.date_to}</b>`:(r.period||'—')}${r.needed_by?'<br><span style="font-size:11px;color:#777">needed by '+r.needed_by+'</span>':''}</td>
         <td>${esc(r.requested_by_name||'—')}</td><td>${st}${decided}</td><td>${act}</td></tr>`;
     }).join('')||'<tr><td colspan="8" style="color:#777">No budget requests yet.</td></tr>';
     B.innerHTML=html+'</tbody></table></div>';
@@ -10066,8 +10067,10 @@ async function mktReqSave(){
   const amt=Number($('mr-amt').value); const desc=$('mr-desc').value.trim();
   if(!(amt>=0)){say('mr-msg','Enter an amount.',false);return;}
   if(!desc){say('mr-msg','Add a description of what the budget is for.',false);return;}
-  const period=$('mr-period').value.trim();
-  const {error}=await db.schema('sales').rpc('mkt_request_create',{p_amount:amt,p_category:$('mr-cat').value,p_description:desc,p_utilization:$('mr-util').value.trim()||null,p_period:period||null,p_needed_by:$('mr-needed').value||null});
+  const dFrom=$('mr-from').value, dTo=$('mr-to').value;
+  if(!dFrom||!dTo){say('mr-msg','Enter the time frame of the budget — from date and to date.',false);return;}
+  if(dTo<dFrom){say('mr-msg','The To date cannot be before the From date.',false);return;}
+  const {error}=await db.schema('sales').rpc('mkt_request_create',{p_amount:amt,p_category:$('mr-cat').value,p_description:desc,p_utilization:$('mr-util').value.trim()||null,p_period:null,p_needed_by:$('mr-needed').value||null,p_date_from:dFrom,p_date_to:dTo});
   if(error){say('mr-msg','Submit failed: '+error.message,false);return;}
   mktTab('requests');
 }
