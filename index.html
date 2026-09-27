@@ -3345,6 +3345,8 @@ async function mfgTab(which){
     const storeList = (store||[]).filter(r => Number(r.received||0) !== 0 || Number(r.issued_to_mmc||0) !== 0 || Number(r.store_balance||0) !== 0)
       .sort((x,y)=>String(x.code).localeCompare(String(y.code)));
     window.__rm = { mmc: mmcList, store: storeList, items: live };
+    window.__rmCost = {};
+    if (canPurView()){ try { const { data: lc } = await MF.from('v_rm_landed_cost').select('*'); (lc||[]).forEach(x=>window.__rmCost[x.rm_item_id]=x); } catch(e){} }
     window.rmQ = window.rmQ || { mmc:'', store:'' };
     window.rmIss = window.rmIss || { from: '', to: '', item: '', status: '', searched: false };
     const itemOpts = [...new Map((allIssues||[]).map(r=>[r.rm_item_id, r.item])).entries()].sort((x,y)=>String(x[1]?.code).localeCompare(String(y[1]?.code)));
@@ -3352,6 +3354,7 @@ async function mfgTab(which){
     const tools = k => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;">
         <input type="text" placeholder="🔍 Search item" value="${esc(window.rmQ[k])}" oninput="window.rmQ['${k}']=this.value;rmPosDraw('${k}')" style="max-width:240px;padding:7px;font-size:12.5px;">
         <label style="font-size:12px;display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" style="width:auto;" ${(window.rmZero||{})[k]?'checked':''} onchange="window.rmZero=window.rmZero||{};window.rmZero['${k}']=this.checked;rmPosDraw('${k}')"> show items with zero balance</label>
+        ${canPurView()?`<label style="font-size:12px;display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" style="width:auto;" ${(window.rmVal||{})[k]?'checked':''} onchange="window.rmVal=window.rmVal||{};window.rmVal['${k}']=this.checked;rmPosDraw('${k}')"> show item with value</label>`:''}
         <span style="flex:1"></span><button class="btn ghost sm" onclick="rmCsv('${k}')">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="rmPrint('${k}')">🖨 Print / save PDF</button></div>`;
     html += `<h4 class="sec">Raw material at MMC</h4><p style="font-size:12px;color:#777;margin:4px 0 0;">What has been sent to MMC, what the batches have consumed, and the balance lying at MMC.</p>
       ${tools('mmc')}<div class="table-scroll" id="rm-pos-mmc"></div>
@@ -3395,18 +3398,33 @@ function rmIssRows(){
   return (window.__rmIssues||[]).filter(r => (!F.from || r.issue_date >= F.from) && (!F.to || r.issue_date <= F.to) && (!F.item || r.rm_item_id === F.item)
     && (!F.status || (F.status==='R' ? !!r.received_at : !r.received_at)));
 }
+function rmCostOf(r){ const c = (window.__rmCost||{})[r.rm_item_id]; return c && c.landed_per_unit != null ? Number(c.landed_per_unit) : null; }
+function rmValOn(k){ return !!((window.rmVal||{})[k]) && canPurView(); }
 function rmPosDraw(k){
   const box = $('rm-pos-' + k); if (!box) return;
-  const rows = rmRows(k);
+  const rows = rmRows(k), V = rmValOn(k);
+  const bal = r => Number(k==='mmc' ? r.balance : r.store_balance) || 0;
+  let totV = 0, noCost = 0;
+  const valCells = r => { if (!V) return ''; const c = rmCostOf(r);
+    if (c == null){ noCost++; return `<td class="amount" style="color:#999">—</td><td class="amount" style="color:#999;font-size:11px;">no purchase price</td>`; }
+    const v = bal(r) * c; totV += v;
+    const cd = (window.__rmCost||{})[r.rm_item_id] || {};
+    return `<td class="amount" title="basic ₹ ${inr(cd.basic_value)} + tax ₹ ${inr(cd.tax_value)} + transport ₹ ${inr(cd.transport_value)} over ${Number(cd.qty_bought)} ${esc(r.unit||'')} bought">${inr(c)}</td><td class="amount" style="font-weight:700">${inr(v)}</td>`; };
+  const valHead = V ? '<th class="amount">Landed cost / unit ₹</th><th class="amount">Value ₹</th>' : '';
+  const cols = V ? 7 : 5;
+  let head, body, empty;
   if (k === 'mmc'){
-    box.innerHTML = `<table><thead><tr><th>Item</th><th class="amount">Issued to MMC</th><th class="amount">Consumed</th><th class="amount"><b>At MMC (balance)</b></th><th>Unit</th></tr></thead><tbody>` +
-      (rows.map(r=>`<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${Number(r.issued||0)}</td><td class="amount">${Number(r.consumed||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.balance)<0?'#b3261e':'inherit'}">${Number(r.balance||0)}</td><td>${esc(r.unit||'')}</td></tr>`).join('')
-       || '<tr><td colspan="5" style="color:#777">No material at MMC' + (window.rmQ.mmc?' matching the search':'') + '.</td></tr>') + '</tbody></table>';
+    head = `<th>Item</th><th class="amount">Issued to MMC</th><th class="amount">Consumed</th><th class="amount"><b>At MMC (balance)</b></th><th>Unit</th>`;
+    body = rows.map(r=>`<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${Number(r.issued||0)}</td><td class="amount">${Number(r.consumed||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.balance)<0?'#b3261e':'inherit'}">${Number(r.balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`).join('');
+    empty = 'No material at MMC' + (window.rmQ.mmc?' matching the search':'') + '.';
   } else {
-    box.innerHTML = `<table><thead><tr><th>Item</th><th class="amount">Received in store</th><th class="amount">Sent to MMC</th><th class="amount"><b>In company store (balance)</b></th><th>Unit</th></tr></thead><tbody>` +
-      (rows.map(r=>`<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${Number(r.received||0)}</td><td class="amount">${Number(r.issued_to_mmc||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.store_balance)<0?'#b3261e':Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance||0)}</td><td>${esc(r.unit||'')}</td></tr>`).join('')
-       || '<tr><td colspan="5" style="color:#777">Nothing in the company store' + (window.rmQ.store?' matching the search':'') + '.</td></tr>') + '</tbody></table>';
+    head = `<th>Item</th><th class="amount">Received in store</th><th class="amount">Sent to MMC</th><th class="amount"><b>In company store (balance)</b></th><th>Unit</th>`;
+    body = rows.map(r=>`<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${Number(r.received||0)}</td><td class="amount">${Number(r.issued_to_mmc||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.store_balance)<0?'#b3261e':Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`).join('');
+    empty = 'Nothing in the company store' + (window.rmQ.store?' matching the search':'') + '.';
   }
+  const tot = (V && rows.length) ? `<tr style="font-weight:700;background:#faf6ea;"><td colspan="6">Total value ${k==='mmc'?'at MMC':'in company store'} — landed, incl. taxes &amp; transport${noCost?` <span style="font-weight:400;font-size:11px;color:#777">· ${noCost} item(s) have no purchase price</span>`:''}</td><td class="amount">₹ ${inr(totV)}</td></tr>` : '';
+  box.innerHTML = `<table><thead><tr>${head}${valHead}</tr></thead><tbody>${body || `<tr><td colspan="${cols}" style="color:#777">${empty}</td></tr>`}${tot}</tbody></table>` +
+    (V ? `<p style="font-size:11px;color:#777;margin:6px 0 0;">Landed cost / unit = weighted average of the purchase orders for that item: basic + taxes + transport / freight to us (transport entered on the purchase order, shared by value). Hover a rate to see its make-up.</p>` : '');
 }
 function rmIssDraw(){
   const box = $('rm-iss'); if (!box) return;
@@ -3424,10 +3442,15 @@ function rmSheet(k){
     return { title: 'Material issued to MMC' + (!F.searched ? ' — last 5 issues' : (F.from||F.to ? ' — '+(F.from||'beginning')+' to '+(F.to||'today') : '')), file: 'rm-issued-to-mmc',
       head: ['Date','Item code','Item','Qty','Unit','Challan','Vehicle','Received at MMC'],
       rows: rmIssRows().map(r=>[r.issue_date, r.item?.code||'', r.item?.name||'', r.qty, r.item?.unit||'', r.challan_no||'', r.vehicle||'', r.received_at ? r.received_at.slice(0,10) : 'Pending']) }; }
-  if (k === 'mmc') return { title: 'Raw material at MMC', file: 'rm-at-mmc', head: ['Item code','Item','Issued to MMC','Consumed','At MMC (balance)','Unit'],
-      rows: rmRows('mmc').map(r=>[r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||'']) };
-  return { title: 'Raw material in company store', file: 'rm-company-store', head: ['Item code','Item','Received in store','Sent to MMC','In company store (balance)','Unit'],
-      rows: rmRows('store').map(r=>[r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||'']) };
+  const V = rmValOn(k), vh = V ? ['Landed cost / unit (Rs)','Value (Rs)'] : [];
+  const vc = (r, b) => { if (!V) return []; const c = rmCostOf(r); return c == null ? ['', ''] : [Math.round(c*100)/100, Math.round(b*c*100)/100]; };
+  let S;
+  if (k === 'mmc') S = { title: 'Raw material at MMC', file: 'rm-at-mmc', head: ['Item code','Item','Issued to MMC','Consumed','At MMC (balance)','Unit'].concat(vh),
+      rows: rmRows('mmc').map(r=>[r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||''].concat(vc(r, Number(r.balance||0)))) };
+  else S = { title: 'Raw material in company store', file: 'rm-company-store', head: ['Item code','Item','Received in store','Sent to MMC','In company store (balance)','Unit'].concat(vh),
+      rows: rmRows('store').map(r=>[r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||''].concat(vc(r, Number(r.store_balance||0)))) };
+  if (V && S.rows.length){ S.title += ' — with landed value (incl. taxes & transport)'; S.rows.push(['','Total value','','','','','', Math.round(S.rows.reduce((t,r)=>t+(Number(r[7])||0),0)*100)/100]); }
+  return S;
 }
 function rmCsv(k){
   const S = rmSheet(k); if (!S.rows.length){ alert('Nothing to download.'); return; }
@@ -5532,6 +5555,11 @@ async function poView(id){
       'Taxable value: <b>₹ '+inr(mTaxable)+'</b> · Non-taxable sale: <b>₹ '+inr(mNonTax)+'</b><br>'
       + (mIgstAmt>0 ? 'IGST: <b>₹ '+inr(mIgstAmt)+'</b>' : 'CGST: <b>₹ '+inr(mCgstAmt)+'</b> · SGST: <b>₹ '+inr(mSgstAmt)+'</b>')] : null,
     canPurView() ? ['Total value (incl. tax)', '<b>₹ '+inr(tot)+'</b>'] : null,
+    (canPurView() && po) ? ['Transport / freight to us', canPurEdit() && status!=='CANCELLED'
+      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;"><input type="number" id="po-tr-amt" min="0" step="any" value="${Number(po.transport_amount||0)||''}" placeholder="₹ incl. tax" style="max-width:130px;padding:6px;font-size:12.5px;">
+         <input type="text" id="po-tr-note" value="${esc(po.transport_note||'')}" placeholder="Transporter / LR no. / bill no." style="max-width:220px;padding:6px;font-size:12.5px;">
+         <button class="mini" onclick="poTransportSave('${id}')">Save</button></div><span style="font-size:11px;color:#777">Added to the landed cost of this order's materials (shared by value). Landed value incl. tax + transport: <b>₹ ${inr(tot + Number(po.transport_amount||0))}</b></span><div id="po-tr-msg" style="font-size:12px;"></div>`
+      : (Number(po.transport_amount||0) ? '₹ '+inr(po.transport_amount)+(po.transport_note?' · '+esc(po.transport_note):'') : '—')] : null,
     (po && po.payment_terms) ? ['Payment terms', esc(po.payment_terms)] : null,
     (po && po.remarks) ? ['Remarks', esc(po.remarks)] : null,
   ].filter(Boolean);
@@ -5539,6 +5567,13 @@ async function poView(id){
     + (status!=='PENDING_APPROVAL'
         ? '<div style="margin-top:10px;"><button class="mini" onclick="poPrint(\''+id+'\')" title="Print or save as PDF">🖨 Print / save PDF</button></div>'
         : '<p style="font-size:12px;color:#b3261e;margin-top:8px;">This order is awaiting approval — it can be printed once approved.</p>'));
+}
+async function poTransportSave(id){
+  const amt = Number($('po-tr-amt').value)||0;
+  if (amt < 0){ say('po-tr-msg','Amount cannot be negative.',false); return; }
+  const { error } = await db.schema('mfg').rpc('set_po_transport', { p_po: id, p_amount: amt, p_note: $('po-tr-note').value.trim()||null });
+  if (error){ say('po-tr-msg', error.message, false); return; }
+  say('po-tr-msg', 'Transport saved — ₹ ' + inr(amt) + '. The raw-material landed cost now includes it.', true);
 }
 async function poPrint(id){
   const G = db.schema('mfg');
