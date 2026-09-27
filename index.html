@@ -10010,7 +10010,7 @@ async function mktTab(t){
     B.innerHTML=html+'</tbody></table></div>';
   }
   if(t==='spend'){
-    if(!window.__mktVendors){ try { const {data:vl}=await S.rpc('vendor_pick_list'); window.__mktVendors=vl||[]; } catch(e){ window.__mktVendors=[]; } }
+    if(!window.__mktRetailers){ try { const {data:rl}=await S.rpc('retailer_pick_list'); window.__mktRetailers=rl||[]; } catch(e){ window.__mktRetailers=[]; } }
     const {data,error}=await S.from('v_mkt_expenses').select('*').order('expense_date',{ascending:false}).limit(200);
     if(error){B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`;return;}
     let html='';
@@ -10018,11 +10018,11 @@ async function mktTab(t){
       html+=`<div class="card" style="margin-bottom:14px;max-width:660px;"><h3 style="font-size:15px;">Log a marketing spend</h3>
        <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
        <div><label>Category</label><select id="ex-cat">${mktCatOpts(false)}</select></div></div>
-       <div class="row2c"><div><label>Amount ₹</label><input type="number" id="ex-amt" min="0"></div><div><label>Vendor</label><select id="ex-vendor-id" onchange="$('ex-vendor').style.display=this.value==='__OTHER'?'':'none'">${mktVendorOpts()}</select><input type="text" id="ex-vendor" placeholder="Type the vendor / payee name" style="display:none;margin-top:6px;"></div></div>
+       <div class="row2c"><div><label>Amount ₹</label><input type="number" id="ex-amt" min="0"></div><div><label>Retailer</label><select id="ex-vendor-id" onchange="$('ex-vendor').style.display=this.value==='__OTHER'?'':'none'">${mktRetailerOpts()}</select><input type="text" id="ex-vendor" placeholder="Type the retailer / party name" style="display:none;margin-top:6px;"></div></div>
        <label>Where used / description</label><input type="text" id="ex-desc" placeholder="e.g. Diwali hoardings — Bhiwandi">
        <button class="btn gold sm" style="margin-top:10px;" onclick="mktSaveExpense()">Add spend</button><div id="ex-msg"></div></div>`;
     }
-    html+='<div class="table-scroll"><table><thead><tr><th>Date</th><th>Month / Week</th><th>Category</th><th class="amount">Amount ₹</th><th>Where used</th><th>Vendor</th></tr></thead><tbody>';
+    html+='<div class="table-scroll"><table><thead><tr><th>Date</th><th>Month / Week</th><th>Category</th><th class="amount">Amount ₹</th><th>Where used</th><th>Retailer</th></tr></thead><tbody>';
     html+=(data||[]).map(e=>`<tr><td>${e.expense_date}</td><td>${e.month}<br><span style="font-size:11px;color:#777">${e.week}</span></td><td>${mktCatLbl(e.category)}</td><td class="amount">${inr(e.amount)}</td><td>${esc(e.description||'—')}</td><td>${esc(e.vendor||'—')}</td></tr>`).join('')||'<tr><td colspan="6" style="color:#777">No spends logged yet.</td></tr>';
     B.innerHTML=html+'</tbody></table></div>';
   }
@@ -10091,12 +10091,12 @@ const MKT_CATS = [['DIGITAL','Digital'],['PRINT','Print'],['EVENTS','Events'],['
   ['WINDOW_HIRING','Window hiring'],['DIGITAL_BOARD','Board / digital board'],['SPOT_PROMOTION','Spot sales promotion'],['OTHER','Other']];
 function mktCatLbl(c){ if (c==='ALL') return 'All (overall)'; const x = MKT_CATS.find(k=>k[0]===c); return x ? x[1] : (c||''); }
 function mktCatOpts(withAll){ return (withAll?'<option value="ALL">All (overall)</option>':'') + MKT_CATS.map(([v,l])=>`<option value="${v}">${esc(l)}</option>`).join(''); }
-function mktVendorOpts(){ return '<option value="">— choose the vendor —</option>' + (window.__mktVendors||[]).map(v=>`<option value="${v.id}">${esc(v.name)}${v.code?' ('+esc(v.code)+')':''}</option>`).join('') + '<option value="__OTHER">Other — not in the vendor list (type the name)</option>'; }
+function mktRetailerOpts(){ return '<option value="">— choose the retailer —</option>' + (window.__mktRetailers||[]).map(v=>`<option value="${v.id}">${esc(v.name)}${v.code?' ('+esc(v.code)+')':''}${v.category?' · '+esc(v.category):''}</option>`).join('') + '<option value="__OTHER">Other — not in the retailer list (type the name)</option>'; }
 async function mktSaveExpense(){ const amt=Number($('ex-amt').value); if(!(amt>0)){say('ex-msg','Enter an amount.',false);return;}
-  const vsel=$('ex-vendor-id') ? $('ex-vendor-id').value : ''; const ven=(window.__mktVendors||[]).find(v=>v.id===vsel);
+  const vsel=$('ex-vendor-id') ? $('ex-vendor-id').value : ''; const ven=(window.__mktRetailers||[]).find(v=>v.id===vsel);
   const vname = ven ? ven.name : (vsel==='__OTHER' ? ($('ex-vendor').value.trim()||null) : null);
-  if (vsel==='__OTHER' && !vname){ say('ex-msg','Type the vendor / payee name.',false); return; }
-  const {error}=await db.schema('sales').from('mkt_expenses').insert({expense_date:$('ex-date').value||null,category:$('ex-cat').value,amount:amt,description:$('ex-desc').value.trim()||null,vendor:vname,vendor_id:ven?ven.id:null,created_by:me.id}); if(error){say('ex-msg','Save failed: '+error.message,false);return;} mktTab('spend'); }
+  if (vsel==='__OTHER' && !vname){ say('ex-msg','Type the retailer / party name.',false); return; }
+  const {error}=await db.schema('sales').from('mkt_expenses').insert({expense_date:$('ex-date').value||null,category:$('ex-cat').value,amount:amt,description:$('ex-desc').value.trim()||null,vendor:vname,retailer_id:ven?ven.id:null,created_by:me.id}); if(error){say('ex-msg','Save failed: '+error.message,false);return;} mktTab('spend'); }
 
 /* ===== SALESMAN / FIELD VISITS — now the field side of Sales Team Reports ===== */
 const FBUCKET='visit-selfies';
