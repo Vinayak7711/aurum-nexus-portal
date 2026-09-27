@@ -3352,6 +3352,7 @@ async function mfgTab(which){
     window.__rmIssues = allIssues || [];
     const tools = k => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;">
         <input type="text" placeholder="🔍 Search item" value="${esc(window.rmQ[k])}" oninput="window.rmQ['${k}']=this.value;rmPosDraw('${k}')" style="max-width:240px;padding:7px;font-size:12.5px;">
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" style="width:auto;" ${(window.rmZero||{})[k]?'checked':''} onchange="window.rmZero=window.rmZero||{};window.rmZero['${k}']=this.checked;rmPosDraw('${k}')"> show items with zero balance</label>
         <span style="flex:1"></span><button class="btn ghost sm" onclick="rmCsv('${k}')">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="rmPrint('${k}')">🖨 Print / save PDF</button></div>`;
     html += `<h4 class="sec">Raw material at MMC</h4><p style="font-size:12px;color:#777;margin:4px 0 0;">What has been sent to MMC, what the batches have consumed, and the balance lying at MMC.</p>
       ${tools('mmc')}<div class="table-scroll" id="rm-pos-mmc"></div>
@@ -3374,7 +3375,8 @@ async function mfgTab(which){
 /* ---- Raw material: separate lists (at MMC / company store) and the issue register, with filters, download and print ---- */
 function rmRows(k){
   const q = String((window.rmQ||{})[k]||'').trim().toLowerCase();
-  const list = (window.__rm||{})[k] || [];
+  let list = (window.__rm||{})[k] || [];
+  if (!(window.rmZero||{})[k]) list = list.filter(r => Number(k==='mmc' ? r.balance : r.store_balance) !== 0);
   return q ? list.filter(r => (String(r.code)+' '+String(r.name)).toLowerCase().includes(q)) : list;
 }
 function rmIssRows(){
