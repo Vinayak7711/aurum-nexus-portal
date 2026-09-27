@@ -4199,6 +4199,8 @@ function srSecForm(){
       <div><label>Brand</label><select id="ss-brand" onchange="ssBrandPick(this.value)"></select></div></div>
     <div class="row2c" style="margin-top:8px;"><div><label>SKU (pack)</label><select id="ss-sku" onchange="ssEligShow()" disabled><option value="">— choose a brand first —</option></select></div>
       <div><label>Cases</label><input type="number" id="ss-cases" min="1" placeholder="e.g. 10" oninput="ssEligShow()"></div></div>
+    <div id="ss-xlines"></div>
+    <button class="btn ghost sm" style="margin-top:8px;" id="ss-addline" onclick="ssAddLine()">➕ Add another brand / SKU</button>
     <div class="row2c" style="margin-top:8px;"><div><label>Scheme reimbursement given?</label><select id="ss-sg" onchange="ssSchemeToggle()"><option value="NO">No</option><option value="YES">Yes</option></select></div><div></div></div>
     <div id="ss-sch-wrap" style="display:none;background:#faf6ea;border-radius:8px;padding:8px 10px;margin-top:8px;">
       <div class="row2c"><div><label>Under which scheme *</label><select id="ss-sch" onchange="ssEligShow()"></select></div>
@@ -4254,6 +4256,7 @@ async function ssEdit(id){
   $('ss-stype').value = x.scheme_type || 'CASH';
   $('ss-samt').value = x.scheme_amount ?? ''; $('ss-fqty').value = x.free_qty ?? ''; $('ss-funit').value = x.free_unit || 'CASES'; $('ss-snote').value = x.scheme_note || '';
   ssSchemeToggle();
+  $('ss-xlines').innerHTML = ''; $('ss-addline').style.display = 'none';
   $('ss-title').textContent = 'Edit secondary sale — ' + x.sale_date;
   $('ss-save').textContent = 'Update secondary sale'; $('ss-cancel').style.display = '';
   $('ss-card').style.border = '1px solid #b8860b';
@@ -4298,7 +4301,7 @@ function ssSchemeOpts(keepId){
 // scheme period up to and including this bill must reach the first slab (the database enforces the same rule).
 async function ssSchemeEligibility(){
   const sch = (window.__ssSchemes||[]).find(x=>x.id===$('ss-sch').value);
-  const retId = $('ss-ret').value, skuId = $('ss-sku').value, cases = Number($('ss-cases').value)||0, d = $('ss-date').value || todayISO();
+  const retId = $('ss-ret').value, d = $('ss-date').value || todayISO();
   if (!sch || !retId) return null;
   const retRow = (window.__ssRetBy||{})[retId] || {};
   let retCat = retRow.category;
@@ -4313,7 +4316,7 @@ async function ssSchemeEligibility(){
   const { data: past } = await db.schema('sales').from('secondary_sales').select('id, sku_id, cases, sale_date').eq('retailer_id', retId).gte('sale_date', sch.date_from).lte('sale_date', d);
   let tot = (past||[]).filter(x=>x.id !== window.__ssEditId && inScheme(x.sku_id)).reduce((t,x)=>t+Number(x.cases),0);
   const before = tot;
-  if (skuId && inScheme(skuId)) tot += cases;
+  ssLines().forEach(l=>{ if (l.sku && inScheme(l.sku)) tot += l.cases; });
   let hit = null; slabs.forEach(sl=>{ if (tot >= sl.min) hit = sl; });
   if (!first || !hit) return { ok:false, tot, before, msg:`Slab not completed as per the selected scheme ${sch.code} — ${rName} has lifted ${tot} case(s) of the scheme brands from ${sch.date_from} up to this bill (earlier ${before} + this bill ${tot-before}); the first slab needs ${first?first.min:0} case(s). The scheme cannot be deducted on this bill.` };
   return { ok:true, tot, before, hit, msg:`✔ Eligible — ${tot} case(s) lifted in the scheme period up to this bill (earlier ${before} + this bill ${tot-before}) → slab ${hit.min}+ : ${hit.benefit}${hit.value?' (₹ '+inr(hit.value)+')':''}` };
@@ -4331,6 +4334,32 @@ function ssSchemeToggle(){
   $('ss-amt-wrap').style.display = free ? 'none' : '';
   $('ss-free-wrap').style.display = free ? '' : 'none';
 }
+// Extra lines on one secondary-sale bill (same date, distributor and retailer; several brands / SKUs)
+function ssAddLine(){
+  const box = $('ss-xlines'); if (!box) return;
+  const n = box.querySelectorAll('.ss-xline').length + 2;
+  const bopts = '<option value="">— choose the brand —</option>' + M.brands.filter(b=>b.is_active!==false).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  box.insertAdjacentHTML('beforeend', `<div class="ss-xline" style="border-top:1px dashed #ddd;margin-top:10px;padding-top:6px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;"><span class="ss-xno" style="font-size:12px;font-weight:600;color:#555;">Line ${n}</span>
+      <button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="this.closest('.ss-xline').remove();ssRenumber();ssEligShow()">✕ Remove</button></div>
+    <div class="row2c" style="margin-top:4px;"><div><label>Brand</label><select class="xb" onchange="ssLineBrand(this)">${bopts}</select></div>
+      <div><label>SKU (pack)</label><select class="xs" onchange="ssEligShow()" disabled><option value="">— choose a brand first —</option></select></div></div>
+    <div class="row2c" style="margin-top:6px;"><div><label>Cases</label><input type="number" class="xc" min="1" placeholder="e.g. 10" oninput="ssEligShow()"></div><div></div></div></div>`);
+}
+function ssRenumber(){ document.querySelectorAll('#ss-xlines .ss-xline .ss-xno').forEach((el,i)=>el.textContent = 'Line ' + (i+2)); }
+function ssLineBrand(sel){
+  const s2 = sel.closest('.ss-xline').querySelector('.xs'), bid = sel.value;
+  if (!bid){ s2.innerHTML = '<option value="">— choose a brand first —</option>'; s2.disabled = true; ssEligShow(); return; }
+  const skus = M.skus.filter(k=>k.is_active && k.brand_id===bid);
+  s2.innerHTML = skus.length ? '<option value="">— choose the pack —</option>'+skus.map(k=>`<option value="${k.id}">${esc(k.sku_code)}</option>`).join('') : '<option value="">— no active SKUs for this brand —</option>';
+  s2.disabled = false; ssEligShow();
+}
+// All lines of the bill being entered: line 1 + any extra lines (extra lines are ignored while editing one entry)
+function ssLines(){
+  const out = [{ no:1, sku: $('ss-sku') ? $('ss-sku').value : '', cases: Number($('ss-cases') ? $('ss-cases').value : 0) || 0, brand: $('ss-brand') ? $('ss-brand').value : '' }];
+  if (!window.__ssEditId) document.querySelectorAll('#ss-xlines .ss-xline').forEach((el,i)=>out.push({ no:i+2, sku: el.querySelector('.xs').value, cases: Number(el.querySelector('.xc').value)||0, brand: el.querySelector('.xb').value }));
+  return out;
+}
 function ssBrandPick(bid){
   const sel = $('ss-sku');
   if (!bid){ sel.innerHTML = '<option value="">— choose a brand first —</option>'; sel.disabled = true; return; }
@@ -4339,24 +4368,37 @@ function ssBrandPick(bid){
   sel.disabled = false;
 }
 async function ssSave(){
-  const retId = $('ss-ret').value, skuId = $('ss-sku').value, cases = Number($('ss-cases').value);
+  const retId = $('ss-ret').value;
   if (!retId){ say('ss-msg','Choose the retailer.',false); return; }
-  if (!skuId){ say('ss-msg','Choose the brand and its SKU.',false); return; }
-  if (!(cases > 0)){ say('ss-msg','Enter the number of cases.',false); return; }
-  const row = { sale_date: $('ss-date').value || todayISO(), party_id: $('ss-dist').value || null, retailer_id: retId, sku_id: skuId, cases,
-                scheme_given: false, scheme_id: null, scheme_type: null, scheme_amount: null, free_qty: null, free_unit: null, scheme_note: null };
+  const lines = ssLines();
+  for (const l of lines){
+    if (!l.sku){ say('ss-msg', `Line ${l.no}: choose the brand and its SKU${l.no>1?' (or remove the line)':''}.`, false); return; }
+    if (!(l.cases > 0)){ say('ss-msg', `Line ${l.no}: enter the number of cases.`, false); return; }
+  }
+  const base = { sale_date: $('ss-date').value || todayISO(), party_id: $('ss-dist').value || null, retailer_id: retId };
+  const blank = { scheme_given: false, scheme_id: null, scheme_type: null, scheme_amount: null, free_qty: null, free_unit: null, scheme_note: null };
+  let rows = lines.map(l=>Object.assign({}, base, blank, { sku_id: l.sku, cases: l.cases }));
   if ($('ss-sg') && $('ss-sg').value === 'YES'){
     const schId = $('ss-sch').value, st = $('ss-stype').value;
     if (!schId){ say('ss-msg','Choose the scheme under which the reimbursement was given.',false); return; }
     const el = await ssSchemeEligibility();
     if (el && !el.ok){ alert(el.msg); say('ss-msg', el.msg, false); return; }
-    Object.assign(row, { scheme_given: true, scheme_id: schId, scheme_type: st, scheme_note: $('ss-snote').value.trim() || null });
-    if (st === 'CASH'){ const a = Number($('ss-samt').value); if (!(a > 0)){ say('ss-msg','Enter the scheme amount in ₹.',false); return; } row.scheme_amount = a; }
-    else { const q = Number($('ss-fqty').value); if (!(q > 0)){ say('ss-msg','Enter the free issue quantity.',false); return; } row.free_qty = q; row.free_unit = $('ss-funit').value; }
+    const sch = (window.__ssSchemes||[]).find(x=>x.id===schId) || {}, brands = sch.brand_ids || [];
+    const inScheme = id => !brands.length || brands.includes((M.skus.find(k=>k.id===id)||{}).brand_id);
+    // the benefit is recorded once, on the last scheme-brand line of the bill (saved last, so the slab counts the whole bill)
+    let idx = -1; rows.forEach((r,i)=>{ if (inScheme(r.sku_id)) idx = i; });
+    if (idx < 0){ const m = `None of the SKUs on this bill belong to the brands of ${sch.code||'this scheme'} — the scheme cannot be deducted on this bill.`; alert(m); say('ss-msg', m, false); return; }
+    const sr = rows[idx];
+    Object.assign(sr, { scheme_given: true, scheme_id: schId, scheme_type: st, scheme_note: $('ss-snote').value.trim() || null });
+    if (st === 'CASH'){ const a = Number($('ss-samt').value); if (!(a > 0)){ say('ss-msg','Enter the scheme amount in ₹.',false); return; } sr.scheme_amount = a; }
+    else { const q = Number($('ss-fqty').value); if (!(q > 0)){ say('ss-msg','Enter the free issue quantity.',false); return; } sr.free_qty = q; sr.free_unit = $('ss-funit').value; }
+    rows = rows.filter((r,i)=>i!==idx).concat([sr]);
   }
+  $('ss-save').disabled = true;
   const { error } = window.__ssEditId
-    ? await db.schema('sales').from('secondary_sales').update(row).eq('id', window.__ssEditId)
-    : await db.schema('sales').from('secondary_sales').insert(Object.assign(row, { created_by: me.id }));
+    ? await db.schema('sales').from('secondary_sales').update(rows[0]).eq('id', window.__ssEditId)
+    : await db.schema('sales').from('secondary_sales').insert(rows.map(r=>Object.assign(r, { created_by: me.id })));
+  if ($('ss-save')) $('ss-save').disabled = false;
   if (error){ if (/Slab not completed/i.test(error.message)) alert(error.message); say('ss-msg','Could not save: '+error.message,false); return; }
   window.__ssEditId = null;
   srReload();
