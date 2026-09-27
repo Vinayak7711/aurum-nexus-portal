@@ -9998,31 +9998,32 @@ async function mktTab(t){
       html+=`<div class="card" style="margin-bottom:14px;max-width:660px;"><h3 style="font-size:15px;">Set / revise marketing budget</h3>
        <div class="row2c"><div><label>Period type</label><select id="bg-ptype" onchange="mktPeriodField()"><option value="MONTH">Month-wise</option><option value="WEEK">Week-wise</option></select></div>
        <div id="bg-period-wrap"><label>Month</label><input type="month" id="bg-period" value="${monthLabelJS()}"></div></div>
-       <div class="row2c"><div><label>Category</label><select id="bg-cat"><option value="ALL">All (overall)</option><option>DIGITAL</option><option>PRINT</option><option>EVENTS</option><option>TRADE</option><option>BTL</option><option>SPONSORSHIP</option><option>SAMPLING</option><option>OTHER</option></select></div>
+       <div class="row2c"><div><label>Category</label><select id="bg-cat">${mktCatOpts(true)}</select></div>
        <div><label>Budget ₹</label><input type="number" id="bg-amt" min="0"></div></div>
        <label>Note</label><input type="text" id="bg-note">
        <button class="btn gold sm" style="margin-top:10px;" onclick="mktSaveBudget()">Save budget</button><div id="bg-msg"></div></div>`;
     }
     html+='<div class="table-scroll"><table><thead><tr><th>Period</th><th>Type</th><th>Category</th><th class="amount">Budget ₹</th><th class="amount">Spent ₹</th><th class="amount">Remaining ₹</th><th>Utilisation</th></tr></thead><tbody>';
     html+=(data||[]).map(b=>{const pct=b.amount>0?Math.round(b.spent*100/b.amount):0;const c=pct>=100?'#b3382c':(pct>=80?'#7a5c10':'#1f7a4d');
-      return `<tr><td><b>${b.period}</b></td><td>${b.period_type==='MONTH'?'Month':'Week'}</td><td>${b.category}</td><td class="amount">${inr(b.amount)}</td><td class="amount">${inr(b.spent)}</td><td class="amount" style="font-weight:700;color:${(b.amount-b.spent)<0?'#b3382c':'#1f7a4d'}">${inr(b.amount-b.spent)}</td>
+      return `<tr><td><b>${b.period}</b></td><td>${b.period_type==='MONTH'?'Month':'Week'}</td><td>${mktCatLbl(b.category)}</td><td class="amount">${inr(b.amount)}</td><td class="amount">${inr(b.spent)}</td><td class="amount" style="font-weight:700;color:${(b.amount-b.spent)<0?'#b3382c':'#1f7a4d'}">${inr(b.amount-b.spent)}</td>
       <td><div style="background:#eee;border-radius:6px;height:16px;width:110px;overflow:hidden;display:inline-block;vertical-align:middle;"><div style="height:16px;width:${Math.min(pct,100)}%;background:${c};"></div></div> <span style="font-size:11px;color:${c};font-weight:600">${pct}%</span></td></tr>`;}).join('')||'<tr><td colspan="7" style="color:#777">No budgets set yet.</td></tr>';
     B.innerHTML=html+'</tbody></table></div>';
   }
   if(t==='spend'){
+    if(!window.__mktVendors){ try { const {data:vl}=await S.rpc('vendor_pick_list'); window.__mktVendors=vl||[]; } catch(e){ window.__mktVendors=[]; } }
     const {data,error}=await S.from('v_mkt_expenses').select('*').order('expense_date',{ascending:false}).limit(200);
     if(error){B.innerHTML=`<div class="msg err">${esc(error.message)}</div>`;return;}
     let html='';
     if(canMktEdit()){
       html+=`<div class="card" style="margin-bottom:14px;max-width:660px;"><h3 style="font-size:15px;">Log a marketing spend</h3>
        <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
-       <div><label>Category</label><select id="ex-cat"><option>DIGITAL</option><option>PRINT</option><option>EVENTS</option><option>TRADE</option><option>BTL</option><option>SPONSORSHIP</option><option>SAMPLING</option><option>OTHER</option></select></div></div>
-       <div class="row2c"><div><label>Amount ₹</label><input type="number" id="ex-amt" min="0"></div><div><label>Vendor</label><input type="text" id="ex-vendor"></div></div>
+       <div><label>Category</label><select id="ex-cat">${mktCatOpts(false)}</select></div></div>
+       <div class="row2c"><div><label>Amount ₹</label><input type="number" id="ex-amt" min="0"></div><div><label>Vendor</label><select id="ex-vendor-id" onchange="$('ex-vendor').style.display=this.value==='__OTHER'?'':'none'">${mktVendorOpts()}</select><input type="text" id="ex-vendor" placeholder="Type the vendor / payee name" style="display:none;margin-top:6px;"></div></div>
        <label>Where used / description</label><input type="text" id="ex-desc" placeholder="e.g. Diwali hoardings — Bhiwandi">
        <button class="btn gold sm" style="margin-top:10px;" onclick="mktSaveExpense()">Add spend</button><div id="ex-msg"></div></div>`;
     }
     html+='<div class="table-scroll"><table><thead><tr><th>Date</th><th>Month / Week</th><th>Category</th><th class="amount">Amount ₹</th><th>Where used</th><th>Vendor</th></tr></thead><tbody>';
-    html+=(data||[]).map(e=>`<tr><td>${e.expense_date}</td><td>${e.month}<br><span style="font-size:11px;color:#777">${e.week}</span></td><td>${e.category}</td><td class="amount">${inr(e.amount)}</td><td>${esc(e.description||'—')}</td><td>${esc(e.vendor||'—')}</td></tr>`).join('')||'<tr><td colspan="6" style="color:#777">No spends logged yet.</td></tr>';
+    html+=(data||[]).map(e=>`<tr><td>${e.expense_date}</td><td>${e.month}<br><span style="font-size:11px;color:#777">${e.week}</span></td><td>${mktCatLbl(e.category)}</td><td class="amount">${inr(e.amount)}</td><td>${esc(e.description||'—')}</td><td>${esc(e.vendor||'—')}</td></tr>`).join('')||'<tr><td colspan="6" style="color:#777">No spends logged yet.</td></tr>';
     B.innerHTML=html+'</tbody></table></div>';
   }
   if(t==='requests'){
@@ -10033,7 +10034,7 @@ async function mktTab(t){
       html+=`<div class="card" style="margin-bottom:14px;max-width:660px;"><h3 style="font-size:15px;">Request a marketing budget</h3>
        <p style="font-size:12px;color:#777;margin:2px 0 10px;">Raise a request with the amount, purpose and how it will be utilised. The Director or Accounts will approve or reject it.</p>
        <div class="row2c"><div><label>Amount ₹</label><input type="number" id="mr-amt" min="0"></div>
-       <div><label>Category</label><select id="mr-cat"><option>DIGITAL</option><option>PRINT</option><option>EVENTS</option><option>TRADE</option><option>BTL</option><option>SPONSORSHIP</option><option>SAMPLING</option><option value="ALL">All (overall)</option><option>OTHER</option></select></div></div>
+       <div><label>Category</label><select id="mr-cat">${mktCatOpts(true)}</select></div></div>
        <div class="row2c"><div><label>For month (optional)</label><input type="month" id="mr-period"></div>
        <div><label>Needed by (optional)</label><input type="date" id="mr-needed"></div></div>
        <label>Purpose / description</label><input type="text" id="mr-desc" placeholder="e.g. Q3 Instagram + influencer campaign">
@@ -10053,7 +10054,7 @@ async function mktTab(t){
         if(isDir() || r.requested_by===me.id) parts.push(`<button class="btn sm" onclick="mktReqWithdraw('${r.id}')">Withdraw</button>`);
         act=parts.join(' ')||'—';
       }
-      return `<tr><td><b>${esc(r.req_code)}</b></td><td>${esc(r.category)}</td><td class="amount">${inr(r.amount)}</td>
+      return `<tr><td><b>${esc(r.req_code)}</b></td><td>${esc(mktCatLbl(r.category))}</td><td class="amount">${inr(r.amount)}</td>
         <td>${esc(r.description||'—')}${r.utilization?'<br><span style="font-size:11px;color:#777">'+esc(r.utilization)+'</span>':''}</td>
         <td>${r.period||'—'}${r.needed_by?'<br><span style="font-size:11px;color:#777">by '+r.needed_by+'</span>':''}</td>
         <td>${esc(r.requested_by_name||'—')}</td><td>${st}${decided}</td><td>${act}</td></tr>`;
@@ -10086,7 +10087,16 @@ function mktPeriodField(){ const t=$('bg-ptype').value; const w=$('bg-period-wra
 async function mktSaveBudget(){ const amt=Number($('bg-amt').value); const period=$('bg-period').value.trim(); if(!period){say('bg-msg','Pick a period.',false);return;} if(!(amt>=0)){say('bg-msg','Enter a budget amount.',false);return;}
   const row={period_type:$('bg-ptype').value,period,category:$('bg-cat').value,amount:amt,note:$('bg-note').value.trim()||null,set_by:me.id};
   const {error}=await db.schema('sales').from('mkt_budgets').upsert(row,{onConflict:'period_type,period,category'}); if(error){say('bg-msg','Save failed: '+error.message,false);return;} mktTab('budget'); }
-async function mktSaveExpense(){ const amt=Number($('ex-amt').value); if(!(amt>=0)){say('ex-msg','Enter an amount.',false);return;} const {error}=await db.schema('sales').from('mkt_expenses').insert({expense_date:$('ex-date').value||null,category:$('ex-cat').value,amount:amt,description:$('ex-desc').value.trim()||null,vendor:$('ex-vendor').value.trim()||null,created_by:me.id}); if(error){say('ex-msg','Save failed: '+error.message,false);return;} mktTab('spend'); }
+const MKT_CATS = [['DIGITAL','Digital'],['PRINT','Print'],['EVENTS','Events'],['TRADE','Trade'],['BTL','BTL'],['SPONSORSHIP','Sponsorship'],['SAMPLING','Sampling'],
+  ['WINDOW_HIRING','Window hiring'],['DIGITAL_BOARD','Board / digital board'],['SPOT_PROMOTION','Spot sales promotion'],['OTHER','Other']];
+function mktCatLbl(c){ if (c==='ALL') return 'All (overall)'; const x = MKT_CATS.find(k=>k[0]===c); return x ? x[1] : (c||''); }
+function mktCatOpts(withAll){ return (withAll?'<option value="ALL">All (overall)</option>':'') + MKT_CATS.map(([v,l])=>`<option value="${v}">${esc(l)}</option>`).join(''); }
+function mktVendorOpts(){ return '<option value="">— choose the vendor —</option>' + (window.__mktVendors||[]).map(v=>`<option value="${v.id}">${esc(v.name)}${v.code?' ('+esc(v.code)+')':''}</option>`).join('') + '<option value="__OTHER">Other — not in the vendor list (type the name)</option>'; }
+async function mktSaveExpense(){ const amt=Number($('ex-amt').value); if(!(amt>0)){say('ex-msg','Enter an amount.',false);return;}
+  const vsel=$('ex-vendor-id') ? $('ex-vendor-id').value : ''; const ven=(window.__mktVendors||[]).find(v=>v.id===vsel);
+  const vname = ven ? ven.name : (vsel==='__OTHER' ? ($('ex-vendor').value.trim()||null) : null);
+  if (vsel==='__OTHER' && !vname){ say('ex-msg','Type the vendor / payee name.',false); return; }
+  const {error}=await db.schema('sales').from('mkt_expenses').insert({expense_date:$('ex-date').value||null,category:$('ex-cat').value,amount:amt,description:$('ex-desc').value.trim()||null,vendor:vname,vendor_id:ven?ven.id:null,created_by:me.id}); if(error){say('ex-msg','Save failed: '+error.message,false);return;} mktTab('spend'); }
 
 /* ===== SALESMAN / FIELD VISITS — now the field side of Sales Team Reports ===== */
 const FBUCKET='visit-selfies';
