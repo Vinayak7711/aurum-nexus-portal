@@ -1642,46 +1642,8 @@ async function openOrderDetail(id){
         ${bd.levyLeft>0.005?`<div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #b3261e;"><div style="font-size:11px;color:#777">Excise &amp; wine fees still unpaid (MMC excise a/c)</div><div><b style="color:#b3261e">₹ ${inr(bd.levyLeft)}</b></div></div>`:''}
       </div>`;
     }
-    P.innerHTML = '<h4 class="sec">Payments</h4>' +
-      ((pays&&pays.length) ? '<div class="table-scroll"><table><thead><tr><th>Date</th><th class="amount">Amount ₹</th><th>Mode</th><th>Ref</th><th></th></tr></thead><tbody>' +
-        pays.map(p=>`<tr><td>${p.pay_date}</td><td class="amount">${inr(p.amount)}</td><td>${payModeLabel(p.mode)}</td><td>${esc(p.ref_no||'')}${p.remarks?'<br><span style="font-size:11px;color:#777">'+esc(p.remarks)+'</span>':''}</td><td>${(isDir() && p.mode!=='EXCISE_MMC') ? dirDelBtn('sales','payments', p.id, (p.mode==='CASH_DISC'?'cash discount ':'receipt ')+'₹ '+inr(p.amount)+' on '+o.so_no, "openOrderDetail('"+id+"')") : ''}</td></tr>`).join('') +
-        '</tbody></table></div>' : '<p style="font-size:12px;color:#777">No payments recorded.</p>') +
-      (payable ? `<div class="card" style="padding:10px;margin-top:8px;max-width:720px;">
-       <div class="row2c">
-         <div><label>What is being paid</label><select id="pay-kind" onchange="odPayKind()">
-           <option value="BASIC_MMC">Basic → paid to MMC (MMC pays Aurum)</option>
-           <option value="VAT_MMC">VAT → paid to MMC</option>
-           <option value="EXCISE_MMC">Excise &amp; wine fees balance → MMC excise a/c</option>
-           <option value="BASIC">Basic → paid directly to Aurum's bank (exception)</option></select></div>
-         <div><label>Amount ₹</label><input type="number" id="pay-amt" step="any" placeholder="Amount ₹" value="${bd && bd.basicLeft>0.005 ? (bd.basicLeft-bd.discNow).toFixed(2) : ''}"></div>
-       </div>
-       <div class="row2c" style="margin-top:8px;">
-         <div id="pay-mode-wrap" style="visibility:hidden"><label>Mode</label><select id="pay-mode"><option>NEFT</option><option>RTGS</option><option>UPI</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div>
-         <div><label>Paid on</label><input type="date" id="pay-date" value="${calFmt(new Date())}"></div>
-       </div>
-       <div class="row2c" style="margin-top:8px;">
-         <div><label>Reference no.</label><input type="text" id="pay-ref" placeholder="UTR / cheque / challan no."></div>
-         <div id="pay-disc-wrap" style="font-size:12px;padding-top:22px;"><label style="font-weight:400;"><input type="checkbox" id="pay-disc" checked style="width:auto;"> Apply cash discount for early payment${bd&&bd.pct?' ('+bd.pct+'% today)':' (none applies today)'}</label></div>
-       </div>
-       <button class="btn gold sm" id="btn-add-pay" style="margin-top:10px;">Record payment</button>
-       <p style="font-size:11px;color:#777;margin:6px 0 0;">Everything is paid by the distributor to MMC and posted to the MMC ledger. The basic (${bd?bd.credit:30} days credit) is Aurum's money held by MMC — MMC pays it to Aurum (record it in Accounting → New entry → “Receipt from MMC”).</p>
-      </div>` : '');
-    window.__odPayBd = bd;
-    if ($('btn-add-pay')) $('btn-add-pay').onclick = async () => {
-      const amt = Number($('pay-amt').value), kind = $('pay-kind').value;
-      if (!amt){ say('od-msg','Enter a valid amount.',false); return; }
-      if (amt < 0 && !isDir()){ say('od-msg','Only a Director may enter a reversal (negative) amount.',false); return; }
-      if (amt < 0 && !confirm('Record a REVERSAL of ₹' + Math.abs(amt).toLocaleString('en-IN') + '? This corrects a wrong payment while keeping its history.')) return;
-      const mode = kind === 'BASIC' ? $('pay-mode').value : kind;
-      const isBasic = kind === 'BASIC' || kind === 'BASIC_MMC';
-      $('btn-add-pay').disabled = true;
-      const { data: rr, error: e2 } = await S.rpc('record_receipt', { p_order: id, p_amount: amt, p_mode: mode,
-        p_ref: $('pay-ref').value.trim()||null, p_date: $('pay-date').value||null, p_apply_discount: isBasic && $('pay-disc').checked, p_note: null });
-      if ($('btn-add-pay')) $('btn-add-pay').disabled = false;
-      if (e2){ say('od-msg','Could not record payment: '+e2.message,false); return; }
-      await openOrderDetail(id);
-      if (rr && Number(rr.discount) > 0) say('od-msg', `Recorded. Cash discount of ${rr.pct}% (₹ ${inr(rr.discount)}) allowed for payment ${rr.days} day(s) after the sale.`, true);
-    };
+    // Payments are recorded in MMC Accounts & Distributor Outstanding (not on the order) — only a pointer here.
+    P.innerHTML = payable ? `<p style="font-size:12px;color:#777;margin:10px 0 0;">Payments from the distributor (basic, VAT, excise balance) are recorded in <a href="#" onclick="event.preventDefault();openRates();" style="color:#1c2455;font-weight:600;">MMC Accounts &amp; Distributor Outstanding</a>.</p>` : '';
   } else P.innerHTML = '';
   say('od-msg',''); applyDirOnly(); show('order-detail');
 
