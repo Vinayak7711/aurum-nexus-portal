@@ -9453,15 +9453,18 @@ async function schClaimsLoad(schemeId){
   const retBy = {}; (rets||[]).forEach(r=>retBy[r.id]=r);
   const skuBy = {}; M.skus.forEach(k=>skuBy[k.id]=k);
   const claims = (rows||[]).map(x=>{
-    const k = skuBy[x.sku_id] || {}, upc = Number(k.units_per_case)||0, bpc = Number(k.basic_price_case)||0;
+    const k = skuBy[x.sku_id] || {}, upc = Number(k.units_per_case)||0;
+    // Landed cost per case = basic + excise duty (per bottle × bottles) + wine fees + VAT (per bottle × bottles) — what the distributor paid
+    const bpc = Number(k.basic_price_case)||0;
+    const lpc = bpc ? bpc + (Number(k.excise_duty)||0) * upc + (Number(k.wine_fee_case)||0) + (Number(k.vat_amount)||0) * upc : 0;
     let cash = 0, freeVal = 0, noPrice = false;
     if (x.scheme_type === 'FREE'){
       const qn = Number(x.free_qty)||0;
-      if (!bpc || (x.free_unit==='BOTTLES' && !upc)) noPrice = true;
-      else freeVal = x.free_unit === 'BOTTLES' ? qn * bpc / upc : qn * bpc;
+      if (!lpc || (x.free_unit==='BOTTLES' && !upc)) noPrice = true;
+      else freeVal = x.free_unit === 'BOTTLES' ? qn * lpc / upc : qn * lpc;
     } else cash = Number(x.scheme_amount)||0;
     freeVal = Math.round(freeVal * 100) / 100;
-    return { x, ret: retBy[x.retailer_id], sku: k, cash, freeVal, noPrice, total: cash + freeVal,
+    return { x, ret: retBy[x.retailer_id], sku: k, cash, freeVal, noPrice, total: cash + freeVal, landedCase: lpc, landedBtl: upc ? lpc / upc : 0,
              freeTxt: x.scheme_type==='FREE' ? (Number(x.free_qty)||0)+' '+(x.free_unit==='BOTTLES'?'bottle(s)':'case(s)')+' of '+(k.sku_code||'?') : '' };
   });
   return { claims, paid: paid || [], retBy };
@@ -9495,21 +9498,21 @@ async function schReimb(id){
   const T = Object.values(by).reduce((t,g)=>({ cash:t.cash+g.cash, freeVal:t.freeVal+g.freeVal, total:t.total+g.total, paid:t.paid+g.paid, pending:t.pending+g.pending }), { cash:0, freeVal:0, total:0, paid:0, pending:0 });
   let html = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">💰 ${esc(s.code)} — ${esc(s.name)} · reimbursement</h3>
     <p style="font-size:12px;color:#555;margin:4px 0 8px;">${s.date_from} → ${s.date_to} · ${ended?'Scheme has ended.':'⚠ Scheme is still running — more claims can come in until '+s.date_to+'.'}<br>
-    How it works: the distributor gives the retailer the scheme benefit on its bill (recorded on the secondary-sale entry — ₹ or free issue), and <b>we reimburse the distributor</b>. Free issue is valued at the bill SKU's basic price.</p>
+    How it works: the distributor gives the retailer the scheme benefit on its bill (recorded on the secondary-sale entry — ₹ or free issue), and <b>we reimburse the distributor</b>. Free issue is valued at the bill SKU's <b>landed cost</b> — basic + excise duty + wine fees + VAT.</p>
     <button class="mini" style="margin-bottom:8px;" onclick="$('sc-report').innerHTML=''">✕ Close report</button>
     <h4 class="sec">Benefits given by distributors on bills (${C.claims.length}) — to reimburse: <b>₹ ${inr(T.total)}</b></h4>
     <div class="table-scroll"><table><thead><tr><th>Bill date</th><th>Distributor</th><th>Retailer</th><th>Bill (SKU · cases)</th><th>Given</th><th class="amount">₹ amount</th><th class="amount">Free issue value ₹</th><th class="amount">To reimburse ₹</th></tr></thead><tbody>` +
     (C.claims.map(c=>`<tr><td>${c.x.sale_date}</td><td>${esc(schDistName(c.x.party_id))}</td><td><b>${esc(c.ret?c.ret.name:'?')}</b>${c.ret&&c.ret.category?'<br><span style="font-size:11px;color:#777">'+esc(c.ret.category)+'</span>':''}</td>
       <td style="font-size:12px;">${esc(c.sku.sku_code||'?')} · ${c.x.cases} case(s)</td>
       <td style="font-size:12px;">${c.x.scheme_type==='FREE' ? esc(c.freeTxt)+' free' : '₹ amount'}${c.x.scheme_note?'<br><span style="color:#777">'+esc(c.x.scheme_note)+'</span>':''}</td>
-      <td class="amount">${c.cash?inr(c.cash):'—'}</td><td class="amount">${c.x.scheme_type==='FREE' ? (c.noPrice?'<span style="color:#b3261e">no basic price</span>':inr(c.freeVal)) : '—'}</td><td class="amount"><b>${inr(c.total)}</b></td></tr>`).join('')
+      <td class="amount">${c.cash?inr(c.cash):'—'}</td><td class="amount">${c.x.scheme_type==='FREE' ? (c.noPrice?'<span style="color:#b3261e">no price set in Brands &amp; SKUs</span>':inr(c.freeVal)+`<br><span style="font-size:10.5px;color:#777">landed ₹ ${inr(c.landedCase)}/case · ₹ ${inr(c.landedBtl)}/btl</span>`) : '—'}</td><td class="amount"><b>${inr(c.total)}</b></td></tr>`).join('')
       || '<tr><td colspan="8" style="color:#777">No scheme benefit recorded on any secondary-sale bill for this scheme yet. Record it on the Retailer-wise (secondary sale) tab — “Scheme reimbursement given? → Yes”.</td></tr>') +
     (C.claims.length ? `<tr style="font-weight:700;background:#faf6ea;"><td colspan="5">Total</td><td class="amount">${inr(T.cash)}</td><td class="amount">${inr(T.freeVal)}</td><td class="amount">${inr(T.total)}</td></tr>` : '') + '</tbody></table></div>';
   html += `<h4 class="sec" style="margin-top:16px;">Payable to each distributor</h4>
     <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">₹ given</th><th>Free issue given</th><th class="amount">Free issue value ₹</th><th class="amount">To reimburse ₹</th><th class="amount">Reimbursed ₹</th><th class="amount">Pending ₹</th><th>For retailers</th><th>Status</th><th></th></tr></thead><tbody>` +
     (Object.values(by).map(g=>`<tr><td><b>${esc(schDistName(g.pid==='none'?null:g.pid))}</b></td>
       <td class="amount">${inr(g.cash)}</td><td style="font-size:12px;">${g.free.length?esc(g.free.join(', ')):'—'}</td>
-      <td class="amount">${inr(g.freeVal)}${g.noPrice?'<br><span style="font-size:10.5px;color:#b3261e">some SKUs have no basic price</span>':''}</td>
+      <td class="amount">${inr(g.freeVal)}${g.noPrice?'<br><span style="font-size:10.5px;color:#b3261e">some SKUs have no price set</span>':''}</td>
       <td class="amount"><b>${inr(g.total)}</b></td><td class="amount" style="color:#1a7f37">${inr(g.paid)}</td>
       <td class="amount" style="font-weight:700;color:${g.pending>0.005?'#b3261e':'#1a7f37'}">${inr(g.pending)}</td>
       <td style="font-size:12px;">${Object.entries(g.rets).map(([n,v])=>esc(n)+' ('+inr(v)+')').join(', ')||'—'}</td>
@@ -9595,7 +9598,7 @@ async function schSummary(){
     rows.push({ s, state, eligible: eligible.length, totCases, totSpend, settledAmt });
   }
   box.innerHTML = `<div class="card" style="margin-bottom:14px;"><h3 style="font-size:15px;">📈 Scheme summary — spend vs sales</h3>
-    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Sales gained = cases lifted by the scheme's target retailers/brands in the scheme period (from the secondary-sales record). Spend = what distributors actually gave retailers under the scheme (₹ + free issue at basic price), recorded on the secondary-sale entries. Cost per case = spend ÷ cases.</p>
+    <p style="font-size:12px;color:#555;margin:4px 0 8px;">Sales gained = cases lifted by the scheme's target retailers/brands in the scheme period (from the secondary-sales record). Spend = what distributors actually gave retailers under the scheme (₹ + free issue at landed cost — basic + excise + wine fees + VAT), recorded on the secondary-sale entries. Cost per case = spend ÷ cases.</p>
     <button class="mini" style="margin-bottom:8px;" onclick="$('sc-report').innerHTML=''">✕ Close report</button>
     <div class="table-scroll"><table><thead><tr><th>Scheme</th><th>Period</th><th>Status</th><th class="amount">Retailers achieved</th><th class="amount">Sales gained (cases)</th><th class="amount">Total spend ₹</th><th class="amount">Reimbursed ₹</th><th class="amount">Pending ₹</th><th class="amount">Cost / case ₹</th></tr></thead><tbody>` +
     (rows.map(r=>`<tr><td><b>${esc(r.s.code)}</b><br><span style="font-size:12px;">${esc(r.s.name)}</span></td>
