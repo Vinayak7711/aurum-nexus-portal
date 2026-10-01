@@ -6460,11 +6460,20 @@ async function acctTab(t){
         return '<div style="font-size:10.5px;color:#b8860b;margin-top:2px;">⚠ not linked to any head' + (canFinApprove() ? ` <button class="mini" style="padding:1px 7px;font-size:10.5px;" onclick="acLinkForm('${e.id}')">🔗 Link to MMC / vendor / expense</button>` : '') + '</div>';
       return '';
     };
+    // Transfers between our own accounts: OUT of the "from" bank and IN to the "to" bank.
+    // In one bank's ledger the transfer shows on the right side for that bank; in combined views it shows on both sides (nets to zero).
+    { const bankSel = sel.slice(0,2)==='B:' ? sel.slice(2) : null;
+      es = es.map(e => { let dIn = e.direction==='IN', dOut = e.direction==='OUT';
+        if (e.kind==='TRANSFER'){
+          if (bankSel){ dOut = e.bank_name_label===bankSel; dIn = e.counter_bank_label===bankSel; }
+          else { dOut = true; dIn = !!e.counter_bank_label; }
+        }
+        return Object.assign({}, e, { _in: dIn, _out: dOut }); }); }
     const isUnlinked = e => { const l = linkOf[e.id]; return e.direction==='OUT' && ['PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && e.status!=='REJECTED' && !(l && (l.mmc_link||l.vendor_link||l.expense_link||l.salary_link||l.petty_link)); };
     const unlinkedN = es.filter(isUnlinked).length;
     if (window.acLedOnlyUnlinked) es = es.filter(isUnlinked);
-    const totIn = es.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
-    const totOut = es.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
+    const totIn = es.filter(e=>e._in).reduce((s,e)=>s+Number(e.amount),0);
+    const totOut = es.filter(e=>e._out).reduce((s,e)=>s+Number(e.amount),0);
     window.__ledRows = es;
     window.__ledLabel = isAllLed ? 'All entries'
       : sel==='T:B:' ? 'All bank accounts — combined ledger'
@@ -6487,10 +6496,10 @@ async function acctTab(t){
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       ${(sel==='T:S:' || sel.slice(0,2)==='S:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Only this person’s own money is shown — salary, advances, recoveries and payments made out in their name. Entries they merely keyed in for vendors, rent or other heads belong to those ledgers, not here.</p>` : ''}
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
-      ${(es||[]).map(e=>{const who=acWho(e)||'';const inA=e.direction==='IN'?inr(e.amount):'';const outA=e.direction==='OUT'?inr(e.amount):'';
+      ${(es||[]).map(e=>{const who=acWho(e)||'';const inA=e._in?inr(e.amount):'';const outA=e._out?inr(e.amount):'';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
           `<td>${who?esc(who):esc((e.narration||'—').slice(0,80))}${who&&e.narration&&e.narration.trim()!==who.trim()?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,80))+'</span>':''}${linkHtml(e)}</td>` +
-          `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}</td>` +
+          `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}${e.kind==='TRANSFER'&&sel.slice(0,2)==='B:'?`<br><span style="font-size:10.5px;color:#777">${e._in&&!e._out?'transfer received from '+esc(e.bank_name_label||''):e._out&&!e._in?'transfer sent to '+esc(e.counter_bank_label||''):''}</span>`:''}</td>` +
           `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` +
           `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
           `<td>${(e.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acApprove('${e.id}',false)">Approve</button> <button class="mini" onclick="acApprove('${e.id}',true)">Reject</button> `:'')+
@@ -6948,7 +6957,7 @@ function acLedCsv(){
     const who = acWho(e) || '';
     lines.push([esc2(e.entry_no), esc2(e.entry_date), esc2(e.kind), esc2(who),
       esc2((e.bank_name_label||'') + (e.kind==='TRANSFER' ? ' -> '+(e.counter_bank_label||'') : '')),
-      e.direction==='IN'?Number(e.amount):'', e.direction==='OUT'?Number(e.amount):'',
+      (e._in ?? e.direction==='IN')?Number(e.amount):'', (e._out ?? e.direction==='OUT')?Number(e.amount):'',
       esc2(e.mode||''), esc2(e.ref_no||''), esc2(e.narration||''), esc2(e.status)].join(','));
   });
   const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
@@ -6959,8 +6968,9 @@ function acLedCsv(){
 }
 function acLedPrint(){
   const rows = window.__ledRows || [];
-  const totIn = rows.filter(e=>e.direction==='IN').reduce((s,e)=>s+Number(e.amount),0);
-  const totOut = rows.filter(e=>e.direction==='OUT').reduce((s,e)=>s+Number(e.amount),0);
+  const isIn = e => (e._in ?? e.direction==='IN'), isOut = e => (e._out ?? e.direction==='OUT');
+  const totIn = rows.filter(isIn).reduce((s,e)=>s+Number(e.amount),0);
+  const totOut = rows.filter(isOut).reduce((s,e)=>s+Number(e.amount),0);
   const body = `
     <h1>AURUM SPIRITS INDIA LIMITED</h1>
     <h2>Finance ledger · ${esc(window.__ledLabel||'All entries')} · ${window.acLedFrom||'beginning'} to ${window.acLedTo||'today'}</h2>
@@ -6969,7 +6979,7 @@ function acLedPrint(){
       return `<tr><td>${esc(e.entry_no)}</td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>`+
         `<td>${esc(who)}${e.narration?'<br><span style="font-size:10px;color:#666">'+esc(e.narration)+'</span>':''}</td>`+
         `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}</td>`+
-        `<td class="amount">${e.direction==='IN'?inr(e.amount):''}</td><td class="amount">${e.direction==='OUT'?inr(e.amount):''}</td><td>${e.status}</td></tr>`;}).join('')}
+        `<td class="amount">${isIn(e)?inr(e.amount):''}</td><td class="amount">${isOut(e)?inr(e.amount):''}</td><td>${e.status}</td></tr>`;}).join('')}
     <tr class="tot"><td colspan="5">Total (${rows.length} entries)</td><td class="amount">${inr(totIn)}</td><td class="amount">${inr(totOut)}</td><td></td></tr>
     </tbody></table>
     <p style="font-size:11px;color:#666;margin-top:10px;">Net: ₹ ${inr(totIn-totOut)} · Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
