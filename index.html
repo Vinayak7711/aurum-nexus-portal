@@ -6696,20 +6696,28 @@ async function acctTab(t){
       if (ids.length){ const { data: pos } = await db.schema('mfg').from('purchase_orders').select('id,po_no').in('id', ids);
         (pos||[]).forEach(p=>{ window.__vpoNames[p.id] = p.po_no; }); } }
     const totB = vds.reduce((s,r)=>s+Number(r.billed),0), totP = vds.reduce((s,r)=>s+Number(r.paid),0), totO = totB-totP;
+    // payments actually due: material received × PO rate (incl. tax), after the PO's credit days from the receipt date, less paid
+    const dueBy = {}; let totDue = 0, totNYD = 0, nextDue = null;
+    try { const { data: dn } = await A.rpc('vendor_due_now'); (dn||[]).forEach(d=>{ dueBy[d.vendor_id] = d; totDue += Number(d.due_now||0); totNYD += Number(d.not_yet_due||0);
+      if (d.next_due_date && (!nextDue || d.next_due_date < nextDue.d)) nextDue = { d: d.next_due_date, v: Number(d.next_due_value||0) }; }); } catch(e){}
+    window.__vdDue = dueBy;
     B.innerHTML = `
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Billed by vendors (POs issued)</div><div style="font-size:20px;font-weight:700;">₹ ${inr(totB)}</div></div>
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Paid so far</div><div style="font-size:20px;font-weight:700;color:#1a7f37">₹ ${inr(totP)}</div></div>
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Outstanding</div><div style="font-size:20px;font-weight:700;color:${totO>0?'#b3261e':'#1a7f37'}">₹ ${inr(totO)}</div></div>
+        <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;border:2px solid #c9a227;" title="Value of material received (qty received × PO rate incl. tax) whose credit period — counted from the receipt date as per the PO payment terms — is over, less what has been paid"><div style="font-size:12px;color:#777">Due payments <span style="font-size:10.5px;">(as per material received)</span></div><div style="font-size:20px;font-weight:700;color:${totDue>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(totDue)}</div>
+          <div style="font-size:10.5px;color:#777">${totNYD>0.005?'+ ₹ '+inr(totNYD)+' received, within credit period':'nothing within credit period'}${nextDue?'<br>next: ₹ '+inr(nextDue.v)+' on '+nextDue.d:''}</div></div>
       </div>
       <p style="font-size:12px;color:#777;margin:0 0 8px;">The moment a PO is placed on a vendor, its bill amount (incl. tax) lands here as that party's due. Payments are entered from the <b>New Entry</b> tab (Bank ledger entry &amp; vendor payment, or Payment via MMC); an entry by Accounts goes for approval and the approving authority releases it with the UTR or cheque details. Only then is the payment recorded, the outstanding reduced and the bank ledger posted. This tab is for viewing only.</p>
       <h4 class="sec">Party-wise outstanding</h4>
-      <div class="table-scroll"><table><thead><tr><th>Vendor</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th class="amount"><b>Outstanding ₹</b></th><th></th></tr></thead><tbody>
-      ${vds.map(r=>`<tr><td><b>${esc(r.vendor)}</b> <span style="color:#999;font-size:11px;">(${esc(r.code)})</span></td>` +
+      <div class="table-scroll"><table><thead><tr><th>Vendor</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th class="amount"><b>Outstanding ₹</b></th><th class="amount">Due now ₹<br><span style="font-weight:400;font-size:10px;">as per material received</span></th><th></th></tr></thead><tbody>
+      ${vds.map(r=>{ const dd = dueBy[r.vendor_id] || {}; const dn = Number(dd.due_now||0); return `<tr><td><b>${esc(r.vendor)}</b> <span style="color:#999;font-size:11px;">(${esc(r.code)})</span></td>` +
         `<td class="amount">${inr(r.billed)}</td><td class="amount" style="color:#1a7f37">${inr(r.paid)}</td>` +
         `<td class="amount" style="font-weight:700;color:${Number(r.outstanding)>0?'#b3261e':'#1a7f37'}">${inr(r.outstanding)}</td>` +
-        `<td style="white-space:nowrap"><button class="mini" title="Open this vendor’s ledger (bills, payments, running balance)" onclick="window.acLedType='V:';window.acLedSel='V:${r.vendor_id}';acctTab('ledger')">📖 Ledger</button></td></tr>`).join('')
-        || '<tr><td colspan="5" style="color:#777">No vendor bills yet — dues appear here as soon as a PO is placed.</td></tr>'}
+        `<td class="amount" style="font-weight:700;color:${dn>0.005?'#b3261e':'#777'}">${dn>0.005?inr(dn):'—'}${Number(dd.not_yet_due||0)>0.005?'<br><span style="font-weight:400;font-size:10.5px;color:#777">₹ '+inr(dd.not_yet_due)+' not yet due'+(dd.next_due_date?' · next '+dd.next_due_date:'')+'</span>':''}${!dd.vendor_id?'<br><span style="font-weight:400;font-size:10.5px;color:#999">nothing received</span>':''}</td>` +
+        `<td style="white-space:nowrap"><button class="mini" title="Open this vendor’s ledger (bills, payments, running balance)" onclick="window.acLedType='V:';window.acLedSel='V:${r.vendor_id}';acctTab('ledger')">📖 Ledger</button></td></tr>`; }).join('')
+        || '<tr><td colspan="6" style="color:#777">No vendor bills yet — dues appear here as soon as a PO is placed.</td></tr>'}
       </tbody></table></div>
       <div id="vd-form"></div>
       ${vreqs.filter(r=>r.status==='PENDING_APPROVAL').length ? `
