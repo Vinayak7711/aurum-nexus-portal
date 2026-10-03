@@ -6410,6 +6410,26 @@ async function acctTab(t){
       const { data: vled, error: vlerr } = await A.rpc('vendor_ledger', { p_vendor: vidL, p_from: window.acLedFrom || null, p_to: window.acLedTo || null });
       if (vlerr){ B.innerHTML = `<div class="msg err">Load failed: ${esc(vlerr.message)}</div>`; return; }
       const docs = vled || [];
+      // ids behind each line, for edit / delete
+      const VL = { pay:{}, po:{}, tds:{} };
+      try { const [{ data: vps }, { data: pos }, { data: tds }] = await Promise.all([
+          A.from('vendor_payments').select('id, pay_no, entry_id, amount, pay_date, mode, ref_no, remarks').eq('vendor_id', vidL),
+          db.schema('mfg').from('purchase_orders').select('id, po_no, status').eq('vendor_id', vidL),
+          A.from('tds_deductions').select('*').eq('vendor_id', vidL) ]);
+        (vps||[]).forEach(x=>VL.pay[x.pay_no]=x); (pos||[]).forEach(x=>VL.po[x.po_no]=x); (tds||[]).forEach(x=>VL.tds[x.tds_no]=x); } catch(e){}
+      window.__vlIds = VL; window.__vlVendor = vidL;
+      const vlAct = r => {
+        const b = [];
+        if (r.kind==='BILL'){ const p = VL.po[r.doc_no]; if (!p) return '';
+          b.push(`<button class="mini" onclick="poView('${p.id}')" title="See the purchase order">👁</button>`);
+          if (isDir()) b.push(`<button class="mini" onclick="vlBillEdit('${p.id}')">✏️ Edit</button>`, `<button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="vlBillDel('${p.id}','${esc(r.doc_no)}')">Delete</button>`); }
+        else if (r.kind==='TDS'){ const t = VL.tds[r.doc_no]; if (!t) return '';
+          if (isDir()) b.push(`<button class="mini" onclick="vlTdsEdit('${t.id}')">✏️ Edit</button>`, `<button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="vlTdsDel('${t.id}','${esc(r.doc_no)}')">Delete</button>`); }
+        else { const p = VL.pay[r.doc_no]; if (!p) return '';
+          if (p.entry_id ? canFinApprove() : isDir()) b.push(`<button class="mini" onclick="vlPayEdit('${p.id}')">✏️ Edit</button>`);
+          if (isDir()) b.push(`<button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="vlPayDel('${p.id}','${esc(r.doc_no)}')">Delete</button>`); }
+        return '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + b.join('') + '</div>';
+      };
       const totBil = docs.reduce((s,r)=>s+Number(r.billed||0),0);
       const totPaid = docs.reduce((s,r)=>s+Number(r.paid||0),0);
       const outst = totBil - totPaid;
@@ -6428,14 +6448,15 @@ async function acctTab(t){
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${docs.length} record${docs.length===1?'':'s'}</h4>
-      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Doc no.</th><th>Type</th><th>Details</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th></tr></thead><tbody>
+      <div id="ac-entry-form"></div>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Doc no.</th><th>Type</th><th>Details</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th></th></tr></thead><tbody>
       ${docs.map(r=>`<tr><td>${r.doc_date}</td><td><b>${esc(r.doc_no)}</b></td>` +
-        `<td>${r.kind==='BILL'?'🧾 Purchase bill':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
+        `<td>${r.kind==='BILL'?'🧾 Purchase bill':r.kind==='TDS'?'🧾 TDS deducted':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
         `<td class="amount" style="color:#b3261e">${Number(r.billed)?inr(r.billed):''}</td>` +
-        `<td class="amount" style="color:#1a7f37">${Number(r.paid)?inr(r.paid):''}</td></tr>`).join('')
-        || '<tr><td colspan="6" style="color:#777">No purchase bills or payments for this vendor in this date range.</td></tr>'}
-      ${docs.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${inr(totBil)}</td><td class="amount">${inr(totPaid)}</td></tr>
-      <tr style="font-weight:700;"><td colspan="4">Outstanding (billed − paid)</td><td colspan="2" class="amount" style="color:${outst>0?'#b3261e':'#1a7f37'}">₹ ${inr(outst)}</td></tr>`:''}
+        `<td class="amount" style="color:#1a7f37">${Number(r.paid)?inr(r.paid):''}</td><td style="white-space:nowrap">${vlAct(r)}</td></tr>`).join('')
+        || '<tr><td colspan="7" style="color:#777">No purchase bills or payments for this vendor in this date range.</td></tr>'}
+      ${docs.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${inr(totBil)}</td><td class="amount">${inr(totPaid)}</td><td></td></tr>
+      <tr style="font-weight:700;"><td colspan="4">Outstanding (billed − paid)</td><td colspan="2" class="amount" style="color:${outst>0?'#b3261e':'#1a7f37'}">₹ ${inr(outst)}</td><td></td></tr>`:''}
       </tbody></table></div>`;
       return;
     }
@@ -7978,6 +7999,111 @@ async function acEditSave(id){
     p_mode: $('ee-mode').value, p_ref: $('ee-ref').value, p_payee: $('ee-payee').value, p_narration: $('ee-narr').value,
     p_staff: $('ee-staff').value || null, p_party: null, p_reason: reason });
   if (error){ say('ee-msg','Could not save: '+error.message,false); return; }
+  acctTab('ledger');
+}
+/* ---- Vendor ledger: edit / delete the lines (purchase bills, payments, TDS) ---- */
+async function vlPayEdit(id){
+  const p = Object.values((window.__vlIds||{}).pay||{}).find(x=>x.id===id); if (!p) return;
+  if (p.entry_id){ await acEdit(p.entry_id); return; }   // bank payment: the ledger-entry editor corrects the entry and its vendor payment together
+  if (!isDir()){ alert('Only a Director can edit this payment.'); return; }
+  apprModal('Edit payment ' + p.pay_no, `
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">This payment was made by MMC (no bank entry of ours) — the MMC ledger line follows the change.</p>
+    <div class="row2c"><div><label>Date</label><input type="date" id="vlp-date" value="${p.pay_date||''}"></div><div><label>Amount ₹</label><input type="number" id="vlp-amt" step="any" value="${Number(p.amount)}"></div></div>
+    <div class="row2c"><div><label>Reference (UTR / cheque)</label><input type="text" id="vlp-ref" value="${esc(p.ref_no||'')}"></div><div><label>Remarks</label><input type="text" id="vlp-rem" value="${esc(p.remarks||'')}"></div></div>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="vlPaySave('${p.id}')">Save</button><div id="vlp-msg" style="font-size:12px;margin-top:6px;"></div>`);
+}
+async function vlPaySave(id){
+  const amt = Number($('vlp-amt').value);
+  if (!(amt > 0)){ say('vlp-msg','Amount must be above zero.',false); return; }
+  const A2 = db.schema('acct');
+  const row = { pay_date: $('vlp-date').value || null, amount: amt, ref_no: $('vlp-ref').value.trim() || null, remarks: $('vlp-rem').value.trim() || null };
+  const { error } = await A2.from('vendor_payments').update(row).eq('id', id);
+  if (error){ say('vlp-msg','Could not save: ' + error.message, false); return; }
+  await A2.from('mmc_txns').update({ amount: amt, txn_date: row.pay_date, ref_no: row.ref_no }).eq('payment_id', id);
+  apprModalClose(); acctTab('ledger');
+}
+async function vlPayDel(id, no){
+  if (!isDir()){ alert('Only a Director can delete.'); return; }
+  const p = Object.values((window.__vlIds||{}).pay||{}).find(x=>x.id===id); if (!p) return;
+  if (!confirm('Delete payment ' + no + ' (₹ ' + inr(p.amount) + ')?' + (p.entry_id ? '\n\nIts bank ledger entry is deleted too, so the bank balance goes back up.' : '') + '\nAny TDS recorded with it is removed as well. This cannot be undone.')) return;
+  const A2 = db.schema('acct');
+  await A2.from('vendor_pay_requests').update({ payment_id: null }).eq('payment_id', id);
+  const { error } = await db.schema('app').rpc('dir_delete', { p_schema: 'acct', p_table: 'vendor_payments', p_id: id });
+  if (error){ alert('Could not delete: ' + error.message); return; }
+  if (p.entry_id){ const { error: e2 } = await A2.rpc('delete_entry', { p_entry: p.entry_id }); if (e2) alert('The payment is deleted, but its bank entry could not be: ' + e2.message); }
+  acctTab('ledger');
+}
+async function vlTdsEdit(id){
+  if (!isDir()){ alert('Only a Director can edit.'); return; }
+  const t = Object.values((window.__vlIds||{}).tds||{}).find(x=>x.id===id); if (!t) return;
+  apprModal('Edit TDS ' + (t.tds_no||''), `
+    <div class="row2c"><div><label>Date</label><input type="date" id="vlt-date" value="${t.deduct_date}"></div><div><label>Section</label><input type="text" id="vlt-sec" value="${esc(t.section||'')}" placeholder="e.g. 194C"></div></div>
+    <div class="row2c"><div><label>Bill amount ₹</label><input type="number" id="vlt-bill" step="any" value="${Number(t.bill_amount)}"></div><div><label>TDS ₹</label><input type="number" id="vlt-amt" step="any" value="${Number(t.tds_amount)}"></div></div>
+    <p style="font-size:11.5px;color:#777;margin:6px 0 0;">Only the TDS record changes. If the bank amount paid was also wrong, edit that payment line too.</p>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="vlTdsSave('${t.id}')">Save</button><div id="vlt-msg" style="font-size:12px;margin-top:6px;"></div>`);
+}
+async function vlTdsSave(id){
+  const amt = Number($('vlt-amt').value), bill = Number($('vlt-bill').value);
+  if (!(amt > 0) || !(bill > amt)){ say('vlt-msg','TDS must be above zero and less than the bill amount.',false); return; }
+  const { error } = await db.schema('acct').from('tds_deductions').update({ deduct_date: $('vlt-date').value || null, section: $('vlt-sec').value.trim() || null, bill_amount: bill, tds_amount: amt, tds_rate: Math.round(amt * 10000 / bill) / 100 }).eq('id', id);
+  if (error){ say('vlt-msg','Could not save: ' + error.message, false); return; }
+  apprModalClose(); acctTab('ledger');
+}
+async function vlTdsDel(id, no){
+  if (!isDir()){ alert('Only a Director can delete.'); return; }
+  if (!confirm('Delete TDS ' + no + '? The vendor’s outstanding goes back up by that amount. This cannot be undone.')) return;
+  const { error } = await db.schema('acct').from('tds_deductions').delete().eq('id', id);
+  if (error){ alert('Could not delete: ' + error.message); return; }
+  acctTab('ledger');
+}
+async function vlBillEdit(poId){
+  if (!isDir()){ alert('Only a Director can edit a purchase bill.'); return; }
+  const G = db.schema('mfg');
+  const [{ data: po }, { data: lines }] = await Promise.all([ G.from('purchase_orders').select('id, po_no, status, order_date').eq('id', poId).single(), G.from('po_lines').select('id, qty, rm_item_id, item:rm_item_id(code,name,unit)').eq('po_id', poId) ]);
+  const { data: vals } = await G.from('po_values').select('*').in('line_id', (lines||[]).map(l=>l.id));
+  const vBy = {}; (vals||[]).forEach(v=>vBy[v.line_id]=v); window.__vlBill = { po, lines: lines||[], vBy };
+  apprModal('Edit purchase bill ' + (po?.po_no||''), `
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">Correct the quantity, rate or tax of each line — the bill amount (incl. tax) and the vendor's outstanding follow.</p>
+    <div class="table-scroll"><table><thead><tr><th>Item</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Tax %</th><th class="amount">Total ₹</th></tr></thead><tbody>
+    ${(lines||[]).map(l=>{ const v = vBy[l.id] || {}; return `<tr><td style="font-size:12px;"><b>${esc(l.item?.code||'')}</b> ${esc(l.item?.name||'')}</td>
+      <td><input type="number" id="vlb-q-${l.id}" step="any" value="${Number(l.qty)}" style="width:90px;padding:5px;" oninput="vlBillCalc()"></td>
+      <td><input type="number" id="vlb-r-${l.id}" step="any" value="${Number(v.rate_per_unit||0)}" style="width:90px;padding:5px;" oninput="vlBillCalc()"></td>
+      <td><input type="number" id="vlb-t-${l.id}" step="any" value="${Number(v.tax_rate||0)}" style="width:60px;padding:5px;" oninput="vlBillCalc()" ${v.margin_per_unit?'title="Margin scheme — tax on the margin only"':''}></td>
+      <td class="amount" id="vlb-tot-${l.id}"></td></tr>`; }).join('')}
+    <tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Bill total (incl. tax)</td><td class="amount" id="vlb-grand"></td></tr></tbody></table></div>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="vlBillSave()">Save</button><div id="vlb-msg" style="font-size:12px;margin-top:6px;"></div>`);
+  const box = document.querySelector('#appr-modal > div'); if (box) box.style.maxWidth = '760px';
+  vlBillCalc();
+}
+function vlBillLine(l){
+  const v = (window.__vlBill.vBy||{})[l.id] || {};
+  const q = Number($('vlb-q-'+l.id).value)||0, r = Number($('vlb-r-'+l.id).value)||0, t = Number($('vlb-t-'+l.id).value)||0;
+  const amount = Math.round(q * r * 100) / 100, taxable = v.margin_per_unit ? Number(v.margin_per_unit) * q : amount;
+  return { q, r, t, amount, tax: Math.round(taxable * t) / 100 };
+}
+function vlBillCalc(){
+  let g = 0; (window.__vlBill.lines||[]).forEach(l=>{ const x = vlBillLine(l); g += x.amount + x.tax; $('vlb-tot-'+l.id).textContent = inr(x.amount + x.tax); });
+  $('vlb-grand').textContent = '₹ ' + inr(g);
+}
+async function vlBillSave(){
+  const B = window.__vlBill, G = db.schema('mfg');
+  for (const l of B.lines){
+    const x = vlBillLine(l), v = B.vBy[l.id] || {};
+    if (!(x.q > 0) || x.r < 0 || x.t < 0){ say('vlb-msg','Quantity must be above zero; rate and tax cannot be negative.',false); return; }
+    const { error: e1 } = await G.from('po_lines').update({ qty: x.q }).eq('id', l.id);
+    if (e1){ say('vlb-msg','Could not save: '+e1.message,false); return; }
+    const upd = { rate_per_unit: x.r, amount: x.amount, tax_rate: x.t, tax_amount: x.tax, tax_type: x.t > 0 ? (v.tax_type && v.tax_type !== 'NONE' ? v.tax_type : 'GST') : (v.tax_type || 'NONE') };
+    if (v.igst_rate) upd.igst_rate = x.t; else if (v.cgst_rate || v.sgst_rate){ upd.cgst_rate = x.t/2; upd.sgst_rate = x.t/2; }
+    const { error: e2 } = v.line_id ? await G.from('po_values').update(upd).eq('line_id', l.id) : await G.from('po_values').insert(Object.assign({ line_id: l.id }, upd));
+    if (e2){ say('vlb-msg','Could not save: '+e2.message,false); return; }
+  }
+  apprModalClose(); acctTab('ledger');
+}
+async function vlBillDel(poId, no){
+  if (!isDir()){ alert('Only a Director can delete a purchase bill.'); return; }
+  if (!confirm('Delete purchase bill ' + no + '?\n\nThe purchase order is CANCELLED — it leaves the vendor\'s bills and outstanding (the PO record stays, marked cancelled).')) return;
+  const { error } = await db.schema('mfg').rpc('po_set_status', { p_po: poId, p_status: 'CANCELLED' });
+  if (error){ alert('Could not cancel: ' + error.message); return; }
   acctTab('ledger');
 }
 async function acDelEntry(id){
