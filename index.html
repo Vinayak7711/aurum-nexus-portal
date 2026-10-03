@@ -706,7 +706,7 @@ const MODULES = [
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
   {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
-  {key:'petty',   ico:'💵', name:'Petty Cash',       desc:'Cash box — day-to-day cash expenses & approvals', live:true, pettyOnly:true, open:()=>openPetty()},
+  {key:'petty',   ico:'💵', name:'Petty Cash',       desc:'Cash box — day-to-day cash expenses & approvals', live:true, pettyOnly:true, noCard:true, open:()=>openPetty()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'calendar',ico:'📅', name:'Calendar',         desc:'Events + task, renewal & PO dates',      live:true,  open:()=>openCalendar()},
   {key:'meetings',ico:'📝', name:'Meetings',         desc:'Agendas, minutes, participants, views',  live:true,  open:()=>openMeetings()},
@@ -997,8 +997,9 @@ function drawModules(){
   for (const m of MODULES){
     const forced = m.key !== 'control' && secAnyExplicit(m.key);   // the Director ticked a section of it for this person
     if (m.dirOnly && !isDir() && !forced && !(m.key !== 'control' && (me?.permissions_json?.[m.key]?.view || me?.permissions_json?.[m.key]?.edit))) continue;
+    if (m.noCard) continue;   // permission row only — Petty Cash opens from Accounting
     if (m.pettyOnly && !canPetty('view')) continue;
-    if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view) && !forced) continue;
+    if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view || (m.key === 'acct' && canPetty('view'))) && !forced) continue;
     if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit) && !forced) continue;
     if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS()) && !forced) continue;
     if (m.fieldOnly && !(isDir() || window.__hasReports) && !forced) continue;
@@ -5969,6 +5970,7 @@ async function openPetty(){
   show('acct'); await acctTab('petty');
 }
 async function openAcct(){
+  if (!canFin() && canPetty('view')) return openPetty();   // petty-cash-only users land straight on the cash box
   document.querySelectorAll('#view-acct .subtabs .chip').forEach(c => { c.style.display = ''; });
   const [b, u] = await Promise.all([
     db.schema('acct').from('bank_accounts').select('*').order('name'),
