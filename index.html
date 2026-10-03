@@ -100,6 +100,7 @@
   .sheet{background:#fff; width:100%; max-width:520px; border-radius:18px 18px 0 0;
         padding:22px; max-height:88vh; overflow-y:auto;}
   @media(min-width:600px){ .sheet{border-radius:18px;} }
+  #edit-overlay .sheet{max-width:780px; max-height:92vh;}
   .sheet h3{font-size:17px; margin-bottom:2px;}
   .sheet p.email{font-size:12px; color:var(--ink-soft); margin-bottom:12px;}
   .permgrid{border:1px solid var(--line); border-radius:10px; margin-top:6px; overflow:hidden;}
@@ -705,6 +706,7 @@ const MODULES = [
   {key:'purchase',ico:'🧺', name:'Purchases & RM Store', desc:'Vendor POs, material requests, store stock', live:true, open:()=>openPurchase()},
   {key:'mail',    ico:'📬', name:'Department Mail',  desc:'Read, reply & send from your dept inbox',  live:true, open:()=>openMail()},
   {key:'acct',    ico:'🏦', name:'Accounting',       desc:'Banks, ledger, salary, advances, assets', live:true, finOnly:true, open:()=>openAcct()},
+  {key:'petty',   ico:'💵', name:'Petty Cash',       desc:'Cash box — day-to-day cash expenses & approvals', live:true, pettyOnly:true, open:()=>openPetty()},
   {key:'tasks',   ico:'✅', name:'Tasks',            desc:'Delegation & follow-up, duties, lapses', live:true,  open:()=>openTasks()},
   {key:'calendar',ico:'📅', name:'Calendar',         desc:'Events + task, renewal & PO dates',      live:true,  open:()=>openCalendar()},
   {key:'meetings',ico:'📝', name:'Meetings',         desc:'Agendas, minutes, participants, views',  live:true,  open:()=>openMeetings()},
@@ -973,7 +975,16 @@ db.auth.onAuthStateChange((event) => { if (event === 'SIGNED_IN' && !me) init();
 /* ---------------- home ---------------- */
 // A module row in the Control Panel grid saved with every box unticked is stored as
 // {view:false} and hidden for that person. Rows never saved stay visible, as before.
-const PERM_GRID_SKIP = ['control','rates','reports','mail','calendar','meetings','notif'];
+const PERM_GRID_SKIP = ['control'];
+const PERM_OPEN_DEFAULT = ['reports','mail','calendar','meetings','notif'];   // open to everyone until the Director decides otherwise
+function canPetty(a){
+  if (isDir()) return true;
+  const pj = (me && me.permissions_json) || {}, f = pj.finance || {}, p = pj.petty || {};
+  if (a === 'view') return !!(f.view || f.edit || f.approve || p.view || p.add || p.edit || p.admin);
+  if (a === 'add') return !!(f.edit || p.add || p.edit);
+  if (a === 'admin') return !!(f.approve || p.admin);
+  return !!p[a];
+}
 function modTicked(key){
   if (isDir()) return true;
   if (PERM_GRID_SKIP.includes(key) || key === 'acct') return true;   // Accounting follows the Finance boxes
@@ -985,7 +996,8 @@ function drawModules(){
   const grid = $('module-grid'); grid.innerHTML = '';
   for (const m of MODULES){
     const forced = m.key !== 'control' && secAnyExplicit(m.key);   // the Director ticked a section of it for this person
-    if (m.dirOnly && !isDir() && !forced) continue;
+    if (m.dirOnly && !isDir() && !forced && !(m.key !== 'control' && (me?.permissions_json?.[m.key]?.view || me?.permissions_json?.[m.key]?.edit))) continue;
+    if (m.pettyOnly && !canPetty('view')) continue;
     if (m.finOnly && !(isDir() || me?.permissions_json?.finance?.view) && !forced) continue;
     if (m.mfgOnly && !(isDir() || me?.permissions_json?.mfg?.view || me?.permissions_json?.mfg?.add || me?.permissions_json?.mfg?.edit) && !forced) continue;
     if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS()) && !forced) continue;
@@ -1317,15 +1329,18 @@ function openEdit(u){
   const pj0 = u.permissions_json || {};
   g.innerHTML = '<div class="permrow"><div>Module</div><div>view</div><div>add</div><div>edit</div><div>admin / approve</div></div>';
   for (const m of MODULES){
-    if (PERM_GRID_SKIP.includes(m.key)) continue;  // Control Panel / Rates / Reports / Mail / Calendar / Meetings / Notifications follow roles or are open to all
+    if (m.key === 'control') continue;  // Control Panel stays Director-only
     // Accounting is stored under 'finance' (view / add / edit / approve) — the key every accounting check reads.
     // Purchases & RM Store is 'purchase' (view / add / edit / approve). Other modules: view / add / edit / admin.
     const key = m.key === 'acct' ? 'finance' : m.key;
-    const p = pj0[key] || (m.key === 'comp' ? (pj0.excise || {}) : m.key === 'acct' ? (pj0.acct || {}) : {});
+    let p = pj0[key] || (m.key === 'comp' ? (pj0.excise || {}) : m.key === 'acct' ? (pj0.acct || {}) : {});
+    if (!pj0[key] && PERM_OPEN_DEFAULT.includes(m.key)) p = { view: true };   // these were open to everyone — start ticked
+    const hintP = m.key === 'petty' ? ' <span style="font-size:10px;color:#777">(add / edit = post cash expenses · last box = approve)</span>'
+                : m.key === 'rates' ? ' <span style="font-size:10px;color:#777">(Director-only unless ticked)</span>' : '';
     const last = (key === 'finance' || key === 'purchase') ? 'approve' : 'admin';
     const lastOn = p[last] || (key === 'finance' && !pj0.finance && p.admin);
     const hint = key === 'finance' ? ' <span style="font-size:10px;color:#777">(last box = approve entries, payments &amp; POs)</span>'
-               : key === 'purchase' ? ' <span style="font-size:10px;color:#777">(add = raise requests / POs · edit = receipts, vendor, status · last box = approve POs)</span>' : '';
+               : key === 'purchase' ? ' <span style="font-size:10px;color:#777">(add = raise requests / POs · edit = receipts, vendor, status · last box = approve POs)</span>' : hintP;
     g.insertAdjacentHTML('beforeend',
       `<div class="permrow"><div>${m.ico} ${m.name}${hint}</div>` +
       ['view','add','edit'].map(a=>`<div><input type="checkbox" data-mod="${key}" data-act="${a}" ${p[a]?'checked':''}></div>`).join('') +
@@ -1364,7 +1379,7 @@ $('btn-save-user').onclick = async () => {
   // a module left with nothing ticked is switched OFF for this person (view:false) — so
   // unticking everything really hides it, instead of silently meaning "no opinion"
   for (const m of MODULES){
-    if (PERM_GRID_SKIP.includes(m.key)) continue;
+    if (m.key === 'control') continue;
     const key = m.key === 'acct' ? 'finance' : m.key;
     if (!perms[key]) perms[key] = { view: false };
   }
@@ -5942,7 +5957,19 @@ let acBanks = [], acStaff = [], acAssets = [];
 const AC_ST = { PENDING_APPROVAL:'#b3261e', APPROVED:'#1a7f37', REJECTED:'#777', DRAFT:'#b8860b', PAID:'#1a7f37', CANCELLED:'#777', CLOSED:'#777' };
 const AC_STL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 function acLbl(s){ return AC_STL[s] || s; }
+async function openPetty(){
+  const [b, u] = await Promise.all([
+    db.schema('acct').from('bank_accounts').select('*').order('name'),
+    db.schema('adm').from('people').select('id, full_name, designation, phone, user_id').eq('is_active', true).is('deleted_at', null).order('full_name')
+  ]);
+  acBanks = b.data || []; acStaff = u.data || [];
+  const fin = canFin();
+  document.querySelectorAll('#view-acct .subtabs .chip').forEach(c => { c.style.display = fin ? '' : 'none'; });
+  if ($('ac-appr')) $('ac-appr').style.display = canFinApprove() ? '' : 'none';
+  show('acct'); await acctTab('petty');
+}
 async function openAcct(){
+  document.querySelectorAll('#view-acct .subtabs .chip').forEach(c => { c.style.display = ''; });
   const [b, u] = await Promise.all([
     db.schema('acct').from('bank_accounts').select('*').order('name'),
     db.schema('adm').from('people').select('id, full_name, designation, phone, user_id').eq('is_active', true).is('deleted_at', null).order('full_name')
@@ -6568,7 +6595,7 @@ async function acctTab(t){
           <div><label>Note</label><input type="text" id="pt-note" placeholder="e.g. weekly cash float"></div></div>
         <button class="btn ghost sm" style="margin-top:10px;" onclick="acPettyTopup()">＋ Credit petty cash</button>
         <div id="pt-msg"></div></div>` : ''}
-      ${canFinEdit() ? `
+      ${canPetty('add') ? `
       <div class="card" style="margin-bottom:14px;max-width:680px;"><h2 style="font-size:15px;">Post a cash expense</h2>
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">Day-to-day office spends paid in cash. Posted by Accounts; needs approval by the Accounts head or a Director.</p>
         <div class="row2c"><div><label>Date</label><input type="date" id="pc-date" value="${calFmt(new Date())}"></div>
@@ -6586,7 +6613,7 @@ async function acctTab(t){
           `<td class="amount" style="font-weight:600;color:#b3261e">${isTop(r)?'':inr(r.amount)}</td>` +
           `<td style="font-size:12px;">${esc(acStaffName(r.created_by))}</td>` +
           `<td><span style="color:${AC_ST[r.status]||'#333'};font-weight:600;font-size:12px">${acLbl(r.status)}</span>${r.approved_by?'<br><span style="font-size:10.5px;color:#777">by '+esc(acStaffName(r.approved_by))+'</span>':''}</td>` +
-          `<td style="white-space:nowrap"><button class="mini" onclick="acPettyVoucher('${r.id}')">🖨 Voucher</button> ${r.status==='PENDING_APPROVAL'&&canFinApprove()
+          `<td style="white-space:nowrap"><button class="mini" onclick="acPettyVoucher('${r.id}')">🖨 Voucher</button> ${r.status==='PENDING_APPROVAL'&&canPetty('admin')
               ? `<button class="mini" onclick="acPettyDecide('${r.id}',true)">Approve</button> <button class="mini" onclick="acPettyDecide('${r.id}',false)" style="color:#c0392b;">Reject</button> `
               : ''}${dirDelBtn('acct','petty_cash', r.id, r.pc_no, "acctTab('petty')")}</td></tr>`;
         const head = '<tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / note</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Posted by</th><th>Status</th><th></th></tr>';
