@@ -5966,7 +5966,7 @@ async function openPetty(){
   acBanks = b.data || []; acStaff = u.data || [];
   const fin = canFin();
   document.querySelectorAll('#view-acct .subtabs .chip').forEach(c => { c.style.display = fin ? '' : 'none'; });
-  if ($('ac-appr')) $('ac-appr').style.display = canFinApprove() ? '' : 'none';
+  if ($('ac-appr')) $('ac-appr').style.display = (canFinApprove() || canPetty('admin')) ? '' : 'none';
   show('acct'); await acctTab('petty');
 }
 async function openAcct(){
@@ -5977,7 +5977,7 @@ async function openAcct(){
     db.schema('adm').from('people').select('id, full_name, designation, phone, user_id').eq('is_active', true).is('deleted_at', null).order('full_name')
   ]);
   acBanks = b.data || []; acStaff = u.data || [];
-  $('ac-appr').style.display = canFinApprove() ? '' : 'none';
+  $('ac-appr').style.display = (canFinApprove() || canPetty('admin')) ? '' : 'none';
   show('acct'); await acctTab('banks');
 }
 // Who the entry is with: the payee / party first; the staff member only for salary, advance and recovery entries
@@ -5999,7 +5999,8 @@ async function acctTab(t){
   }
 
   if (t === 'appr'){
-    if (!canFinApprove()){ B.innerHTML = '<div class="msg err">Pending approvals are visible only to the Director and the Accounts head (finance-approve permission).</div>'; return; }
+    const finAppr = canFinApprove(), pettyAppr = canPetty('admin');
+    if (!finAppr && !pettyAppr){ B.innerHTML = '<div class="msg err">Pending approvals are visible only to the Director, the Accounts head (finance-approve permission) and petty cash approvers.</div>'; return; }
     const [entR, pcR, slR, advR, poR, rqR, mkR, vprR] = await Promise.all([
       A.from('v_entries').select('*').eq('status','PENDING_APPROVAL').order('entry_date',{ascending:false}).limit(300),
       A.from('petty_cash').select('*').in('status',['PENDING','PENDING_APPROVAL']).order('expense_date',{ascending:false}).limit(300),
@@ -6010,8 +6011,10 @@ async function acctTab(t){
       db.schema('sales').from('v_mkt_requests').select('*').eq('status','PENDING_APPROVAL').order('created_at',{ascending:false}).limit(300),
       A.from('vendor_pay_requests').select('*').eq('status','PENDING_APPROVAL').order('requested_at',{ascending:false}).limit(300)
     ]);
-    const ents = entR.data||[], pcs = pcR.data||[], sls = slR.data||[], advs = advR.data||[], pos = poR.data||[], rqs = rqR.data||[], mks = mkR.data||[];
-    const vprs = (arguments.length, (typeof vprR !== 'undefined' && vprR.data) ? vprR.data : []);
+    // each approver sees only what they may decide: petty-cash approvers get the petty cash queue only
+    const ents = finAppr ? entR.data||[] : [], pcs = pettyAppr ? pcR.data||[] : [], sls = finAppr ? slR.data||[] : [], advs = finAppr ? advR.data||[] : [],
+          pos = finAppr ? poR.data||[] : [], rqs = finAppr ? rqR.data||[] : [], mks = finAppr ? mkR.data||[] : [];
+    const vprs = finAppr ? ((typeof vprR !== 'undefined' && vprR.data) ? vprR.data : []) : [];
     // PO values (incl tax) + vendor names for material requests
     let poAmt = {};
     if (pos.length && canFin()){
