@@ -5342,7 +5342,17 @@ async function purchaseTab(t){
     const uName = uid => { const u = (allUsers||[]).find(x=>x.id===uid); return u ? (u.full_name||u.email||'—') : '—'; };
     const AP = { YES:['Yes — as per PO','#1a7f37'], PARTIAL:['Partly','#b8860b'], NO:['No — deviation','#b3261e'] };
     const incoming = await incomingRmHtml("purchaseTab('grn')");
-    B.innerHTML = incoming + `<div id="po-recv"></div><div id="po-msg"></div>
+    // Receipts whose QC record was deleted earlier (their stock is still counted) — Director can remove them properly
+    let orphHtml = '';
+    if (isDir()){ try { const { data: orph } = await G.rpc('orphan_receipts'); window.__grnOrph = {};
+      if ((orph||[]).length){ (orph||[]).forEach((o,ix)=>{ window.__grnOrph['o'+ix] = o.ids; });
+        orphHtml = `<h4 class="sec" style="color:#b3261e;">⚠ Receipts still in stock without a QC record</h4>
+        <p style="font-size:12px;color:#555;">Their inspection was deleted earlier, but the stock was left in. Delete them here to take the stock out and send the PO back to Purchase orders.</p>
+        <div class="table-scroll"><table><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>Material × qty</th><th></th></tr></thead><tbody>
+        ${(orph||[]).map((o,ix)=>`<tr><td>${o.received_on||''}</td><td><b>${esc(o.po_no||'')}</b></td><td>${esc(o.vendor||'—')}</td><td>${esc(o.challan_no||'—')}${o.invoice_no?'<br><span style="font-size:11px;color:#777">Inv: '+esc(o.invoice_no)+'</span>':''}</td><td style="font-size:12px;">${esc(o.items||'')}</td>` +
+          `<td><button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="grnDelAsk('','o${ix}','${esc(o.po_no||'')}')">🗑 Delete receipt</button></td></tr>`).join('')}
+        </tbody></table></div>`; } } catch(e){} }
+    B.innerHTML = incoming + `<div id="po-recv"></div><div id="po-msg"></div>${orphHtml}
       <h4 class="sec">Receipts recorded &amp; quality inspections</h4>
       <p style="font-size:12px;color:#555;">Every receipt recorded against a PO, with the receiver's inspection: whether the material and quantity match the PO, the inspection report, and quality remarks. Recorded from a PO's “Receive…” action.</p>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>As per PO</th><th>Qty OK</th><th>Inspection report</th><th>Quality remarks</th><th>Received by</th><th></th></tr></thead><tbody>
@@ -5355,7 +5365,7 @@ async function purchaseTab(t){
           `<td style="max-width:260px;white-space:pre-wrap">${esc(r.inspection_report||'—')}</td>`+
           `<td style="max-width:200px;white-space:pre-wrap">${esc(r.quality_remarks||'—')}</td>`+
           `<td style="white-space:nowrap">${esc(uName(r.received_by))}</td>`+
-          `<td>${dirDelBtn('mfg','rm_inspections', r.id, 'inspection', "purchaseTab('grn')")}</td></tr>`;}).join('')
+          `<td>${isDir()?`<button class="mini" title="Delete this receipt (Director) — stock comes out and the PO goes back to open" style="color:#b3261e;border-color:#b3261e;" onclick="grnDelAsk('${r.id}','','${esc(po.po_no||'')}')">🗑</button>`:''}</td></tr>`;}).join('')
         || '<tr><td colspan="10" style="color:#777">No receipts inspected yet — record one from a PO’s “Receive…” button.</td></tr>'}
       </tbody></table></div>`;
     return;
@@ -5871,6 +5881,29 @@ async function poReceiveForm(id, poNo, afterJs){
     <button class="btn gold" style="margin-top:10px;" onclick="poReceiveSave('${id}')">Record receipt &amp; inspection</button>
     <div id="rcv-msg"></div>`;
   $('po-recv').scrollIntoView({behavior:'smooth'});
+}
+// Delete a receipt + its QC record: the stock comes out again and the PO goes back to open
+function grnDelAsk(inspId, orphKey, poNo){
+  if (!isDir()){ alert('Only a Director can delete a receipt.'); return; }
+  apprModal('🗑 Delete receipt — ' + poNo, `
+    <p style="font-size:13px;margin:0 0 8px;">This removes the receipt and its quality-inspection record for <b>${esc(poNo)}</b>:</p>
+    <ul style="font-size:12.5px;margin:0 0 8px 18px;padding:0;color:#444;">
+      <li>the received quantity comes <b>out of stock</b> (company store, and MMC custody if it was delivered straight to MMC);</li>
+      <li>the PO goes back to the <b>Purchase orders</b> list as open.</li></ul>
+    <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;font-weight:normal;"><input type="checkbox" id="grn-undo-disp" checked style="width:auto;margin-top:3px;">
+      <span>Also undo the vendor’s dispatch — the PO returns to <b>PLACED</b> with the <b>Mark dispatched</b> button.<br><span style="font-size:11.5px;color:#777">Untick to keep it as dispatched / in transit, waiting to be received again.</span></span></label>
+    <button class="btn sm" style="margin-top:12px;background:#b3261e;color:#fff;" onclick="grnDelGo('${inspId}','${orphKey}')">Delete receipt</button>
+    <div id="grn-del-msg" style="font-size:12px;margin-top:6px;"></div>`);
+}
+async function grnDelGo(inspId, orphKey){
+  const undo = !!($('grn-undo-disp') && $('grn-undo-disp').checked);
+  const args = { p_undo_dispatch: undo };
+  if (inspId) args.p_inspection = inspId; else args.p_receipts = (window.__grnOrph||{})[orphKey] || [];
+  const btn = document.querySelector('[onclick^="grnDelGo"]'); if (btn) btn.disabled = true;
+  const { data, error } = await db.schema('mfg').rpc('receipt_delete', args);
+  if (error){ if (btn) btn.disabled = false; say('grn-del-msg', 'Could not delete: ' + error.message, false); return; }
+  apprModalClose(); alert('Deleted. ' + data + '.');
+  purchaseTab('grn');
 }
 async function poReceiveSave(id){
   const lines = [];
