@@ -6220,6 +6220,19 @@ async function acctTab(t){
       const bankNm = id => { const b = acBanks.find(x=>x.id===id); return b ? b.name : 'bank'; };
       const isTopC = r => r.entry_kind === 'TOPUP';
       const allPc = pcl || [];
+      // Cash expenses that were really payments to a vendor: linked rows reduce that vendor's outstanding
+      const pvLinks = {}; try { const { data: lk } = await A.rpc('petty_vendor_links'); (lk||[]).forEach(x=>{ pvLinks[x.petty_id] = x; }); } catch(e){}
+      window.__pvRows = {}; allPc.forEach(r=>{ window.__pvRows[r.id] = r; });
+      const pvCan = isDir() || canFinEdit() || canFinApprove() || canPetty('admin');
+      const pvCell = r => {
+        if (isTopC(r)) return '';
+        const L = pvLinks[r.id];
+        if (L) return `<div style="font-size:11.5px;margin-top:4px;color:#1a5fb4;">🔗 Paid to vendor <b>${esc(L.vendor)}</b> · ${esc(L.pay_nos)}${L.pos?' · '+esc(L.pos):''}</div>` +
+          (pvCan ? `<button class="mini" style="margin-top:3px;color:#c0392b;" onclick="pvUnlink('${r.id}','${esc(r.pc_no)}')">Unlink</button>` : '');
+        if (pvCan && r.status==='APPROVED') return `<button class="mini" style="margin-top:4px;" onclick="pvLinkOpen('${r.id}')" title="This cash was paid to a vendor — mark it against the vendor's bill">🔗 Link to vendor</button>`;
+        return '';
+      };
+      const pvCount = Object.keys(pvLinks).length;
       const opening = allPc.filter(r=>r.status==='APPROVED' && window.acLedFrom && String(r.expense_date) < window.acLedFrom)
         .reduce((s,r)=>s+(isTopC(r)?1:-1)*Number(r.amount),0);
       const inRange = allPc.filter(r=>(!window.acLedFrom || String(r.expense_date) >= window.acLedFrom) && (!window.acLedTo || String(r.expense_date) <= window.acLedTo));
@@ -6229,7 +6242,7 @@ async function acctTab(t){
       const tOutC = inRange.filter(r=>r.status==='APPROVED' && !isTopC(r)).reduce((s,r)=>s+Number(r.amount),0);
       const pendC = inRange.filter(r=>r.status==='PENDING_APPROVAL').length;
       window.__ledRows = inRange.map(r=>({ entry_no:r.pc_no, entry_date:r.expense_date, kind:isTopC(r)?'TOP-UP':'CASH EXPENSE', payee:isTopC(r)?('Top-up from '+bankNm(r.bank_id)):(r.paid_to||''),
-        narration:(isTopC(r)?'':(r.category||'')+' — ')+(r.description||''), bank_name_label:'Petty cash box', counter_bank_label:'', mode:'CASH', ref_no:'',
+        narration:(isTopC(r)?'':(r.category||'')+' — ')+(r.description||'')+(pvLinks[r.id]?' [Linked to vendor '+pvLinks[r.id].vendor+' · '+pvLinks[r.id].pay_nos+']':''), bank_name_label:'Petty cash box', counter_bank_label:'', mode:'CASH', ref_no:'',
         amount:Number(r.amount), direction:isTopC(r)?'IN':'OUT', status:r.status }));
       window.__ledLabel = 'Petty cash book';
       B.innerHTML = `
@@ -6245,11 +6258,11 @@ async function acctTab(t){
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
       ${pendC?`<span style="font-size:12px;color:#b8860b;margin-left:6px;">⏳ ${pendC} awaiting approval — not counted in cash in hand</span>`:''}
       <h4 class="sec" style="margin-top:12px;">Petty cash book · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${inRange.length} entr${inRange.length===1?'y':'ies'}</h4>
-      <p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Cash taken out of the bank for the box shows as a top-up (money in); every cash expense shows as money out. The bank-side withdrawal sits in the bank ledger, linked to its PC number.</p>
+      <p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Cash taken out of the bank for the box shows as a top-up (money in); every cash expense shows as money out. The bank-side withdrawal sits in the bank ledger, linked to its PC number.${pvCan?' If a cash expense was really a payment to a vendor, press <b>🔗 Link to vendor</b> on that line — the vendor’s outstanding comes down by that amount (cash in hand does not change).':''}${pvCount?' <b>'+pvCount+'</b> entr'+(pvCount===1?'y is':'ies are')+' linked to vendors.':''}</p>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Entry</th><th>Paid to / note</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th class="amount">Cash in hand ₹</th><th>Status</th><th></th></tr></thead><tbody>
       ${rowsC.map(({r,bal})=>`<tr${isTopC(r)?' style="background:#f4faf5;"':''}><td><b>${esc(r.pc_no)}</b></td><td>${r.expense_date}</td>` +
         `<td>${isTopC(r)?'💵 Top-up from <b>'+esc(bankNm(r.bank_id))+'</b>':esc(r.category||'Cash expense')}</td>` +
-        `<td>${esc(r.paid_to||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
+        `<td>${esc(r.paid_to||'—')}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}${pvCell(r)}</td>` +
         `<td class="amount" style="font-weight:600;color:#1a7f37">${isTopC(r)?inr(r.amount):''}</td>` +
         `<td class="amount" style="font-weight:600;color:#b3261e">${isTopC(r)?'':inr(r.amount)}</td>` +
         `<td class="amount" style="font-weight:700;color:${bal>=0?'#1a7f37':'#b3261e'}">${r.status==='APPROVED'?inr(bal):'<span style="color:#999;font-weight:400">—</span>'}</td>` +
@@ -8063,6 +8076,77 @@ async function vlPayDel(id, no){
   const { error } = await db.schema('app').rpc('dir_delete', { p_schema: 'acct', p_table: 'vendor_payments', p_id: id });
   if (error){ alert('Could not delete: ' + error.message); return; }
   if (p.entry_id){ const { error: e2 } = await A2.rpc('delete_entry', { p_entry: p.entry_id }); if (e2) alert('The payment is deleted, but its bank entry could not be: ' + e2.message); }
+  acctTab('ledger');
+}
+// ---- Petty cash book: link a cash expense to a vendor (cash payment against the vendor's bill) ----
+function pvNorm(t){ return String(t||'').toLowerCase().replace(/private|pvt|limited|ltd|india|\(.*?\)|[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim(); }
+async function pvLinkOpen(id){
+  const r = (window.__pvRows||{})[id]; if (!r) return; window.__pvCur = id;
+  const { data: vl, error } = await db.schema('acct').rpc('petty_link_vendor_list');
+  if (error){ alert('Could not load vendors: ' + error.message); return; }
+  window.__pvVendors = vl || [];
+  // best guess from "Paid to"
+  const want = pvNorm(r.paid_to); let guess = '';
+  if (want){ const hit = (vl||[]).find(v=>pvNorm(v.name)===want) || (vl||[]).find(v=>{ const n = pvNorm(v.name); return n && (n.includes(want) || want.includes(n)); })
+      || (vl||[]).find(v=>{ const w = want.split(' ')[0]; return w.length>3 && pvNorm(v.name).split(' ')[0]===w; }); if (hit) guess = hit.id; }
+  apprModal('🔗 Link ' + r.pc_no + ' to a vendor', `
+    <div style="font-size:13px;background:#f7f7f7;border-radius:8px;padding:8px 10px;margin-bottom:8px;">
+      <b>${esc(r.pc_no)}</b> · ${r.expense_date} · ${esc(r.category||'Cash expense')}<br>
+      Paid to: <b>${esc(r.paid_to||'—')}</b>${r.description?' — <span style="color:#777">'+esc(r.description)+'</span>':''}<br>
+      Cash paid: <b>₹ ${inr(r.amount)}</b></div>
+    <label>Vendor</label>
+    <input type="text" id="pv-q" placeholder="Type to search vendor…" oninput="pvVenFilter()" style="margin-bottom:4px;">
+    <select id="pv-ven" onchange="pvPoLoad()"><option value="">— select vendor —</option>${(vl||[]).map(v=>`<option value="${v.id}"${v.id===guess?' selected':''}>${esc(v.name)}${v.code?' ('+esc(v.code)+')':''}</option>`).join('')}</select>
+    <div id="pv-pos" style="margin-top:8px;"></div>
+    <p style="font-size:11.5px;color:#777;margin:8px 0 0;">This records a <b>cash payment</b> of ₹ ${inr(r.amount)} to the vendor (dated ${r.expense_date}, ref ${esc(r.pc_no)}). The vendor’s outstanding comes down by this amount and it shows in the vendor ledger. Petty cash in hand and the bank are not touched again.</p>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="pvLinkSave('${r.id}')">Link payment to vendor</button><div id="pv-msg" style="font-size:12px;margin-top:6px;"></div>`);
+  if (guess) pvPoLoad();
+}
+function pvVenFilter(){
+  const q = ($('pv-q').value||'').toLowerCase(); const sel = $('pv-ven'); const cur = sel.value;
+  const list = (window.__pvVendors||[]).filter(v=>!q || (v.name||'').toLowerCase().includes(q) || (v.code||'').toLowerCase().includes(q));
+  sel.innerHTML = '<option value="">— select vendor —</option>' + list.map(v=>`<option value="${v.id}"${v.id===cur?' selected':''}>${esc(v.name)}${v.code?' ('+esc(v.code)+')':''}</option>`).join('');
+  if (list.length===1 && sel.value!==list[0].id){ sel.value = list[0].id; pvPoLoad(); }
+}
+async function pvPoLoad(){
+  const box = $('pv-pos'); const vid = $('pv-ven').value; box.innerHTML = '';
+  if (!vid) return;
+  box.innerHTML = '<span style="font-size:12px;color:#777">Loading POs…</span>';
+  const { data, error } = await db.schema('acct').rpc('petty_link_vendor_pos', { p_vendor: vid });
+  if (error){ box.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  const open = (data||[]).filter(p=>Number(p.pending) > 0);
+  if (!open.length){ box.innerHTML = '<div style="font-size:12px;color:#777">No unpaid POs for this vendor — the payment will be recorded against the vendor generally.</div>'; return; }
+  box.innerHTML = `<div style="font-size:12px;font-weight:600;margin-bottom:4px;">Against which PO(s)? <span style="font-weight:400;color:#777">(tick the bills this cash paid — oldest gets paid first)</span></div>
+    <div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th></th><th>PO</th><th>Date</th><th class="amount">Bill ₹</th><th class="amount">Already paid ₹</th><th class="amount">Pending ₹</th></tr></thead><tbody>
+    ${open.map(p=>`<tr><td><input type="checkbox" class="pv-po" value="${p.po_id}" data-pend="${Number(p.pending)}" onchange="pvPoSum()" checked></td><td><b>${esc(p.po_no)}</b></td><td>${p.order_date||''}</td><td class="amount">${inr(p.po_value)}</td><td class="amount">${inr(p.paid)}</td><td class="amount">${inr(p.pending)}</td></tr>`).join('')}
+    </tbody></table></div><div id="pv-sum" style="font-size:12px;margin-top:4px;"></div>`;
+  pvPoSum();
+}
+function pvPoSum(){
+  const cur = (window.__pvRows||{})[window.__pvCur]; const amt = cur ? Number(cur.amount) : 0;
+  const pend = [...document.querySelectorAll('.pv-po:checked')].reduce((s,c)=>s+Number(c.dataset.pend),0);
+  const el = $('pv-sum'); if (!el) return;
+  if (!pend){ el.innerHTML = '<span style="color:#777">No PO ticked — the payment will be recorded against the vendor generally.</span>'; return; }
+  const diff = Math.round((amt - pend)*100)/100;
+  el.innerHTML = `Ticked POs pending: <b>₹ ${inr(pend)}</b> · cash paid: <b>₹ ${inr(amt)}</b>` +
+    (diff===0 ? ' · <span style="color:#1a7f37">fully settles them</span>'
+      : diff<0 ? ` · <span style="color:#b8860b">₹ ${inr(-diff)} will still show pending</span>`
+      : ` · <span style="color:#b8860b">₹ ${inr(diff)} extra is recorded as an advance to the vendor</span>`);
+}
+async function pvLinkSave(id){
+  const vid = $('pv-ven').value;
+  if (!vid){ say('pv-msg','Select the vendor first.', false); return; }
+  const pos = [...document.querySelectorAll('.pv-po:checked')].map(c=>c.value);
+  const btn = document.querySelector(`[onclick="pvLinkSave('${id}')"]`); if (btn) btn.disabled = true;
+  const { data, error } = await db.schema('acct').rpc('petty_link_vendor', { p_pc: id, p_vendor: vid, p_pos: pos.length ? pos : null });
+  if (error){ if (btn) btn.disabled = false; say('pv-msg','Could not link: ' + error.message, false); return; }
+  apprModalClose(); alert('Linked. Vendor payment ' + data + ' recorded — the vendor’s outstanding has come down.');
+  acctTab('ledger');
+}
+async function pvUnlink(id, no){
+  if (!confirm('Unlink ' + no + ' from the vendor? The vendor payment made from it is removed and the vendor’s outstanding goes back up. The petty cash entry itself stays as it is.')) return;
+  const { error } = await db.schema('acct').rpc('petty_unlink_vendor', { p_pc: id });
+  if (error){ alert('Could not unlink: ' + error.message); return; }
   acctTab('ledger');
 }
 async function vlTdsEdit(id){
