@@ -295,6 +295,7 @@
       <thead><tr><th>Code</th><th>Name</th><th>District</th><th>GSTIN</th><th>Contact</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows-v"></tbody>
     </table></div>
+    <div id="pmv-editbox" style="margin-top:12px;"></div>
     </div>
     <div id="pm-sec-r" class="hidden">
     <div class="table-scroll"><table>
@@ -1806,8 +1807,35 @@ async function openParties(){
   const tbD = $('party-rows'), tbV = $('party-rows-v'); tbD.innerHTML = ''; tbV.innerHTML = '';
   const ownerName = id => (M.users.find(u=>u.id===id)||{}).full_name || (id===me.id?'me':'—');
   let nD = 0, nV = 0;
+  // Vendors list = the vendor master (sales.vendors) — the same list POs and Accounts use, so every
+  // vendor registered under "Register vendor" shows here too (not only the ones created in Party Master).
+  let venMaster = null;
+  try { const { data: vm, error: ve } = await db.schema('sales').from('vendors').select('*').order('name'); if (!ve) venMaster = vm || []; } catch(e){}
+  if (venMaster){
+    const pById = {}; (M.parties||[]).forEach(p=>{ pById[p.id] = p; });
+    const distNames = new Set((M.parties||[]).filter(p=>(p.party_type||'DISTRIBUTOR')!=='VENDOR').map(p=>String(p.name||'').trim().toLowerCase()));
+    window.__vnRows = venMaster;
+    for (const v of venMaster){
+      const p = v.party_id ? pById[v.party_id] : null;
+      if (v.party_id && p && (p.party_type||'DISTRIBUTOR') !== 'VENDOR') continue;            // mirror of a distributor
+      if (!v.party_id && v.status !== 'ACTIVE' && distNames.has(String(v.name||'').trim().toLowerCase())) continue;  // moved to distributors
+      nV++;
+      const active = p ? !!p.is_active : v.status === 'ACTIVE';
+      const place = v.city || (p && p.city) || v.address || '';
+      const tr = document.createElement('tr');
+      if (!active) tr.className = 'inactive';
+      const canEd = p ? pmCanEdit(p) : (isDir() || canPartyAct('edit'));
+      tr.innerHTML = `<td><b>${esc(p ? p.code : v.code)}</b></td><td>${esc(v.name)}${v.category && v.category!=='Party Master'?'<br><span style="font-size:11px;color:#777">'+esc(v.category)+'</span>':''}</td>` +
+        `<td>${esc(place||'—')}</td><td>${esc(v.gstin||(p&&p.gstin)||'—')}</td>` +
+        `<td>${esc(v.contact_person||v.phone||(p&&(p.contact_person||p.phone))||'—')}</td><td>${active?'✔':'✖'}</td>` +
+        `<td style="white-space:nowrap">${canEd?'<button class="mini btn-edit">Edit</button>':''} ${p ? dirDelBtn('sales','parties', p.id, p.name, "openParties()") : dirDelBtn('sales','vendors', v.id, v.name, "openParties()")}</td>`;
+      if (tr.querySelector('.btn-edit')) tr.querySelector('.btn-edit').onclick = p ? ()=>openPartyEdit(p) : ()=>{ vnEdit(v.id, 'pmv-editbox'); $('pmv-editbox').scrollIntoView({behavior:'smooth'}); };
+      tbV.appendChild(tr);
+    }
+  }
   for (const p of M.parties){
     const isVen = (p.party_type||'DISTRIBUTOR') === 'VENDOR';
+    if (isVen && venMaster) continue;   // already listed from the vendor master above
     const tr = document.createElement('tr');
     if (!p.is_active) tr.className='inactive';
     if (isVen){
@@ -3946,10 +3974,11 @@ async function rtEditSave(id){
   if (error){ say('re-msg','Save failed: '+error.message,false); return; }
   onbTab('retailers');
 }
-function vnEdit(id){
+function vnEdit(id, boxId){
   const v = (window.__vnRows||[]).find(x=>x.id===id);
   if (!v){ alert('Open the Vendors tab again and retry.'); return; }
-  const box = $('vn-editbox'); if (!box) return;
+  window.__vnAfter = boxId === 'pmv-editbox' ? 'openParties()' : "onbTab('vendors')";
+  const box = $(boxId || 'vn-editbox'); if (!box) return;
   box.innerHTML = `
     <div class="card" style="margin-bottom:14px;max-width:680px;border:1px solid #b8860b;"><h2 style="font-size:15px;">Edit ${esc(v.code)} — ${esc(v.name)}</h2>
       ${v.party_id?'<p style="font-size:12px;color:#777;margin:4px 0 8px;">This record is linked to the Party Master — saving here updates it there too.</p>':''}
@@ -4003,7 +4032,8 @@ async function vnEditSave(id){
   }
   if (error){ say('ve-msg','Save failed: '+error.message,false); return; }
   if (toDist) alert('Saved. '+name+' is now a DISTRIBUTOR — find it in the Party Master distributor list. It will no longer appear in vendor lists for new POs.');
-  onbTab('vendors');
+  const after = window.__vnAfter || "onbTab('vendors')"; window.__vnAfter = null;
+  if (after === 'openParties()') { await openParties(); pmShow('v'); } else onbTab('vendors');
 }
 async function onbAdd(){
   const name = $('ob-name').value.trim();
