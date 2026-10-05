@@ -5407,18 +5407,24 @@ async function purchaseTab(t){
       G.from('v_rm_stock').select('*').order('code')
     ]);
     const mmcBy = {}; (mmc.data||[]).forEach(r => mmcBy[r.rm_item_id] = r);
+    const canMove = isDir() || canFinEdit();
+    const anyMoved = (st.data||[]).some(r=>Number(r.moved_to_asset||0)>0);
+    window.__rmStoreRows = {}; (st.data||[]).forEach(r=>{ window.__rmStoreRows[r.rm_item_id] = r; });
     // Hide materials with nothing anywhere — they join the list the moment a receipt (or issue) touches them.
     const live = (st.data||[]).filter(r=>{const m=mmcBy[r.rm_item_id]||{};
-      return Number(r.received)!==0 || Number(r.issued_to_mmc)!==0 || Number(r.store_balance)!==0 ||
+      return Number(r.received)!==0 || Number(r.issued_to_mmc)!==0 || Number(r.store_balance)!==0 || Number(r.moved_to_asset||0)!==0 ||
              Number(m.balance||0)!==0 || Number(m.consumed||0)!==0;});
     B.innerHTML = `
       <h4 class="sec">Raw material inventory</h4>
-      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.</p>
-      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th><th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th></tr></thead><tbody>
+      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>.':''}</p>
+      <div id="rm-asset-box"></div>
+      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th>${anyMoved?'<th class="amount">Moved to assets</th>':''}<th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th>${canMove?'<th></th>':''}</tr></thead><tbody>
       ${live.map(r=>{const m=mmcBy[r.rm_item_id]||{};return `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td>${r.unit}</td>` +
         `<td class="amount">${Number(r.received)}</td><td class="amount">${Number(r.issued_to_mmc)}</td>` +
+        (anyMoved ? `<td class="amount">${Number(r.moved_to_asset||0) ? '<span style="color:#1a5fb4" title="Moved into the asset register">'+Number(r.moved_to_asset)+'</span>' : '0'}</td>` : '') +
         `<td class="amount" style="font-weight:700;color:${Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance)}</td>` +
-        `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td></tr>`;}).join('') || '<tr><td colspan="6" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
+        `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td>` +
+        (canMove ? `<td>${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="8" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
       </tbody></table></div>`;
     return;
   }
@@ -5952,6 +5958,74 @@ async function grnDelGo(inspId, orphKey){
   const ac = window.__grnDelAcct; window.__grnDelAcct = null;
   apprModalClose(); alert('Deleted. ' + data + '.' + (ac && Number(ac.lot_value) ? '\n\nAccounts: ₹ ' + inr(ac.lot_value) + ' of ' + (ac.vendor||'the vendor') + '’s dues (as per material received) has been removed.' : ''));
   purchaseTab('grn');
+}
+// ---- RM store → asset register: take material out of the store and book it as a company asset ----
+async function rmAssetForm(itemId){
+  const r = (window.__rmStoreRows||{})[itemId]; if (!r) return;
+  const box = $('rm-asset-box'); if (!box) return;
+  box.innerHTML = '<p style="font-size:12px;color:#777">Loading…</p>';
+  const [ppl, lc, ast] = await Promise.all([
+    db.schema('adm').from('people').select('id, full_name').eq('is_active', true).is('deleted_at', null).order('full_name'),
+    db.schema('mfg').from('v_rm_landed_cost').select('*').eq('rm_item_id', itemId).maybeSingle(),
+    db.schema('acct').from('assets').select('id, asset_code, name, status').neq('status','DISPOSED').order('created_at', {ascending:false})
+  ]);
+  const unit = lc && lc.data ? Number(lc.data.landed_per_unit||0) : 0;
+  window.__rmAssetUnit = unit;
+  const bal = Number(r.store_balance||0);
+  const catOpts = AC_CATS.map(c=>`<option value="${c}" ${c==='OTHER'?'selected':''}>${c.charAt(0)+c.slice(1).toLowerCase()}</option>`).join('');
+  const custOpts = '<option value="">—</option>' + (ppl.data||[]).map(p=>`<option value="${p.id}">${esc(p.full_name)}</option>`).join('');
+  const astOpts = (ast.data||[]).map(a=>`<option value="${a.id}">${esc(a.asset_code)} — ${esc(a.name)}</option>`).join('');
+  box.innerHTML = `<div class="card" style="margin:10px 0 14px;max-width:680px;border:1px solid #1a5fb4;">
+    <h3 style="font-size:15px;">→ Move to asset register — ${esc(r.code)}</h3>
+    <p style="font-size:12px;color:#555;margin:2px 0 8px;">${esc(r.name||'')} · in the company store: <b>${bal} ${esc(r.unit||'')}</b>${unit?` · landed cost ₹ ${inr(unit)} per ${esc(r.unit||'unit')}`:''}</p>
+    <div class="row2c"><div><label>Quantity to move *</label><input type="number" id="ra-qty" min="0" step="any" value="${bal<=1?bal:''}" max="${bal}" oninput="rmAssetCalc()"></div>
+      <div><label>Book it as</label><select id="ra-mode" onchange="rmAssetMode()"><option value="NEW">A new asset</option>${astOpts?'<option value="LINK">An asset already in the register</option>':''}</select></div></div>
+    <div id="ra-new">
+      <label>Asset name *</label><input type="text" id="ra-name" value="${esc(r.name||r.code)}">
+      <div class="row2c"><div><label>Class *</label><select id="ra-class"><option value="MOVABLE">Movable</option><option value="IMMOVABLE">Immovable</option></select></div>
+        <div><label>Category *</label><select id="ra-cat">${catOpts}</select></div></div>
+      <div class="row2c"><div><label>Identifier</label><input type="text" id="ra-ident" placeholder="Serial / IMEI / model no."></div>
+        <div><label>Location</label><input type="text" id="ra-loc"></div></div>
+      <div class="row2c"><div><label>Custodian</label><select id="ra-cust">${custOpts}</select></div>
+        <div><label>Value ₹ *</label><input type="number" id="ra-val" min="0" step="any"></div></div>
+      <div id="ra-valnote" style="font-size:11.5px;color:#777;margin:-4px 0 6px;"></div>
+      <label>Remarks</label><input type="text" id="ra-rem">
+    </div>
+    <div id="ra-link" class="hidden"><label>Asset *</label><select id="ra-asset">${astOpts}</select>
+      <p style="font-size:11.5px;color:#777;margin:4px 0 0;">Use this when the item was already added to the asset register by hand — the store stock comes down without creating a duplicate asset.</p></div>
+    <div class="row2c" style="margin-top:6px;"><div><label>Date</label><input type="date" id="ra-date" value="${calFmt(new Date())}"></div><div></div></div>
+    <div style="display:flex;gap:8px;margin-top:10px;"><button class="btn gold sm" onclick="rmAssetSave('${itemId}')">Move to asset register</button><button class="btn ghost sm" onclick="$('rm-asset-box').innerHTML=''">Cancel</button></div>
+    <div id="ra-msg"></div></div>`;
+  rmAssetCalc();
+  box.scrollIntoView({behavior:'smooth'});
+}
+function rmAssetMode(){ const link = $('ra-mode').value === 'LINK'; $('ra-new').classList.toggle('hidden', link); $('ra-link').classList.toggle('hidden', !link); }
+function rmAssetCalc(){
+  const q = Number($('ra-qty') && $('ra-qty').value) || 0, u = Number(window.__rmAssetUnit||0);
+  if (u && q && $('ra-val')){ $('ra-val').value = (Math.round(u*q*100)/100).toFixed(2);
+    $('ra-valnote').innerHTML = `Filled in from the landed cost (basic + tax + transport): ${q} × ₹ ${inr(u)} — change it if needed.`; }
+  else if ($('ra-valnote')) $('ra-valnote').innerHTML = u ? '' : 'No purchase cost on record for this material — enter the value.';
+}
+async function rmAssetSave(itemId){
+  const r = (window.__rmStoreRows||{})[itemId]; if (!r) return;
+  const qty = Number($('ra-qty').value), bal = Number(r.store_balance||0);
+  if (!(qty > 0)){ say('ra-msg','Enter the quantity to move.', false); return; }
+  if (qty > bal){ say('ra-msg','Only ' + bal + ' ' + (r.unit||'') + ' is in the store.', false); return; }
+  const btn = document.querySelector('[onclick^="rmAssetSave"]'); if (btn) btn.disabled = true;
+  const M = db.schema('mfg'); let res;
+  if ($('ra-mode').value === 'LINK'){
+    res = await M.rpc('rm_link_to_asset', { p_item: itemId, p_qty: qty, p_asset: $('ra-asset').value, p_date: $('ra-date').value || null });
+  } else {
+    const name = $('ra-name').value.trim(), val = Number($('ra-val').value);
+    if (!name){ if (btn) btn.disabled = false; say('ra-msg','The asset needs a name.', false); return; }
+    if (!(val >= 0) || $('ra-val').value === ''){ if (btn) btn.disabled = false; say('ra-msg','Enter the asset value.', false); return; }
+    res = await M.rpc('rm_move_to_asset', { p_item: itemId, p_qty: qty, p_name: name, p_class: $('ra-class').value, p_category: $('ra-cat').value,
+      p_value: val, p_identifier: $('ra-ident').value.trim() || null, p_location: $('ra-loc').value.trim() || null,
+      p_custodian: $('ra-cust').value || null, p_supplier: null, p_date: $('ra-date').value || null, p_remarks: $('ra-rem').value.trim() || null });
+  }
+  if (res.error){ if (btn) btn.disabled = false; say('ra-msg','Could not move: ' + res.error.message, false); return; }
+  alert('Done. ' + qty + ' ' + (r.unit||'') + ' of ' + r.code + ' left the store and is booked as asset ' + res.data + ' (Accounting → Assets).');
+  purchaseTab('store');
 }
 async function poReceiveSave(id){
   const lines = [];
