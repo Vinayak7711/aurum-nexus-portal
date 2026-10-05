@@ -8353,10 +8353,19 @@ async function acSlipForm(){
   const advByStaff = {}; (advs||[]).filter(a=>(a.adv_type||'SALARY')!=='EXPENSE').forEach(a=>{ (advByStaff[a.staff_id] ??= []).push(a); });
   window.__acAdvByStaff = advByStaff;
   window.__acAdvOutstanding = {}; (advs||[]).forEach(a=>{ window.__acAdvOutstanding[a.id] = Number(a.outstanding||0); });
+  // current salary structure per staff (latest effective) — for the absent-days calculation
+  window.__acStructNow = {};
+  try { const { data: sts } = await A.from('staff_salary').select('*').eq('is_active', true);
+    (sts||[]).forEach(x=>{ const c = window.__acStructNow[x.staff_id]; if (!c || String(x.effective_from||'') > String(c.effective_from||'')) window.__acStructNow[x.staff_id] = x; }); } catch(e){}
   $('ac-sal-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Generate salary slip</h3>
     <div class="row2c"><div><label>Staff *</label><select id="sp-staff" onchange="acSlipStaffChange()">${acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('')}</select></div>
-    <div><label>Month *</label><input type="month" id="sp-period" value="${monthLabelJS()}"></div></div>
+    <div><label>Month *</label><input type="month" id="sp-period" value="${monthLabelJS()}" onchange="acSlipAbsCalc()"></div></div>
+    <div style="background:#fbf8ef;border:1px solid #eadfbe;border-radius:10px;padding:10px 12px;margin:4px 0 10px;">
+      <div class="row2c" style="align-items:end;"><div><label>Days absent (unpaid leave)</label><input type="number" id="sp-absent" value="0" min="0" step="0.5" oninput="acSlipAbsCalc()"></div>
+      <div><label>Absent-days deduction ₹</label><input type="text" id="sp-absamt" value="0.00" disabled style="font-weight:700;color:#b3261e;"></div></div>
+      <div id="sp-absnote" style="font-size:12px;color:#6b5a2a;margin-top:4px;"></div>
+    </div>
     <div class="row2c"><div><label>Recover from advance</label><select id="sp-adv" onchange="acSlipAdvChange()"><option value="">— none —</option></select></div>
     <div><label>Recovery amount ₹</label><input type="number" id="sp-rec" value="0"></div></div>
     <div id="sp-advnote" style="font-size:12px;color:#777;margin:-6px 0 8px;"></div>
@@ -8366,7 +8375,23 @@ async function acSlipForm(){
   acSlipStaffChange();
   $('ac-sal-form').scrollIntoView({behavior:'smooth'});
 }
+// Absent days: gross monthly salary ÷ days in that month × days absent (half days allowed)
+function acSlipAbsCalc(){
+  const note = $('sp-absnote'), out = $('sp-absamt'); if (!note || !out) return;
+  const st = (window.__acStructNow||{})[$('sp-staff').value];
+  const per = String($('sp-period').value||''); const [y,m] = per.split('-').map(Number);
+  const days = (y && m) ? new Date(y, m, 0).getDate() : 30;
+  const ab = Number($('sp-absent').value)||0;
+  if (!st){ out.value = '0.00'; note.innerHTML = '<span style="color:#b3261e">No salary structure for this person yet — set one first.</span>'; return; }
+  const gross = Number(st.basic||0) + Number(st.hra||0) + Number(st.allowances||0);
+  const perDay = gross / days;
+  if (ab < 0 || ab > days){ out.value = '—'; note.innerHTML = `<span style="color:#b3261e">Days absent must be between 0 and ${days}.</span>`; return; }
+  const amt = Math.round(perDay * ab * 100) / 100;
+  out.value = inr(amt);
+  note.innerHTML = `Gross ₹ ${inr(gross)} ÷ ${days} days in ${per||'the month'} = <b>₹ ${inr(perDay)}</b> per day` + (ab ? ` × ${ab} day${ab===1?'':'s'} absent = <b>₹ ${inr(amt)}</b> deducted. Net pay before other deductions ≈ ₹ ${inr(gross - amt)}.` : '. Enter the days absent to deduct them.');
+}
 function acSlipStaffChange(){
+  try { acSlipAbsCalc(); } catch(e){}
   const list = (window.__acAdvByStaff||{})[$('sp-staff').value] || [];
   $('sp-adv').innerHTML = '<option value="">— none —</option>' + list.map(a=>`<option value="${a.id}">${esc(a.adv_no)} (outstanding ₹${inr(a.outstanding)})</option>`).join('');
   if (list.length === 1) $('sp-adv').value = list[0].id;   // the usual case — pick it straight away
@@ -8393,7 +8418,8 @@ async function acSlipGen(){
   const { error } = await db.schema('acct').rpc('generate_salary_slip', {
     p_staff: $('sp-staff').value, p_period: $('sp-period').value,
     p_advance_recovery: Number($('sp-rec').value)||0, p_advance: $('sp-adv').value||null,
-    p_extra_deduction: Number($('sp-extra').value)||0 });
+    p_extra_deduction: Number($('sp-extra').value)||0,
+    p_absent_days: Number($('sp-absent') ? $('sp-absent').value : 0)||0 });
   if (error){ say('sp-msg','Could not generate: '+error.message,false); return; }
   acctTab('salary');
 }
@@ -8453,7 +8479,7 @@ async function acSlipView(id){
       <table style="margin-top:8px;"><tbody>
       <tr><td colspan="2"><b>Earnings</b></td></tr>${row('Basic',s.basic)}${row('HRA',s.hra)}${row('Allowances',s.allowances)}
       <tr style="border-top:1px solid #ddd"><td><b>Gross</b></td><td class="amount"><b>${inr(s.gross)}</b></td></tr>
-      <tr><td colspan="2" style="padding-top:8px"><b>Deductions</b></td></tr>${row('PF',s.pf)}${row('Prof. tax',s.prof_tax)}${row('TDS',s.tds)}${row('Other',s.other_deductions)}${row('Advance recovery',s.advance_recovery)}
+      <tr><td colspan="2" style="padding-top:8px"><b>Deductions</b></td></tr>${row('PF',s.pf)}${row('Prof. tax',s.prof_tax)}${row('TDS',s.tds)}${Number(s.absent_deduction)?row('Absent '+Number(s.absent_days)+' of '+(s.days_in_month||'')+' days',s.absent_deduction):''}${row('Other',s.other_deductions)}${row('Advance recovery',s.advance_recovery)}
       <tr style="border-top:1px solid #ddd"><td><b>Total deductions</b></td><td class="amount"><b>${inr(s.total_deductions)}</b></td></tr>
       <tr style="border-top:2px solid #333"><td><b>NET PAY</b></td><td class="amount" style="font-weight:700;font-size:15px">${inr(s.net_pay)}</td></tr>
       </tbody></table>
@@ -8478,6 +8504,7 @@ async function acSlipPrint(id){
     <h1 style="text-align:center;">AURUM SPIRITS INDIA LIMITED</h1>
     <h2 style="text-align:center;">Salary slip for ${esc(monthName)}</h2>
     <table style="margin-bottom:14px;">
+      ${Number(s.absent_days)?`<tr><th>Days paid</th><td>${(Number(s.days_in_month||0) - Number(s.absent_days))} of ${s.days_in_month||''}</td><th>Days absent</th><td>${Number(s.absent_days)}</td></tr>`:''}
       <tr><th style="width:22%">Employee</th><td><b>${esc(name||'—')}</b></td><th style="width:18%">Slip no.</th><td>${esc(s.slip_no)}</td></tr>
       <tr><th>Designation</th><td>${esc(desig||'—')}</td><th>Month</th><td>${esc(s.period)}</td></tr>
     </table>
@@ -8488,6 +8515,7 @@ async function acSlipPrint(id){
       <tr><td>Allowances</td><td class="amount">${m(s.allowances)}</td><td>TDS</td><td class="amount">${m(s.tds)}</td></tr>
       <tr><td></td><td></td><td>Other deductions</td><td class="amount">${m(s.other_deductions)}</td></tr>
       <tr><td></td><td></td><td>Advance recovery</td><td class="amount">${m(s.advance_recovery)}</td></tr>
+      ${Number(s.absent_deduction)?`<tr><td></td><td></td><td>Absent days (${Number(s.absent_days)} of ${s.days_in_month||''} days)</td><td class="amount">${m(s.absent_deduction)}</td></tr>`:''}
       <tr class="tot"><td>Gross</td><td class="amount">${m(s.gross)}</td><td>Total deductions</td><td class="amount">${m(s.total_deductions)}</td></tr>
       <tr class="tot"><td colspan="3">NET PAY</td><td class="amount">${m(s.net_pay)}</td></tr>
       <tr><td colspan="4" style="font-size:11.5px;">Rupees ${esc(inrWords(s.net_pay))}</td></tr>
@@ -8667,6 +8695,7 @@ async function apprView(kind, id){
     const money = v => '₹ ' + inr(v);
     rows = [['Slip no.', '<b>'+esc(s.slip_no)+'</b>'], ['Staff', esc(acStaffName(s.staff_id))], ['Month', s.period],
       ['Basic', money(s.basic)], ['HRA', money(s.hra)], ['Allowances', money(s.allowances)], ['Gross', '<b>'+money(s.gross)+'</b>'],
+      Number(s.absent_deduction) ? ['Absent days', Number(s.absent_days)+' of '+(s.days_in_month||'')+' days — '+money(s.absent_deduction)] : [null],
       ['Total deductions', money(s.total_deductions)],
       ['NET PAY', '<b>'+money(s.net_pay)+'</b><br><span style="font-size:11px;color:#555">'+esc(inrWords(s.net_pay))+'</span>'],
       ['Status', 'DRAFT — awaiting approval']];
@@ -8692,6 +8721,7 @@ async function apprPrint(kind, id){
     doc('SALARY SLIP (DRAFT — AWAITING APPROVAL)', TR([['Slip no.','<b>'+esc(s.slip_no)+'</b>'],['Staff',esc(acStaffName(s.staff_id))],['Month',s.period],
       ['Basic',money(s.basic)],['HRA',money(s.hra)],['Allowances',money(s.allowances)],['Gross','<b>'+money(s.gross)+'</b>'],
       ['PF',money(s.pf)],['Prof. tax',money(s.prof_tax)],['TDS',money(s.tds)],['Other deductions',money(s.other_deductions)],['Advance recovery',money(s.advance_recovery)],
+      Number(s.absent_deduction)?['Absent days ('+Number(s.absent_days)+' of '+(s.days_in_month||'')+')',money(s.absent_deduction)]:[null],
       ['Total deductions','<b>'+money(s.total_deductions)+'</b>'],['NET PAY','<b>'+money(s.net_pay)+'</b>'],['Net pay in words',esc(inrWords(s.net_pay))]]), 'Salary slip '+s.slip_no);
   } else if (kind === 'adv'){
     const a = (D.advs||[]).find(x=>x.id===id); if (!a) return;
