@@ -5407,7 +5407,7 @@ async function purchaseTab(t){
       G.from('v_rm_stock').select('*').order('code')
     ]);
     const mmcBy = {}; (mmc.data||[]).forEach(r => mmcBy[r.rm_item_id] = r);
-    const canMove = isDir() || canFinEdit();
+    const canMove = isDir() || canFinEdit() || canPurEdit() || canPurApprove();   // Purchases & RM Store editors too
     const anyMoved = (st.data||[]).some(r=>Number(r.moved_to_asset||0)>0);
     window.__rmStoreRows = {}; (st.data||[]).forEach(r=>{ window.__rmStoreRows[r.rm_item_id] = r; });
     // Hide materials with nothing anywhere — they join the list the moment a receipt (or issue) touches them.
@@ -5967,7 +5967,7 @@ async function rmAssetForm(itemId){
   const [ppl, lc, ast] = await Promise.all([
     db.schema('adm').from('people').select('id, full_name').eq('is_active', true).is('deleted_at', null).order('full_name'),
     db.schema('mfg').from('v_rm_landed_cost').select('*').eq('rm_item_id', itemId).maybeSingle(),
-    db.schema('acct').from('assets').select('id, asset_code, name, status').neq('status','DISPOSED').order('created_at', {ascending:false})
+    db.schema('mfg').rpc('rm_asset_pick_list')
   ]);
   const unit = lc && lc.data ? Number(lc.data.landed_per_unit||0) : 0;
   window.__rmAssetUnit = unit;
