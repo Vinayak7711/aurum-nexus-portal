@@ -2696,7 +2696,7 @@ async function openParties(){
       const tr = document.createElement('tr');
       if (!active) tr.className = 'inactive';
       const canEd = p ? pmCanEdit(p) : (isDir() || canPartyAct('edit'));
-      tr.innerHTML = `<td><b>${esc(p ? p.code : v.code)}</b></td><td>${esc(v.name)}${v.category && v.category!=='Party Master'?'<br><span style="font-size:11px;color:#777">'+esc(v.category)+'</span>':''}</td>` +
+      tr.innerHTML = `<td><b>${esc(p ? p.code : v.code)}</b></td><td>${esc(v.name)}${v.category && v.category!=='Party Master'?'<br><span style="font-size:11px;color:#777">'+esc(v.category)+'</span>':''}${vnKindLabel(v)?'<br><span style="font-size:11px;color:#1a5fb4">'+vnKindLabel(v)+'</span>':''}</td>` +
         `<td>${esc(place||'—')}</td><td>${esc(v.gstin||(p&&p.gstin)||'—')}</td>` +
         `<td>${esc(v.contact_person||v.phone||(p&&(p.contact_person||p.phone))||'—')}</td><td>${active?'✔':'✖'}</td>` +
         `<td style="white-space:nowrap">${canEd?'<button class="mini btn-edit">Edit</button>':''} ${p ? dirDelBtn('sales','parties', p.id, p.name, "openParties()") : dirDelBtn('sales','vendors', v.id, v.name, "openParties()")}</td>`;
@@ -4711,6 +4711,7 @@ async function onbTab(which){
     B.innerHTML = html + '</tbody></table></div><div id="onb-msg2"></div>';
   }
   if (which === 'vendors'){
+    await vnLoadHeads();
     const { data, error } = await S.from('vendors').select('*').order('created_at',{ascending:false});
     if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
     window.__vnRows = data || [];
@@ -4723,6 +4724,7 @@ async function onbTab(which){
       <input type="text" id="vn-whatsapp" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
       <div class="row2c" style="margin-top:8px;"><input type="email" id="vn-email" placeholder="Email address (for POs / communication)">
       <input type="text" id="vn-pan" placeholder="PAN"></div>
+      ${vnKindBlock('vn', '', '')}
       <div style="margin-top:8px;"><textarea id="vn-address" rows="2" placeholder="Postal address — building, street, area (for communication)" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;"></textarea></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="vn-city" placeholder="City / town">
       <div class="row2c" style="gap:8px;"><input type="text" id="vn-state" placeholder="State"><input type="text" id="vn-pincode" placeholder="PIN code" maxlength="6" inputmode="numeric"></div></div>
@@ -4732,7 +4734,7 @@ async function onbTab(which){
     html += '<div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>';
     for (const v of (data||[])){
       const pill = v.status==='ACTIVE'?'DELIVERED':(v.status==='INACTIVE'?'CANCELLED':'RECEIVED');
-      html += `<tr><td><b>${esc(v.code)}</b>${v.party_id?'<br><span style="font-size:10px;color:#999" title="Also in Party Master">🔗 Party Master</span>':''}</td><td>${esc(v.name)}</td><td>${esc(v.category||'—')}</td>
+      html += `<tr><td><b>${esc(v.code)}</b>${v.party_id?'<br><span style="font-size:10px;color:#999" title="Also in Party Master">🔗 Party Master</span>':''}</td><td>${esc(v.name)}${vnKindLabel(v)?'<br><span style="font-size:11px;color:#1a5fb4">'+vnKindLabel(v)+'</span>':''}</td><td>${esc(v.category||'—')}</td>
         <td><span class="pill ${pill}">${v.status}</span></td>
         <td style="white-space:nowrap">${isDir()?`<button class="mini" onclick="vnEdit('${v.id}')">Edit</button> `:''}<button class="mini" onclick="vnStatus('${v.id}','${v.status==='ACTIVE'?'INACTIVE':'ACTIVE'}')">${v.status==='ACTIVE'?'Deactivate':'Activate'}</button> ${dirDelBtn('sales','vendors', v.id, v.name, "onbTab('vendors')")}</td></tr>`;
     }
@@ -4845,6 +4847,28 @@ async function rtEditSave(id){
   if (error){ say('re-msg','Save failed: '+error.message,false); return; }
   onbTab('retailers');
 }
+// Vendor kind: raw-material supplier (POs & RM store) or expense vendor (booked under an Accounting expense head)
+const VN_EXP_HEADS = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Salary & wages','Bank charges & interest','Buying Asset for Office & plant','Miscellaneous'];
+window.__vnHeadsExtra = window.__vnHeadsExtra || [];
+async function vnLoadHeads(){
+  try { const { data } = await db.schema('acct').from('expenses').select('category').limit(5000);
+    window.__vnHeadsExtra = [...new Set((data||[]).map(x=>x.category).filter(Boolean))]; } catch(e){}
+}
+function vnHeadOpts(cur){
+  const all = [...new Set([...VN_EXP_HEADS, ...(window.__vnHeadsExtra||[]), ...(cur ? [cur] : [])])].sort((a,b)=>a.localeCompare(b));
+  return '<option value="">— choose the expense head —</option>' + all.map(h=>`<option ${h===cur?'selected':''}>${esc(h)}</option>`).join('');
+}
+function vnKindBlock(prefix, kind, head){
+  const k = kind || '';
+  return `<div class="row2c" style="margin-top:8px;"><div><label>Vendor type</label><select id="${prefix}-kind" onchange="vnKindToggle('${prefix}')">
+        <option value="" ${!k?'selected':''}>— not set —</option>
+        <option value="RM" ${k==='RM'?'selected':''}>🏭 Raw material supplier (POs &amp; RM store)</option>
+        <option value="EXPENSE" ${k==='EXPENSE'?'selected':''}>🧾 Expense vendor (booked under an expense head)</option></select></div>
+      <div id="${prefix}-headwrap" class="${k==='EXPENSE'?'':'hidden'}"><label>Expense head <span style="font-weight:normal;color:#888;font-size:11px;">— as in Accounting → Expenses</span></label><select id="${prefix}-head">${vnHeadOpts(head||'')}</select></div></div>`;
+}
+function vnKindToggle(prefix){ const k = $(prefix+'-kind').value; $(prefix+'-headwrap').classList.toggle('hidden', k !== 'EXPENSE'); }
+function vnKindRead(prefix){ const k = $(prefix+'-kind') ? $(prefix+'-kind').value : ''; return { vendor_kind: k || null, expense_head: k === 'EXPENSE' ? ($(prefix+'-head').value || null) : null }; }
+function vnKindLabel(v){ if (!v || !v.vendor_kind) return ''; return v.vendor_kind === 'RM' ? '🏭 Raw material supplier' : '🧾 Expense' + (v.expense_head ? ' · ' + esc(v.expense_head) : ''); }
 function vnEdit(id, boxId){
   const v = (window.__vnRows||[]).find(x=>x.id===id);
   if (!v){ alert('Open the Vendors tab again and retry.'); return; }
@@ -4867,11 +4891,13 @@ function vnEdit(id, boxId){
       <div style="margin-top:8px;"><label>Type *</label><select id="ve-type">
         <option value="VENDOR" selected>💳 Vendor (we buy from them)</option>
         <option value="DISTRIBUTOR">🤝 Distributor (we sell to them) — moves it to the Party Master distributor list</option></select></div>
+      ${vnKindBlock('ve', v.vendor_kind, v.expense_head)}
       <div class="row2" style="margin-top:12px;">
         <button class="btn ghost sm" onclick="$('vn-editbox').innerHTML=''">Cancel</button>
         <button class="btn gold sm" onclick="vnEditSave('${v.id}')">Save changes</button></div>
       <div id="ve-msg"></div></div>`;
   box.scrollIntoView({behavior:'smooth', block:'center'});
+  vnLoadHeads().then(()=>{ const sel = $('ve-head'); if (sel) sel.innerHTML = vnHeadOpts(sel.value || v.expense_head || ''); });
 }
 async function vnEditSave(id){
   const v = (window.__vnRows||[]).find(x=>x.id===id);
@@ -4884,13 +4910,16 @@ async function vnEditSave(id){
               pan: $('ve-pan').value.trim().toUpperCase()||null, address: $('ve-address').value.trim()||null,
               city: $('ve-city').value.trim()||null, state: $('ve-state').value.trim()||null, pincode: $('ve-pincode').value.trim()||null };
   const toDist = $('ve-type').value === 'DISTRIBUTOR';
+  const kind = vnKindRead('ve');
+  if (!toDist && kind.vendor_kind === 'EXPENSE' && !kind.expense_head){ say('ve-msg','Choose the expense head this vendor is booked under.',false); return; }
+  Object.assign(f, kind);
   const S2 = db.schema('sales');
   let error = null;
   if (v.party_id){
     ({ error } = await S2.from('parties').update({ name: f.name, gstin: f.gstin, phone: f.phone, whatsapp: f.whatsapp,
         contact_person: f.contact_person, email: f.email,
         party_type: toDist ? 'DISTRIBUTOR' : 'VENDOR' }).eq('id', v.party_id));
-    if (!error) ({ error } = await S2.from('vendors').update({ category: f.category, pan: f.pan, address: f.address, city: f.city, state: f.state, pincode: f.pincode, email: f.email }).eq('id', id));
+    if (!error) ({ error } = await S2.from('vendors').update({ category: f.category, pan: f.pan, address: f.address, city: f.city, state: f.state, pincode: f.pincode, email: f.email, vendor_kind: f.vendor_kind, expense_head: f.expense_head }).eq('id', id));
   } else if (!toDist){
     ({ error } = await S2.from('vendors').update(f).eq('id', id));
   } else {
@@ -4940,6 +4969,8 @@ async function vnAdd(){
   const em = $('vn-email').value.trim(), pin = $('vn-pincode').value.trim();
   if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ say('vn-msg','That email address does not look right.',false); return; }
   if (pin && !/^[1-9][0-9]{5}$/.test(pin)){ say('vn-msg','PIN code should be 6 digits.',false); return; }
+  const kindN = vnKindRead('vn');
+  if (kindN.vendor_kind === 'EXPENSE' && !kindN.expense_head){ say('vn-msg','Choose the expense head this vendor is booked under.',false); return; }
   const { data: code, error: e1 } = await db.schema('app').rpc('next_code', { p_series: 'VEN' });
   if (e1){ say('vn-msg', e1.message, false); return; }
   const { error } = await db.schema('sales').from('vendors').insert({
@@ -4947,7 +4978,7 @@ async function vnAdd(){
     phone: $('vn-phone').value.trim()||null, contact_person: $('vn-contact').value.trim()||null,
     whatsapp: $('vn-whatsapp').value.trim()||null, email: $('vn-email').value.trim()||null, pan: $('vn-pan').value.trim().toUpperCase()||null,
     address: $('vn-address').value.trim()||null, city: $('vn-city').value.trim()||null, state: $('vn-state').value.trim()||null, pincode: $('vn-pincode').value.trim()||null,
-    status: 'ACTIVE', created_by: me.id });
+    ...vnKindRead('vn'), status: 'ACTIVE', created_by: me.id });
   if (error){ say('vn-msg', error.message, false); return; }
   onbTab('vendors');
 }
