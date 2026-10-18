@@ -1882,6 +1882,17 @@ function fdOwnBrands(D){
   return out;
 }
 function fdOwnOn(D, c){ const ob = fdOwnBrands(D); return ob[c].length > 0; }
+function fdCommBrands(D){
+  const BL = (D && D.brand_links) || {}; const out = {}; FD_CATS.forEach(c => out[c] = []);
+  const brands = (typeof M !== 'undefined' && M && M.brands) || [];
+  Object.entries(BL).forEach(([id, sec]) => { if (sec !== 'comm') return; const b = brands.find(x => x.id === id); if (b && out[b.category_id]) out[b.category_id].push(b); });
+  return out;
+}
+// Does the model carry own-bill sales at all? (a brand linked under Sales, or sales / receivable figures already in it)
+function fdHasOwn(D, R){ return FD_CATS.some(c => fdOwnOn(D, c)) || R.sales.some(v => v) || R.S.srecv.some(v => v) || fdNum((D.opening||{}).sales_recv) !== 0; }
+// Show a commission category line when it carries a figure or has a brand linked under Commission
+function fdCommShow(D, R, c){ return R.comm[c].some(v => v) || fdCommBrands(D)[c].length > 0; }
+function fdCommCats(D, R){ const l = FD_CATS.filter(c => fdCommShow(D, R, c)); return l.length ? l : FD_CATS.slice(); }   // all four until something is linked or entered
 /* ---- the model: every formula of the workbook ---- */
 function fdCompute(D){
   const R = {};
@@ -2073,7 +2084,7 @@ function fdTab(t, keep){
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
         ${tile('Cash & bank (31-Mar)', '₹ '+fdV(S.cash[4]), FD_Q[qi]+' end: ₹ '+fdV(S.cash[qi+1]))}
-        ${tile('Commission receivable (31-Mar)', '₹ '+fdV(S.recv[4]), 'from manufacturers')}
+        ${tile('Receivables (31-Mar)', '₹ '+fdV(S.recv[4] + S.srecv[4]), 'commission ₹ '+inr(S.recv[4]) + (fdHasOwn(D, R) ? ' · trade (own-bill sales) ₹ '+inr(S.srecv[4]) : ''))}
         ${tile('Loans to manufacturers (31-Mar)', '₹ '+fdV(S.loans[4]), (D.loans||[]).length+' manufacturer'+((D.loans||[]).length===1?'':'s'))}
         ${tile("Shareholders' funds (31-Mar)", '₹ '+fdV(S.sf[4]), 'share capital ₹ '+inr(S.sc[4]))}
       </div>
@@ -2144,22 +2155,28 @@ function fdTab(t, keep){
     const cell = (c,q,f) => fdIn(`sales.${c}.${q}.${f}`, ((D.sales[c]||[])[q]||{})[f], {w: f==='cases'?80:110});
     const ocell = (c,q,f) => fdIn(`ownq.${c}.${q}.${f}`, (((D.ownq||{})[c]||[])[q]||{})[f], {w: f==='cases'?80:110});
     const ownBr = fdOwnBrands(D); const ownCats = FD_CATS.filter(c => ownBr[c].length);
+    const commBr = fdCommBrands(D); const CB = D.comm_brands || {};
+    const commBrandRows = FD_CATS.flatMap(c => commBr[c].map(b => { const r = CB[b.id] || [0,1,2,3].map(()=>({cases:0,bill:0})); return { c, b, r }; }));
     const OB = D.own_brands || {};   // brand-wise figures from the last "fill from sales orders"
     const brandRows = ownCats.flatMap(c => ownBr[c].map(b => { const r = OB[b.id] || [0,1,2,3].map(()=>({cases:0,value:0})); return { c, b, r }; }));
     B.innerHTML = `
       <h4 class="sec">Revenue from operations</h4>
       <p style="font-size:12px;color:#555;margin-top:-4px;">Two parts: <b>1 · Commission</b> on sales made on the manufacturer's bill, and <b>2 · Sales</b> on the company's own bill. Rates and settings come from <b>Assumptions</b>.</p>
       <h4 class="sec" style="font-size:14px;">1 · Commission — sales on manufacturer's bill</h4>
-      <p style="font-size:12px;color:#555;margin-top:-4px;">Cases sold and bill value per category each quarter.
+      <p style="font-size:12px;color:#555;margin-top:-4px;">Cases sold and bill value per category each quarter — brands linked under Commission in <b>Assumptions</b>: ${FD_CATS.some(c=>commBr[c].length) ? FD_CATS.filter(c=>commBr[c].length).map(c=>c+': '+commBr[c].map(b=>esc(b.name)).join(', ')).join(' · ') : 'none linked yet (orders of unlinked brands count here)'}.
       ${ed ? `<button class="btn ghost sm" style="margin-left:6px;" onclick="fdFillSales('comm')">⇣ Fill cases &amp; bill value from sales orders</button>` : ''}</p>
       <div class="table-scroll"><table style="font-size:12.5px;"><thead>
         <tr><th rowspan="2">Category</th><th rowspan="2">Method · rate</th>${FD_Q.map(q=>`<th colspan="3" style="text-align:center">${q}</th>`).join('')}<th rowspan="2" class="amount">FY commission ₹</th></tr>
         <tr>${FD_Q.map(()=>'<th class="amount">Cases</th><th class="amount">Bill value ₹</th><th class="amount">Commission ₹</th>').join('')}</tr></thead><tbody>
-        ${FD_CATS.map(c=>{ const m = D.comm[c]; return `<tr><td><b>${c}</b></td><td style="font-size:11.5px;white-space:nowrap">${m.method==='PCT'?(fdNum(m.rate)*100).toFixed(2)+'% of value':'₹ '+inr(m.rate)+' / case'}</td>` +
+        ${FD_CATS.map(c=>{ const m = D.comm[c]; return `<tr><td><b>${c}</b>${commBr[c].length?'<br><span style="font-size:11px;color:#777">'+commBr[c].map(b=>esc(b.name)).join(', ')+'</span>':''}</td><td style="font-size:11.5px;white-space:nowrap">${m.method==='PCT'?(fdNum(m.rate)*100).toFixed(2)+'% of value':'₹ '+inr(m.rate)+' / case'}</td>` +
           [0,1,2,3].map(q=>`<td class="amount">${cell(c,q,'cases')}</td><td class="amount">${cell(c,q,'bill')}</td><td class="amount" style="font-weight:600">${inr(R.comm[c][q])}</td>`).join('') +
           `<td class="amount" style="font-weight:700">${inr(R.comm[c].reduce((s,v)=>s+v,0))}</td></tr>`; }).join('')}
-        <tr style="font-weight:700;background:#faf6ea"><td>Total</td><td></td>${[0,1,2,3].map(q=>`<td class="amount">${R.cases[q].toLocaleString('en-IN')}</td><td class="amount">${inr(R.bill[q])}</td><td class="amount">${inr(R.rev[q])}</td>`).join('')}<td class="amount">${inr(R.fy.rev)}</td></tr>
+        <tr style="font-weight:700;background:#faf6ea"><td>Total</td><td></td>${[0,1,2,3].map(q=>`<td class="amount">${R.cases[q].toLocaleString('en-IN')}</td><td class="amount">${inr(R.bill[q])}</td><td class="amount">${inr(R.commTot[q])}</td>`).join('')}<td class="amount">${inr(R.fy.comm)}</td></tr>
       </tbody></table></div>
+      ${commBrandRows.some(x=>x.r.some(q=>Number(q.bill)||Number(q.cases))) ? `<details style="margin-top:8px;"><summary style="font-size:12.5px;cursor:pointer;color:#1c2455;">Brand-wise, from the last fill from sales orders</summary>
+      <div class="table-scroll" style="margin-top:6px;"><table style="font-size:12px;"><thead><tr><th>Brand</th><th>Category</th>${FD_Q.map(q=>`<th class="amount">${q}<br><span style="font-weight:normal">cases · bill value ₹</span></th>`).join('')}<th class="amount">FY bill value ₹</th></tr></thead><tbody>
+      ${commBrandRows.map(({c,b,r})=>`<tr><td>${esc(b.name)}</td><td>${c}</td>${r.map(q=>`<td class="amount">${Number(q.cases||0).toLocaleString('en-IN')} · ${inr(q.bill||0)}</td>`).join('')}<td class="amount" style="font-weight:600">${inr(r.reduce((s,q)=>s+Number(q.bill||0),0))}</td></tr>`).join('')}
+      </tbody></table></div></details>` : ''}
       <h4 class="sec" style="margin-top:16px;">Commission receivable from manufacturers</h4>
       <div class="table-scroll"><table style="max-width:900px;"><thead><tr><th></th>${qh}</tr></thead><tbody>
         <tr><td>Opening receivable</td>${R.recvOpen.map(v=>`<td class="amount">${fdV(v)}</td>`).join('')}</tr>
@@ -2237,14 +2254,13 @@ function fdTab(t, keep){
       <div class="table-scroll"><table><thead><tr><th style="min-width:240px;"></th>${qh}<th class="amount">FY Total</th></tr></thead><tbody>
         ${row('Revenue from Operations', R.rev, R.fy.rev, {bold:true})}
         ${row('Commission (on manufacturer\'s bill)', R.commTot, R.fy.comm, {ind:true})}
-        ${FD_CATS.map(c=>row('Commission – '+c, R.comm[c], R.comm[c].reduce((s,v)=>s+v,0), {ind:true, ind2:true})).join('')}
-        ${row('Sales (on own bill)', R.sales, R.fy.sales, {ind:true})}
-        ${FD_CATS.filter(c=>fdOwnOn(D,c)).map(c=>row('Sales – '+c, R.own[c], R.own[c].reduce((s,v)=>s+v,0), {ind:true, ind2:true})).join('')}
+        ${fdCommCats(D,R).map(c=>row('Commission – '+c, R.comm[c], R.comm[c].reduce((s,v)=>s+v,0), {ind:true, ind2:true})).join('')}
+        ${fdHasOwn(D,R) ? row('Sales (on own bill)', R.sales, R.fy.sales, {ind:true}) + FD_CATS.filter(c=>fdOwnOn(D,c) || R.own[c].some(v=>v)).map(c=>row('Sales – '+c, R.own[c], R.own[c].reduce((s,v)=>s+v,0), {ind:true, ind2:true})).join('') : ''}
         ${row('Other Income', R.otherInc, R.fy.otherInc, {bold:true})}
         ${FD_OI.map(([k,l])=>inRow(l,k)).join('')}
         ${row('Total Income', R.totInc, R.fy.totInc, {bold:true})}
         ${row('Expenses', R.exp, R.fy.exp, {bold:true})}
-        ${row('Cost of Goods Sold (own-bill sales)', R.cogs, R.fy.cogs, {ind:true})}
+        ${fdHasOwn(D,R) ? row('Cost of Goods Sold (own-bill sales)', R.cogs, R.fy.cogs, {ind:true}) : ''}
         ${FD_EXP.map(([k,l])=>inRow(l,k)).join('')}
         ${row('Profit Before Tax', R.pbt, R.fy.pbt, {bold:true})}
         ${row('Tax Expense @ '+(fdNum(D.tax_rate)*100).toFixed(2)+'%', R.tax, R.fy.tax)}
@@ -2280,7 +2296,7 @@ function fdTab(t, keep){
         ${row('Cash &amp; Bank Balances', S.cash, {ind:true})}
         ${erpCash ? `<tr style="font-size:12px;color:#1a5fb4"><td style="padding-left:34px">ERP actual (banks + petty cash)</td>${erpCash.map(v=>`<td class="amount">${v==null?'—':fdV(v)}</td>`).join('')}</tr>` : ''}
         ${row('Commission Receivable', S.recv, {ind:true})}
-        ${row('Trade Receivables (own-bill sales)', S.srecv, {ind:true})}
+        ${fdHasOwn(D,R) ? row('Trade Receivables (own-bill sales)', S.srecv, {ind:true}) : ''}
         ${inRow('Short-term Loans &amp; Advances / Prepaid','st_loans', S.stl)}
         ${inRow('Other Current Assets','other_ca', S.oca)}
         ${row('EQUITY &amp; LIABILITIES', S.el, {bold:true})}
@@ -2310,7 +2326,7 @@ function fdTab(t, keep){
         ${row('Profit After Tax', C.pat, {ind:true})}
         ${row('Add: Depreciation &amp; Amortisation', C.dep, {ind:true})}
         ${row('(Inc)/Dec in Commission Receivable', C.recv, {ind:true})}
-        ${row('(Inc)/Dec in Trade Receivables (sales)', C.srecv, {ind:true})}
+        ${fdHasOwn(D,R) ? row('(Inc)/Dec in Trade Receivables (sales)', C.srecv, {ind:true}) : ''}
         ${row('(Inc)/Dec in Short-term Loans &amp; Advances', C.stl, {ind:true})}
         ${row('(Inc)/Dec in Other Current Assets', C.oca, {ind:true})}
         ${row('(Inc)/Dec in Security Deposits', C.sec, {ind:true})}
@@ -2497,13 +2513,14 @@ async function fdFillSales(target){
   const BL = FD.data.brand_links || {};
   // every brand goes to the section it is linked to in Assumptions; brands not linked anywhere go to the section whose button was pressed
   const mk = () => { const o = {}; FD_CATS.forEach(c => o[c] = [0,1,2,3].map(()=>({ cases: 0, bill: 0 }))); return o; };
-  const out = { comm: mk(), own: mk() }; let other = 0; const unlinked = new Set(); const perBrand = {};
+  const out = { comm: mk(), own: mk() }; let other = 0; const unlinked = new Set(); const perBrand = {}, perComm = {};
   lines.forEach(l => { const b = brandOfSku(l.sku_id), c = b && b.category_id, q = qOf[l.order_id]; if (q < 0) return;
     if (!c || !out.comm[c]){ other += Number(l.cases||0); return; }
     // Sales (own bill) takes ONLY the brands linked under Sales — full sale value. Everything else is commission on the manufacturer's bill.
     const sec = BL[b.id] === 'own' ? 'own' : 'comm'; if (!BL[b.id]) unlinked.add(b.name);
     out[sec][c][q].cases += Number(l.cases||0); out[sec][c][q].bill += valBy[l.id]||0;
-    if (sec === 'own'){ const pb = perBrand[b.id] || (perBrand[b.id] = [0,1,2,3].map(()=>({cases:0,value:0}))); pb[q].cases += Number(l.cases||0); pb[q].value += valBy[l.id]||0; } });
+    if (sec === 'own'){ const pb = perBrand[b.id] || (perBrand[b.id] = [0,1,2,3].map(()=>({cases:0,value:0}))); pb[q].cases += Number(l.cases||0); pb[q].value += valBy[l.id]||0; }
+    else { const pb = perComm[b.id] || (perComm[b.id] = [0,1,2,3].map(()=>({cases:0,bill:0}))); pb[q].cases += Number(l.cases||0); pb[q].bill += valBy[l.id]||0; } });
   const fmt = o => FD_CATS.map(c => '  ' + c + ': ' + o[c].map(x=>x.cases).join(' / ') + ' cases').join('\n');
   const msg = 'Commission (manufacturer\'s bill):\n' + fmt(out.comm) + '\n\nSales (own bill — linked brands only, full sale value):\n' + fmt(out.own);
   if (!confirm('From approved sales orders, routed by the brand links in Assumptions (cases per quarter):\n\n' + msg +
@@ -2511,6 +2528,7 @@ async function fdFillSales(target){
       (other ? '\n\n' + other + ' cases in other categories (e.g. FW) are left out.' : '') + '\n\nCopy these into the Revenue tab? (Both sections are updated.)')) return;
   FD_CATS.forEach(c => { FD.data.sales[c] = out.comm[c].map(x=>({ cases: x.cases, bill: Math.round(x.bill*100)/100 })); FD.data.ownq[c] = out.own[c].map(x=>({ cases: x.cases, value: Math.round(x.bill*100)/100 })); });
   FD.data.own_brands = {}; Object.entries(perBrand).forEach(([id, arr]) => { FD.data.own_brands[id] = arr.map(x=>({ cases: x.cases, value: Math.round(x.value*100)/100 })); });
+  FD.data.comm_brands = {}; Object.entries(perComm).forEach(([id, arr]) => { FD.data.comm_brands[id] = arr.map(x=>({ cases: x.cases, bill: Math.round(x.bill*100)/100 })); });
   FD.dirty = true; fdSaveBar(); fdTab('com');
 }
 async function fdErpSnapshot(){
@@ -2539,23 +2557,23 @@ async function fdErpSnapshot(){
 function fdStmtRows(kind){
   const R = FD.R || fdCompute(FD.data), S = R.S, C = R.C, D = FD.data; const sum = a => a.reduce((s,v)=>s+v,0);
   if (kind === 'pl') return { head: ['', ...FD_Q, 'FY Total'], rows: [
-    ['Revenue from Operations', ...R.rev, R.fy.rev], ['  Commission (on manufacturer\'s bill)', ...R.commTot, R.fy.comm], ...FD_CATS.map(c=>['    Commission – '+c, ...R.comm[c], sum(R.comm[c])]),
-    ['  Sales (on own bill)', ...R.sales, R.fy.sales], ...FD_CATS.filter(c=>fdOwnOn(D,c)).map(c=>['    Sales – '+c, ...R.own[c], sum(R.own[c])]),
+    ['Revenue from Operations', ...R.rev, R.fy.rev], ['  Commission (on manufacturer\'s bill)', ...R.commTot, R.fy.comm], ...fdCommCats(D,R).map(c=>['    Commission – '+c, ...R.comm[c], sum(R.comm[c])]),
+    ...(fdHasOwn(D,R) ? [['  Sales (on own bill)', ...R.sales, R.fy.sales], ...FD_CATS.filter(c=>fdOwnOn(D,c) || R.own[c].some(v=>v)).map(c=>['    Sales – '+c, ...R.own[c], sum(R.own[c])])] : []),
     ['Other Income', ...R.otherInc, R.fy.otherInc], ...FD_OI.map(([k,l])=>['  '+l, ...D.pl[k].map(fdNum), sum(D.pl[k].map(fdNum))]),
-    ['Total Income', ...R.totInc, R.fy.totInc], ['Expenses', ...R.exp, R.fy.exp], ['  Cost of Goods Sold (own-bill sales)', ...R.cogs, R.fy.cogs], ...FD_EXP.map(([k,l])=>['  '+l, ...D.pl[k].map(fdNum), sum(D.pl[k].map(fdNum))]),
+    ['Total Income', ...R.totInc, R.fy.totInc], ['Expenses', ...R.exp, R.fy.exp], ...(fdHasOwn(D,R) ? [['  Cost of Goods Sold (own-bill sales)', ...R.cogs, R.fy.cogs]] : []), ...FD_EXP.map(([k,l])=>['  '+l, ...D.pl[k].map(fdNum), sum(D.pl[k].map(fdNum))]),
     ['Profit Before Tax', ...R.pbt, R.fy.pbt], ['Tax Expense', ...R.tax, R.fy.tax], ['Profit After Tax', ...R.pat, R.fy.pat],
     ['Dividend Paid to Shareholders', ...R.div, R.fy.div], ['Transferred to Reserves & Surplus', ...R.toRes, R.fy.toRes],
     ['Net Profit Margin %', ...R.npm.map(v=>(v*100).toFixed(2)), (R.fy.npm*100).toFixed(2)], ['Earnings per Share (Rs)', ...R.eps.map(v=>v.toFixed(2)), R.fy.eps.toFixed(2)] ] };
   if (kind === 'bs'){ const y = fdFYStart(FD.fy); return { head: ['', 'Opening 01-Apr-'+y, '30-Jun-'+y, '30-Sep-'+y, '31-Dec-'+y, '31-Mar-'+(y+1)], rows: [
     ['ASSETS', ...S.assets], ['Non-Current Assets', ...S.nca], ['  Fixed Assets – Gross Block', ...S.gb], ['  Less: Accumulated Depreciation', ...S.ad],
     ['  Loans to Manufacturers', ...S.loans], ['  Long-term Security Deposits', ...S.sec], ['Current Assets', ...S.ca], ['  Cash & Bank Balances', ...S.cash],
-    ['  Commission Receivable', ...S.recv], ['  Trade Receivables (own-bill sales)', ...S.srecv], ['  Short-term Loans & Advances / Prepaid', ...S.stl], ['  Other Current Assets', ...S.oca],
+    ['  Commission Receivable', ...S.recv], ...(fdHasOwn(D,R) ? [['  Trade Receivables (own-bill sales)', ...S.srecv]] : []), ['  Short-term Loans & Advances / Prepaid', ...S.stl], ['  Other Current Assets', ...S.oca],
     ['EQUITY & LIABILITIES', ...S.el], ["Shareholders' Funds", ...S.sf], ['  Share Capital', ...S.sc], ['  Reserves & Surplus', ...S.res],
     ['Non-Current Liabilities', ...S.ncl], ['  Long-term Borrowings', ...S.ltb], ['Current Liabilities', ...S.cl], ['  Trade Payables / Expenses Payable', ...S.pay],
     ['  Provision for Tax', ...S.ptax], ['  Other Current Liabilities', ...S.ocl], ['Check (should be 0)', ...S.check] ] }; }
   return { head: ['', ...FD_Q, 'FY Total'], rows: [
     ['A. Cash Flow from Operating Activities', ...C.op, sum(C.op)], ['  Profit After Tax', ...C.pat, sum(C.pat)], ['  Add: Depreciation & Amortisation', ...C.dep, sum(C.dep)],
-    ['  (Inc)/Dec in Commission Receivable', ...C.recv, sum(C.recv)], ['  (Inc)/Dec in Trade Receivables (sales)', ...C.srecv, sum(C.srecv)], ['  (Inc)/Dec in Short-term Loans & Advances', ...C.stl, sum(C.stl)], ['  (Inc)/Dec in Other Current Assets', ...C.oca, sum(C.oca)],
+    ['  (Inc)/Dec in Commission Receivable', ...C.recv, sum(C.recv)], ...(fdHasOwn(D,R) ? [['  (Inc)/Dec in Trade Receivables (sales)', ...C.srecv, sum(C.srecv)]] : []), ['  (Inc)/Dec in Short-term Loans & Advances', ...C.stl, sum(C.stl)], ['  (Inc)/Dec in Other Current Assets', ...C.oca, sum(C.oca)],
     ['  (Inc)/Dec in Security Deposits', ...C.sec, sum(C.sec)], ['  Inc/(Dec) in Trade Payables', ...C.pay, sum(C.pay)], ['  Inc/(Dec) in Provision for Tax', ...C.ptax, sum(C.ptax)],
     ['  Inc/(Dec) in Other Current Liabilities', ...C.ocl, sum(C.ocl)], ['B. Cash Flow from Investing Activities', ...C.inv, sum(C.inv)], ['  Purchase of Fixed Assets', ...C.fa, sum(C.fa)],
     ['  Loans Given to Manufacturers', ...C.lg, sum(C.lg)], ['  Loan Repayments from Manufacturers', ...C.lr, sum(C.lr)], ['C. Cash Flow from Financing Activities', ...C.finc, sum(C.finc)],
