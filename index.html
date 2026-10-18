@@ -2084,7 +2084,7 @@ function fdTab(t, keep){
   if (t === 'asm'){
     // Brands from Brands & SKUs, linked to one section only (commission on the manufacturer's bill, or sales on own bill)
     const BL = D.brand_links || (D.brand_links = {});
-    const brandsOf = c => ((window.M && M.brands) || []).filter(b => b.category_id === c && b.is_active !== false).sort((x,y)=>String(x.name).localeCompare(String(y.name)));
+    const brandsOf = c => ((typeof M !== 'undefined' && M && M.brands) || []).filter(b => b.category_id === c && b.is_active !== false).sort((x,y)=>String(x.name).localeCompare(String(y.name)));
     const brandCell = (c, sec) => {
       const all = brandsOf(c), mine = all.filter(b => BL[b.id] === sec), free = all.filter(b => !BL[b.id]);
       const otherSec = sec === 'comm' ? 'own' : 'comm';
