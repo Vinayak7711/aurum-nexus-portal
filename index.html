@@ -890,7 +890,7 @@ async function dirDel(sch, tbl, id, label, afterB64){
       note = '\n\nThis will also remove attached records:\n' + prev.map(x=>'  • ' + x.count + ' in ' + x.table).join('\n');
     }
   } catch(e){ /* preview is best-effort */ }
-  if (!confirm('Delete ' + (label||'this entry') + '?' + note + '\n\nIt goes to Recently deleted (Control Panel) for 30 days, where a Director can put it back.')) return;
+  if (!confirm('Delete ' + (label||'this entry') + '?' + note + '\n\nIt goes to Recently deleted (Control Panel) for 30 days, where a Director can put it back (or it clears itself after the set number of days).')) return;
   const { error } = await db.schema('app').rpc('dir_delete', { p_schema: sch, p_table: tbl, p_id: id });
   if (error){ alert('Could not delete: ' + error.message); return; }
   let aj=''; try { aj = decodeURIComponent(escape(atob(afterB64||''))); } catch(e){ aj=''; }
@@ -1129,7 +1129,7 @@ async function openAdmin(){
   renderDeletedBin();
 }
 /* ---- Recently deleted: every Director delete is kept for 30 days and can be put back ---- */
-const BIN_NAMES = { 'sales.vendors':'Vendor', 'sales.parties':'Party (distributor / vendor)', 'sales.orders':'Sales order', 'sales.brands':'Brand', 'sales.skus':'SKU',
+const BIN_NAMES = { 'sales.vendors':'Vendor', 'sales.parties':'Party (distributor / vendor)', 'sales.orders':'Sales order', 'sales.brands':'Brand', 'sales.skus':'SKU', 'sales.retailers':'Retailer', 'sales.field_visits':'Field visit', 'app.contacts':'Contact',
   'mfg.purchase_orders':'Purchase order', 'mfg.rm_receipts':'RM receipt', 'mfg.rm_inspections':'Receipt & QC record', 'mfg.rm_requests':'RM request', 'mfg.rm_items':'RM item', 'mfg.rm_issues':'RM issue', 'mfg.po_dispatches':'Dispatch',
   'acct.entries':'Bank ledger entry', 'acct.expenses':'Expense', 'acct.petty_cash':'Petty cash entry', 'acct.vendor_payments':'Vendor payment', 'acct.vendor_pay_requests':'Vendor payment request',
   'acct.salary_slips':'Salary slip', 'acct.advances':'Advance', 'acct.assets':'Asset', 'acct.tds_deductions':'TDS record', 'acct.mmc_txns':'MMC ledger line', 'acct.bank_accounts':'Bank account', 'adm.users':'User', 'adm.people':'Person' };
@@ -1137,22 +1137,50 @@ function binName(t){ return BIN_NAMES[t] || (t||'').split('.').pop().replace(/_/
 async function renderDeletedBin(){
   const box = $('bin-box'); if (!box) return;
   box.innerHTML = '';
-  if (!isDir()) return;
+  if (!isDir()) return;   // Director only — the database refuses everyone else as well
   const { data, error } = await db.schema('app').rpc('deleted_batches');
   if (error){ box.innerHTML = `<p style="font-size:12px;color:#b3261e;margin-top:18px;">Recently deleted could not be loaded: ${esc(error.message)}</p>`; return; }
   const rows = data || [];
+  let st = { retention_days: 30, rows: 0, batches: rows.length };
+  try { const { data: s } = await db.schema('app').rpc('bin_settings'); if (s) st = s; } catch(e){}
+  const keep = Number(st.retention_days) || 30;
   const when = ts => { const d = new Date(ts); return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) + ' ' + d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}); };
-  const left = ts => Math.max(0, 30 - Math.floor((Date.now() - new Date(ts).getTime()) / 86400000));
+  const left = ts => Math.max(0, keep - Math.floor((Date.now() - new Date(ts).getTime()) / 86400000));
   box.innerHTML = `
-    <h3 style="margin:22px 0 6px;font-size:15px;">🗑 Recently deleted <span style="font-weight:normal;font-size:12px;color:#777">— last 30 days</span></h3>
-    <p style="font-size:12px;color:#666;margin:0 0 8px;">Everything a Director deletes anywhere in the ERP lands here with all the records that went with it (a vendor with its purchase orders, a payment with its bank entry…). Press <b>Restore</b> to put it back exactly as it was. After 30 days it is cleared for good.</p>
+    <h3 style="margin:22px 0 6px;font-size:15px;">🗑 Recently deleted <span style="font-weight:normal;font-size:12px;color:#777">— last ${keep} days · Director only</span></h3>
+    <p style="font-size:12px;color:#666;margin:0 0 8px;">Everything a Director deletes anywhere in the ERP lands here with all the records that went with it (a vendor with its purchase orders, a payment with its bank entry…). Press <b>Restore</b> to put it back exactly as it was. Anything not restored is cleared automatically after ${keep} days, or sooner when you empty the bin.</p>
+    <div class="card" style="padding:10px 14px;margin:0 0 10px;display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">
+      <div><label style="margin:0 0 4px;">Auto-delete after</label><div style="display:flex;gap:6px;align-items:center;"><input type="number" id="bin-days" min="1" max="365" value="${keep}" style="width:90px;"> <span style="font-size:12px;color:#555">days</span> <button class="mini" onclick="binSetDays()">Save</button></div></div>
+      <div style="font-size:11.5px;color:#777;flex:1;min-width:220px;">Runs every night (2:20 am) and whenever this page opens. ${st.rows} record${st.rows===1?'':'s'} in ${st.batches} delete${st.batches===1?'':'s'} in the bin now.</div>
+      <div><button class="mini" style="color:#c0392b;border-color:#c0392b;padding:8px 14px;" onclick="binEmpty()" ${rows.length?'':'disabled'}>🗑 Empty recycle bin</button></div>
+    </div>
     <div class="table-scroll"><table><thead><tr><th>Deleted</th><th>By</th><th>What</th><th>Records</th><th>Days left</th><th></th></tr></thead><tbody>
-    ${rows.map(r => { const done = r.rows_restored >= r.rows_total; return `<tr${done?' class="inactive"':''}><td style="white-space:nowrap">${when(r.deleted_at)}</td><td>${esc(r.deleted_by||'—')}</td>` +
+    ${rows.map(r => { const done = r.rows_restored >= r.rows_total; const lbl = esc(r.label||'').replace(/'/g,'&#39;'); return `<tr${done?' class="inactive"':''}><td style="white-space:nowrap">${when(r.deleted_at)}</td><td>${esc(r.deleted_by||'—')}</td>` +
       `<td><b>${esc(binName(r.root_table))}</b> — ${esc(r.label||'')}<br><span style="font-size:10.5px;color:#777">${esc((r.tables||'').split(', ').map(binName).join(', '))}</span></td>` +
       `<td class="amount">${r.rows_total}${r.rows_restored?' <span style="font-size:10.5px;color:#1a7f37">('+r.rows_restored+' restored)</span>':''}</td><td class="amount">${left(r.deleted_at)}</td>` +
-      `<td style="white-space:nowrap">${done ? '<span style="font-size:11.5px;color:#1a7f37">✔ restored</span>' : `<button class="mini" onclick="binRestore('${r.batch_id}','${esc(r.label||'').replace(/'/g,'&#39;')}')">↩ Restore</button>`}</td></tr>`; }).join('')
-      || '<tr><td colspan="6" style="color:#777">Nothing deleted in the last 30 days.</td></tr>'}
+      `<td style="white-space:nowrap">${done ? '<span style="font-size:11.5px;color:#1a7f37">✔ restored</span> ' : `<button class="mini" onclick="binRestore('${r.batch_id}','${lbl}')">↩ Restore</button> `}<button class="mini" style="color:#c0392b;border-color:#c0392b;" title="Remove from the bin — cannot be restored after this" onclick="binPurge('${r.batch_id}','${lbl}')">✕ Delete for good</button></td></tr>`; }).join('')
+      || `<tr><td colspan="6" style="color:#777">Nothing deleted in the last ${keep} days.</td></tr>`}
     </tbody></table></div>`;
+}
+async function binSetDays(){
+  const d = Number($('bin-days') && $('bin-days').value);
+  if (!(d >= 1 && d <= 365)){ alert('Keep deleted records between 1 and 365 days.'); return; }
+  const { error } = await db.schema('app').rpc('bin_set_retention', { p_days: d });
+  if (error){ alert('Could not save: ' + error.message); return; }
+  renderDeletedBin();
+}
+async function binEmpty(){
+  if (!confirm('Empty the recycle bin?\n\nEvery record in it is deleted permanently and can no longer be restored.')) return;
+  const { data, error } = await db.schema('app').rpc('bin_empty');
+  if (error){ alert('Could not empty the bin: ' + error.message); return; }
+  alert('Recycle bin emptied — ' + data + ' record' + (data===1?'':'s') + ' deleted permanently.');
+  renderDeletedBin();
+}
+async function binPurge(batch, label){
+  if (!confirm('Delete ' + (label||'this record') + ' for good?\n\nIt is removed from the bin and can no longer be restored.')) return;
+  const { error } = await db.schema('app').rpc('bin_purge', { p_batch: batch });
+  if (error){ alert('Could not delete: ' + error.message); return; }
+  renderDeletedBin();
 }
 async function binRestore(batch, label){
   if (!confirm('Put back ' + (label||'this record') + ' and everything that was deleted with it?')) return;
