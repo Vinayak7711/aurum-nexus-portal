@@ -2322,7 +2322,9 @@ async function fdFillPL(){
   const E = await fdErpData();
   const v = {}; [...FD_EXP, ...FD_OI].forEach(([k]) => v[k] = fdZ4()); const src = {};
   const add = (k, q, amt, label) => { if (q < 0 || !k) return; v[k][q] += amt; src[k] = src[k] || {}; src[k][label] = (src[k][label]||0) + amt; };
-  (E.exps||[]).forEach(x => { if (x.petty_id) return; add(fdExpLine(x.category), fdQOf(FD.fy, x.exp_date), Number(x.amount||0), 'Expenses: ' + (x.category||'—')); });
+  // months that have salary slips take their salary from the slips; a "Salary & wages" expense in such a month is the same money paid out, so it is skipped
+  const slipMonths = new Set((E.slips||[]).filter(s=>['APPROVED','PAID'].includes(s.status)).map(s=>s.period));
+  (E.exps||[]).forEach(x => { if (x.petty_id) return; if (/salary|wage/i.test(x.category||'') && slipMonths.has(String(x.exp_date).slice(0,7))) return; add(fdExpLine(x.category), fdQOf(FD.fy, x.exp_date), Number(x.amount||0), 'Expenses: ' + (x.category||'—')); });
   (E.petty||[]).forEach(p => { if (p.entry_kind !== 'EXPENSE') return; const q = fdQOf(FD.fy, p.expense_date); if (q < 0) return; add(fdExpLine(p.category), q, Number(p.amount||0), 'Petty cash: ' + (p.category||'—')); });
   (E.slips||[]).forEach(s => { if (!['APPROVED','PAID'].includes(s.status)) return; add('emp', fdQOf(FD.fy, s.period + '-15'), Number(s.gross||0), 'Salary slips (gross)'); });
   (E.avl||[]).forEach(a => { if (a.kind !== 'DEPRECIATION') return; add('dep', fdQOf(FD.fy, a.as_on), Math.abs(Number(a.change_amount||0)), 'Asset register depreciation'); });
@@ -2331,7 +2333,7 @@ async function fdFillPL(){
   const box = $('fd-fill');
   box.innerHTML = `<div class="card" style="margin-top:12px;padding:12px 14px;border:1px solid #1a5fb4;">
     <h4 class="sec" style="margin-top:0;">⇣ From the ERP — ${fdFYLabel(FD.fy)}</h4>
-    <p style="font-size:12px;color:#555;margin:0 0 6px;">Built from Accounting → Expenses, approved Petty cash, approved/paid Salary slips, the Asset register and bank receipts marked "interest". Capital purchases and TDS are left out. Tick the lines to copy into the P&amp;L, then press <b>Save</b>.</p>
+    <p style="font-size:12px;color:#555;margin:0 0 6px;">Built from Accounting → Expenses, approved Petty cash, approved/paid Salary slips, the Asset register and bank receipts marked "interest". Capital purchases and TDS are left out; in a month that has salary slips, a "Salary &amp; wages" expense entry is not counted twice. Tick the lines to copy into the P&amp;L, then press <b>Save</b>.</p>
     <div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th></th><th>Line</th>${FD_Q.map(q=>`<th class="amount">${q}</th>`).join('')}<th>Sources</th></tr></thead><tbody>
     ${lines.map(([k,l])=>{ const has = v[k].some(x=>x); return `<tr><td><input type="checkbox" class="fd-fillchk" value="${k}" ${has?'checked':''}></td><td>${l}<br><span style="font-size:11px;color:#999">now: ${D_now(k)}</span></td>${v[k].map(x=>`<td class="amount">${inr(x)}</td>`).join('')}
       <td style="font-size:11px;color:#777;max-width:260px;">${Object.entries(src[k]||{}).map(([s,a])=>esc(s)+' ₹'+inr(a)).join('<br>')||'—'}</td></tr>`; }).join('')}
