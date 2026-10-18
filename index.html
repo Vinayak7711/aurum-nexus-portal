@@ -2480,10 +2480,10 @@ async function fdFillPL(){
   const add = (k, q, amt, label) => { if (q < 0 || !k) return; v[k] = v[k] || fdZ4(); v[k][q] += amt; src[k] = src[k] || {}; src[k][label] = (src[k][label]||0) + amt; };
   // months that have salary slips take their salary from the slips; a "Salary & wages" expense in such a month is the same money paid out, so it is skipped
   const slipMonths = new Set((E.slips||[]).filter(s=>['APPROVED','PAID'].includes(s.status)).map(s=>s.period));
-  (E.exps||[]).forEach(x => { if (x.petty_id || !x.category) return; if (/salary|wage/i.test(x.category||'') && slipMonths.has(String(x.exp_date).slice(0,7))) return; add(x.category, fdQOf(FD.fy, x.exp_date), Number(x.amount||0), 'Expenses: ' + x.category); });
-  (E.petty||[]).forEach(p => { if (p.entry_kind !== 'EXPENSE') return; const q = fdQOf(FD.fy, p.expense_date); if (q < 0) return; add('Petty cash — ' + (p.category||'Other'), q, Number(p.amount||0), 'Petty cash: ' + (p.category||'Other')); });
+  (E.exps||[]).forEach(x => { if (x.petty_id || !x.category) return; if (/salary|wage/i.test(x.category||'') && slipMonths.has(String(x.exp_date).slice(0,7))) return; add('H:' + x.category, fdQOf(FD.fy, x.exp_date), Number(x.amount||0), 'Expenses: ' + x.category); });
+  (E.petty||[]).forEach(p => { if (p.entry_kind !== 'EXPENSE') return; const q = fdQOf(FD.fy, p.expense_date); if (q < 0) return; add('H:Petty cash — ' + (p.category||'Other'), q, Number(p.amount||0), 'Petty cash: ' + (p.category||'Other')); });
   const salHead = fdExpHeads(FD.data, E).find(h => /salary|wage/i.test(h)) || 'Salary & wages';
-  (E.slips||[]).forEach(s => { if (!['APPROVED','PAID'].includes(s.status)) return; add(salHead, fdQOf(FD.fy, s.period + '-15'), Number(s.gross||0), 'Salary slips (gross)'); });
+  (E.slips||[]).forEach(s => { if (!['APPROVED','PAID'].includes(s.status)) return; add('H:' + salHead, fdQOf(FD.fy, s.period + '-15'), Number(s.gross||0), 'Salary slips (gross)'); });
   (E.avl||[]).forEach(a => { if (a.kind !== 'DEPRECIATION') return; add('dep', fdQOf(FD.fy, a.as_on), Math.abs(Number(a.change_amount||0)), 'Asset register depreciation'); });
   (E.ents||[]).forEach(e => { if (e.kind !== 'BANK_IN' || !/interest/i.test(e.narration||'')) return; add('interest', fdQOf(FD.fy, e.entry_date), Number(e.amount||0), 'Bank receipts marked "interest"'); });
   const lines = [...FD_OI.map(([k,l])=>[k,l]), ...fdExpHeads(FD.data, E).map(h=>['H:'+h, h]), ['dep','Depreciation & Amortisation']];
