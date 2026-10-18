@@ -1862,7 +1862,7 @@ function fdDefaults(fy){
   const pl = {}; [...FD_EXP, ...FD_OI].forEach(([k]) => pl[k] = fdZ4()); pl.dividend = fdZ4();
   const bs = {}; FD_BSIN.forEach(([k]) => bs[k] = fdN4());
   return { company: 'Aurum Spirits India LTD', tax_rate: 0.2517, face_value: 10, shares_issued: 0,
-    comm, opening, sales, comm_received: fdZ4(), own, ownq, sales_received: fdZ4(), shareholders: [], loans: [], pl, bs };
+    comm, opening, sales, comm_received: fdZ4(), own, ownq, sales_received: fdZ4(), brand_links: {}, shareholders: [], loans: [], pl, bs };
 }
 // fill any missing keys from defaults, so older records keep working
 function fdMerge(def, d){
@@ -1980,6 +1980,7 @@ async function openFinDash(fy){
   if (!fdCan('view')){ alert('The Financial Dashboard is open to the Director and to people the Director has given access in the Control Panel.'); return; }
   FD.fy = fy || FD.fy || fdCurFY();
   show('findash');
+  try { await loadMasters(); } catch(e){}
   await fdLoad();
   fdTab(FD.tab || 'ov');
 }
@@ -2081,6 +2082,21 @@ function fdTab(t, keep){
     return;
   }
   if (t === 'asm'){
+    // Brands from Brands & SKUs, linked to one section only (commission on the manufacturer's bill, or sales on own bill)
+    const BL = D.brand_links || (D.brand_links = {});
+    const brandsOf = c => ((window.M && M.brands) || []).filter(b => b.category_id === c && b.is_active !== false).sort((x,y)=>String(x.name).localeCompare(String(y.name)));
+    const brandCell = (c, sec) => {
+      const all = brandsOf(c), mine = all.filter(b => BL[b.id] === sec), free = all.filter(b => !BL[b.id]);
+      const otherSec = sec === 'comm' ? 'own' : 'comm';
+      const elsewhere = all.filter(b => BL[b.id] === otherSec).length;
+      return `<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;max-width:260px;">
+        ${mine.map(b=>`<span style="display:inline-flex;align-items:center;gap:4px;background:#eef3fb;border:1px solid #c9d8f0;border-radius:12px;padding:2px 8px;font-size:11.5px;color:#1c2455;">${esc(b.name)}${ed?`<a href="#" title="Unlink" onclick="fdBrandLink('${b.id}',null);return false;" style="color:#b3261e;text-decoration:none;font-weight:700;">×</a>`:''}</span>`).join('')}
+        ${!mine.length ? '<span style="font-size:11.5px;color:#999">no brand linked</span>' : ''}
+        ${ed && free.length ? `<select onchange="if(this.value){fdBrandLink(this.value,'${sec}');}" style="padding:3px 4px;font-size:11.5px;"><option value="">+ Link brand…</option>${free.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select>` : ''}
+        ${ed && !free.length && elsewhere ? `<span style="font-size:11px;color:#999" title="Linked under ${otherSec==='comm'?'Commission':'Sales'}">${elsewhere} in ${otherSec==='comm'?'Commission':'Sales'}</span>` : ''}
+        ${!all.length ? '<span style="font-size:11px;color:#bbb">no brands in this category</span>' : ''}</div>`;
+    };
+    window.__fdBrandCell = brandCell;
     B.innerHTML = `
       <div class="card" style="padding:12px 14px;max-width:760px;"><h4 class="sec" style="margin-top:0;">Company &amp; tax</h4>
         <table><tbody>
@@ -2092,19 +2108,20 @@ function fdTab(t, keep){
         </tbody></table></div>
       <div class="card" style="padding:12px 14px;max-width:760px;margin-top:10px;"><h4 class="sec" style="margin-top:0;">Revenue from operations</h4>
         <p style="font-size:12px;color:#555;margin:0 0 8px;">Two kinds of revenue: <b>Commission</b> on sales made on the manufacturer's bill, and <b>Sales</b> made on the company's own bill. Both flow into the P&amp;L as Revenue from Operations.</p>
+        <p style="font-size:11.5px;color:#777;margin:0 0 8px;">🔗 <b>Brands:</b> link each brand from <b>Brands &amp; SKUs</b> to the section it belongs to. A brand can sit in one section only — unlink it (×) to move it. "Fill from sales orders" on the Revenue tab then sends each brand's orders to its own section.</p>
         <h5 style="margin:6px 0 4px;font-size:13.5px;">1 · Commission — commission rates</h5>
-        <div class="table-scroll"><table><thead><tr><th>Category</th><th>Method</th><th class="amount">Rate</th><th>How commission is calculated</th></tr></thead><tbody>
+        <div class="table-scroll"><table><thead><tr><th>Category</th><th>Method</th><th class="amount">Rate</th><th>How commission is calculated</th><th>Linked brands</th></tr></thead><tbody>
         ${FD_CATS.map(c=>{ const m = D.comm[c]; return `<tr><td><b>${c}</b></td>
           <td>${ed ? `<select data-p="comm.${c}.method" data-k="text" onchange="fdSet(this)" style="padding:5px;font-size:12.5px;"><option value="CASE" ${m.method!=='PCT'?'selected':''}>₹ per Case</option><option value="PCT" ${m.method==='PCT'?'selected':''}>% of Sale Value</option></select>` : (m.method==='PCT'?'% of Sale Value':'₹ per Case')}</td>
           <td class="amount">${m.method==='PCT' ? fdIn(`comm.${c}.rate`, m.rate, {pct:true}) + (ed?' %':'') : fdIn(`comm.${c}.rate`, m.rate) + (ed?' ₹':'')}</td>
-          <td style="font-size:12px;color:#555">${m.method==='PCT' ? 'Rate × Bill Value (₹)' : 'Rate (₹) × Cases sold'}</td></tr>`; }).join('')}
+          <td style="font-size:12px;color:#555">${m.method==='PCT' ? 'Rate × Bill Value (₹)' : 'Rate (₹) × Cases sold'}</td><td>${brandCell(c,'comm')}</td></tr>`; }).join('')}
         </tbody></table></div>
         <h5 style="margin:14px 0 4px;font-size:13.5px;">2 · Sales — on the company's own bill</h5>
-        <div class="table-scroll"><table><thead><tr><th>Category</th><th>Sold on own bill?</th><th class="amount">Cost of goods sold (% of sale value)</th><th>How it is booked</th></tr></thead><tbody>
+        <div class="table-scroll"><table><thead><tr><th>Category</th><th>Sold on own bill?</th><th class="amount">Cost of goods sold (% of sale value)</th><th>How it is booked</th><th>Linked brands</th></tr></thead><tbody>
         ${FD_CATS.map(c=>{ const o = (D.own||{})[c] || {}; const on = o.on !== false; return `<tr><td><b>${c}</b></td>
           <td>${ed ? `<input type="checkbox" data-p="own.${c}.on" data-k="bool" ${on?'checked':''} onchange="fdSet(this)" style="width:auto"> <span style="font-size:12px;">${on?'Yes':'No'}</span>` : (on?'Yes':'No')}</td>
           <td class="amount">${on ? fdIn(`own.${c}.cogs`, o.cogs, {pct:true}) + (ed?' %':'') : '—'}</td>
-          <td style="font-size:12px;color:#555">${on ? 'Sale value → Revenue; sale value × ' + (fdNum(o.cogs)*100).toFixed(1) + '% → Cost of Goods Sold (expense)' : 'Not sold on own bill — no sales entered for this category'}</td></tr>`; }).join('')}
+          <td style="font-size:12px;color:#555">${on ? 'Sale value → Revenue; sale value × ' + (fdNum(o.cogs)*100).toFixed(1) + '% → Cost of Goods Sold (expense)' : 'Not sold on own bill — no sales entered for this category'}</td><td>${brandCell(c,'own')}</td></tr>`; }).join('')}
         </tbody></table></div>
         <p style="font-size:11.5px;color:#777;margin:6px 0 0;">Quarterly cases and values for both go on the <b>Revenue</b> tab. Leave cost of goods at 0% if purchases are already booked under expenses.</p></div>
       <div class="card" style="padding:12px 14px;max-width:760px;margin-top:10px;"><h4 class="sec" style="margin-top:0;">Opening balances (as at 01-Apr-${fdFYStart(FD.fy)})</h4>
@@ -2310,6 +2327,14 @@ function fdRowDel(kind, i){
   FD.data[kind].splice(i, 1); FD.dirty = true; fdSaveBar(); fdTab(FD.tab);
 }
 
+// Link a brand to one section ('comm' = commission on manufacturer's bill, 'own' = sales on own bill), or unlink (null)
+function fdBrandLink(brandId, sec){
+  if (!fdCan('edit')) return;
+  const BL = FD.data.brand_links || (FD.data.brand_links = {});
+  if (sec) BL[brandId] = sec; else delete BL[brandId];
+  FD.dirty = true; fdSaveBar();
+  const y = window.scrollY; fdTab('asm', true); window.scrollTo(0, y);
+}
 /* ---- quarterly bar chart: income / expenses / PAT (3 series, fixed order) ---- */
 function fdChart(R){
   const series = [['Total income', R.totInc, '#2a78d6'], ['Expenses', R.exp, '#eb6834'], ['Profit after tax', R.pat, '#1baf7a']];
@@ -2451,14 +2476,22 @@ async function fdFillSales(target){
   for (let i = 0; i < ords.length; i += 200){ const { data: l } = await S.from('order_lines').select('id, order_id, sku_id, cases').in('order_id', ords.slice(i,i+200).map(o=>o.id)); lines.push(...(l||[])); }
   for (let i = 0; i < lines.length; i += 200){ const { data: v } = await S.from('order_values').select('line_id, amount').in('line_id', lines.slice(i,i+200).map(l=>l.id)); vals.push(...(v||[])); }
   await loadMasters();
-  const catOfSku = id => { const s = (M.skus||[]).find(x=>x.id===id); const b = s && (M.brands||[]).find(x=>x.id===s.brand_id); return b ? b.category_id : null; };
+  const brandOfSku = id => { const s = (M.skus||[]).find(x=>x.id===id); return s ? (M.brands||[]).find(x=>x.id===s.brand_id) : null; };
   const valBy = {}; vals.forEach(v => valBy[v.line_id] = (valBy[v.line_id]||0) + Number(v.amount||0));
-  const out = {}; FD_CATS.forEach(c => out[c] = [0,1,2,3].map(()=>({ cases: 0, bill: 0 }))); let other = 0;
-  lines.forEach(l => { const c = catOfSku(l.sku_id), q = qOf[l.order_id]; if (q < 0) return; if (!out[c]){ other += Number(l.cases||0); return; } out[c][q].cases += Number(l.cases||0); out[c][q].bill += valBy[l.id]||0; });
-  const msg = FD_CATS.map(c => c + ': ' + out[c].map(x=>x.cases).join(' / ') + ' cases').join('\n');
-  if (!confirm('From approved sales orders (cases per quarter):\n\n' + msg + (other ? '\n\n' + other + ' cases in other categories (e.g. FW) are left out.' : '') + '\n\nCopy cases and value into ' + (target==='own' ? 'Sales (own bill)' : 'Commission (manufacturer\'s bill)') + '?')) return;
-  if (target === 'own') FD_CATS.forEach(c => { FD.data.ownq[c] = out[c].map(x=>({ cases: x.cases, value: Math.round(x.bill*100)/100 })); });
-  else FD_CATS.forEach(c => { FD.data.sales[c] = out[c].map(x=>({ cases: x.cases, bill: Math.round(x.bill*100)/100 })); });
+  const BL = FD.data.brand_links || {};
+  // every brand goes to the section it is linked to in Assumptions; brands not linked anywhere go to the section whose button was pressed
+  const mk = () => { const o = {}; FD_CATS.forEach(c => o[c] = [0,1,2,3].map(()=>({ cases: 0, bill: 0 }))); return o; };
+  const out = { comm: mk(), own: mk() }; let other = 0; const unlinked = new Set();
+  lines.forEach(l => { const b = brandOfSku(l.sku_id), c = b && b.category_id, q = qOf[l.order_id]; if (q < 0) return;
+    if (!c || !out.comm[c]){ other += Number(l.cases||0); return; }
+    const sec = BL[b.id] || target; if (!BL[b.id]) unlinked.add(b.name);
+    out[sec][c][q].cases += Number(l.cases||0); out[sec][c][q].bill += valBy[l.id]||0; });
+  const fmt = o => FD_CATS.map(c => '  ' + c + ': ' + o[c].map(x=>x.cases).join(' / ') + ' cases').join('\n');
+  const msg = 'Commission (manufacturer\'s bill):\n' + fmt(out.comm) + '\n\nSales (own bill):\n' + fmt(out.own);
+  if (!confirm('From approved sales orders, routed by the brand links in Assumptions (cases per quarter):\n\n' + msg +
+      (unlinked.size ? '\n\nNot linked to any section (put under ' + (target==='own'?'Sales':'Commission') + '): ' + [...unlinked].join(', ') : '') +
+      (other ? '\n\n' + other + ' cases in other categories (e.g. FW) are left out.' : '') + '\n\nCopy these into the Revenue tab? (Both sections are updated.)')) return;
+  FD_CATS.forEach(c => { FD.data.sales[c] = out.comm[c].map(x=>({ cases: x.cases, bill: Math.round(x.bill*100)/100 })); FD.data.ownq[c] = out.own[c].map(x=>({ cases: x.cases, value: Math.round(x.bill*100)/100 })); });
   FD.dirty = true; fdSaveBar(); fdTab('com');
 }
 async function fdErpSnapshot(){
