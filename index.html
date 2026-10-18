@@ -2410,7 +2410,7 @@ async function fdErpData(){
     safe(A.from('v_bank_balances').select('id, name, opening_balance, balance')),
     safe(A.from('v_entries').select('entry_date, kind, direction, amount, status, bank_account_id, counter_bank_account_id, narration').eq('status','APPROVED').lte('entry_date', to).limit(20000)),
     safe(A.from('petty_cash').select('entry_kind, amount, status, category, expense_date').eq('status','APPROVED').lte('expense_date', to).limit(20000)),
-    safe(A.from('expenses').select('exp_date, category, amount, petty_id').gte('exp_date', from).lte('exp_date', to).limit(20000)),
+    safe(A.from('expenses').select('exp_date, category, amount, bill_amount, petty_id').gte('exp_date', from).lte('exp_date', to).limit(20000)),
     safe(A.from('expenses').select('category').limit(5000)),
     safe(A.from('salary_slips').select('period, gross, status').gte('period', from.slice(0,7)).lte('period', to.slice(0,7))),
     safe(A.from('assets').select('purchase_value, purchase_date, status, disposed_on')),
@@ -2419,6 +2419,9 @@ async function fdErpData(){
   FD.erp = { banks, ents, petty, exps, allExpCats: (allExp||[]).map(x=>x.category), slips, assets, avl };
   return FD.erp;
 }
+// the expense figure of one Accounting expense line: the bill (taxable) amount — TDS deducted from it is still the expense,
+// GST on it is input credit (Purchase Tax). Falls back to the paid amount for lines without a bill amount.
+function fdExpVal(x){ const b = x.bill_amount; return Number((b != null && b !== '' ? b : x.amount) || 0); }
 // ERP cash (all bank accounts + petty cash box) as at a date
 function fdErpCashAt(E, date){
   if (!E.banks || !E.ents) return null;
@@ -2480,7 +2483,7 @@ async function fdFillPL(){
   const add = (k, q, amt, label) => { if (q < 0 || !k) return; v[k] = v[k] || fdZ4(); v[k][q] += amt; src[k] = src[k] || {}; src[k][label] = (src[k][label]||0) + amt; };
   // months that have salary slips take their salary from the slips; a "Salary & wages" expense in such a month is the same money paid out, so it is skipped
   const slipMonths = new Set((E.slips||[]).filter(s=>['APPROVED','PAID'].includes(s.status)).map(s=>s.period));
-  (E.exps||[]).forEach(x => { if (x.petty_id || !x.category) return; if (/salary|wage/i.test(x.category||'') && slipMonths.has(String(x.exp_date).slice(0,7))) return; add('H:' + x.category, fdQOf(FD.fy, x.exp_date), Number(x.amount||0), 'Expenses: ' + x.category); });
+  (E.exps||[]).forEach(x => { if (x.petty_id || !x.category) return; if (/salary|wage/i.test(x.category||'') && slipMonths.has(String(x.exp_date).slice(0,7))) return; add('H:' + x.category, fdQOf(FD.fy, x.exp_date), fdExpVal(x), 'Expenses: ' + x.category); });
   (E.petty||[]).forEach(p => { if (p.entry_kind !== 'EXPENSE') return; const q = fdQOf(FD.fy, p.expense_date); if (q < 0) return; add('H:Petty cash — ' + (p.category||'Other'), q, Number(p.amount||0), 'Petty cash: ' + (p.category||'Other')); });
   const salHead = fdExpHeads(FD.data, E).find(h => /salary|wage/i.test(h)) || 'Salary & wages';
   (E.slips||[]).forEach(s => { if (!['APPROVED','PAID'].includes(s.status)) return; add('H:' + salHead, fdQOf(FD.fy, s.period + '-15'), Number(s.gross||0), 'Salary slips (gross)'); });
@@ -2604,7 +2607,7 @@ async function fdErpSnapshot(){
   const bankNow = E.banks ? E.banks.reduce((s,b)=>s+Number(b.balance||0),0) : null;
   const pettyNow = E.petty ? E.petty.reduce((s,p)=>s+(p.entry_kind==='TOPUP'?1:-1)*Number(p.amount||0),0) : null;
   let expYtd = null;
-  if (E.exps || E.petty){ expYtd = 0; (E.exps||[]).forEach(x=>{ if (!x.petty_id && !/asset|tds/i.test(x.category||'')) expYtd += Number(x.amount||0); });
+  if (E.exps || E.petty){ expYtd = 0; (E.exps||[]).forEach(x=>{ if (!x.petty_id && !/asset|tds/i.test(x.category||'')) expYtd += fdExpVal(x); });
     (E.petty||[]).forEach(p=>{ if (p.entry_kind==='EXPENSE' && fdQOf(FD.fy,p.expense_date)>=0) expYtd += Number(p.amount||0); }); }
   const salYtd = E.slips ? E.slips.filter(s=>['APPROVED','PAID'].includes(s.status)).reduce((s,x)=>s+Number(x.gross||0),0) : null;
   const gbNow = E.assets ? fdGBAt(E, today) : null;
@@ -4869,6 +4872,31 @@ function vnKindBlock(prefix, kind, head){
 function vnKindToggle(prefix){ const k = $(prefix+'-kind').value; $(prefix+'-headwrap').classList.toggle('hidden', k !== 'EXPENSE'); }
 function vnKindRead(prefix){ const k = $(prefix+'-kind') ? $(prefix+'-kind').value : ''; return { vendor_kind: k || null, expense_head: k === 'EXPENSE' ? ($(prefix+'-head').value || null) : null }; }
 function vnKindLabel(v){ if (!v || !v.vendor_kind) return ''; return v.vendor_kind === 'RM' ? '🏭 Raw material supplier' : '🧾 Expense' + (v.expense_head ? ' · ' + esc(v.expense_head) : ''); }
+// vendors with their type / expense head — cached for the Accounting forms and ledgers
+async function acVendorList(){
+  if (window.__enVendors) return window.__enVendors;
+  const { data: vl } = await db.schema('sales').from('vendors').select('id,name,vendor_kind,expense_head').order('name');
+  window.__enVendors = vl || [];
+  return window.__enVendors;
+}
+function acVenTag(v){ if (!v || !v.vendor_kind) return ''; return v.vendor_kind === 'RM' ? ' · 🏭 RM supplier' : ' · 🧾 ' + (v.expense_head || 'Expense vendor'); }
+function acVenOpt(v, sel){ return `<option value="${v.id}"${sel===v.id?' selected':''}>${esc(v.name)}${esc(acVenTag(v))}</option>`; }
+function acVenById(id){ return (window.__enVendors||[]).find(v=>v.id===id) || null; }
+// on an expense line: where it came from, when it belongs to a vendor
+function acExpVenTag(r){
+  if (!r || !r.vendor_id) return '';
+  const led = `<a href="#" style="color:#1a5fb4;" onclick="event.preventDefault();window.acLedType='V:';window.acLedSel='V:${r.vendor_id}';acctTab('ledger')">vendor ledger</a>`;
+  if (r.auto_mirror) return `<br><span style="font-size:10.5px;color:#1a5fb4;">💳 Payment to an expense vendor — booked here under its head · ${led}</span>`;
+  if (r.vendor_payment_id) return `<br><span style="font-size:10.5px;color:#1a5fb4;">💳 Linked to a vendor payment · ${led}</span>`;
+  return `<br><span style="font-size:10.5px;color:#1a5fb4;">🔗 Expense vendor · ${led}</span>`;
+}
+// one line that says what a vendor's type means for the ledgers
+function acVenKindNote(v){
+  if (!v || !v.vendor_kind) return '';
+  if (v.vendor_kind === 'EXPENSE') return `🧾 <b>Expense vendor — ${esc(v.expense_head||'')}</b>: every payment to this vendor is booked under “${esc(v.expense_head||'')}” in Accounting → Expenses and the Expense ledger (TDS deducted on the payment is part of the bill). ` +
+    `<a href="#" onclick="event.preventDefault();window.acLedType='E:';window.acLedSel='E:${esc(v.expense_head||'').replace(/'/g,'&#39;')}';acctTab('ledger')">Open the ${esc(v.expense_head||'')} ledger</a>`;
+  return '🏭 <b>Raw material supplier</b>: purchase bills come from its purchase orders, receipts go into the RM store, and its payments stay in this vendor ledger and Vendor Dues.';
+}
 function vnEdit(id, boxId){
   const v = (window.__vnRows||[]).find(x=>x.id===id);
   if (!v){ alert('Open the Vendors tab again and retry.'); return; }
@@ -4931,7 +4959,19 @@ async function vnEditSave(id){
     if (!error) ({ error } = await S2.from('vendors').update({ status: 'INACTIVE' }).eq('id', id));
   }
   if (error){ say('ve-msg','Save failed: '+error.message,false); return; }
+  window.__enVendors = null;   // vendor lists in Accounting pick up the new type / head
   if (toDist) alert('Saved. '+name+' is now a DISTRIBUTOR — find it in the Party Master distributor list. It will no longer appear in vendor lists for new POs.');
+  else if ((kind.vendor_kind || v.vendor_kind) && (kind.vendor_kind !== v.vendor_kind || kind.expense_head !== v.expense_head)){
+    // say what the type now means for the books
+    try { const { data: ef } = await db.schema('acct').rpc('vendor_kind_effect', { p_vendor: id });
+      if (ef){
+        const np = Number(ef.payments||0), ne = Number(ef.expense_lines||0);
+        if (kind.vendor_kind === 'EXPENSE') alert('Saved. ' + name + ' is an expense vendor under "' + kind.expense_head + '".\n\n' +
+          (np ? np + ' payment' + (np===1?'':'s') + ' to this vendor (₹ ' + inr(ef.payments_amount) + ') now show under "' + kind.expense_head + '" in Accounting → Expenses and the Expense ledger' + (ne > np ? ', along with ' + (ne-np) + ' expense bill' + (ne-np===1?'':'s') + ' already posted to this name' : '') + '.' : 'Every payment to this vendor from now on is booked under "' + kind.expense_head + '" in Accounting → Expenses and the Expense ledger.') +
+          '\n\nThe vendor ledger (Accounting → Ledger → Vendor) still shows the bills and payments themselves.');
+        else if (kind.vendor_kind === 'RM') alert('Saved. ' + name + ' is a raw material supplier — its purchase orders, receipts and payments stay in the Vendor ledger and Vendor Dues' + (v.vendor_kind === 'EXPENSE' ? '; the lines that were booked under "' + (v.expense_head||'') + '" in Expenses have been taken out' : '') + '.');
+      } } catch(e){}
+  }
   const after = window.__vnAfter || "onbTab('vendors')"; window.__vnAfter = null;
   if (after === 'openParties()') { await openParties(); pmShow('v'); } else onbTab('vendors');
 }
@@ -4980,6 +5020,7 @@ async function vnAdd(){
     address: $('vn-address').value.trim()||null, city: $('vn-city').value.trim()||null, state: $('vn-state').value.trim()||null, pincode: $('vn-pincode').value.trim()||null,
     ...vnKindRead('vn'), status: 'ACTIVE', created_by: me.id });
   if (error){ say('vn-msg', error.message, false); return; }
+  window.__enVendors = null;
   onbTab('vendors');
 }
 
@@ -7360,9 +7401,10 @@ async function acctTab(t){
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${exs.length} entr${exs.length===1?'y':'ies'}</h4>
+      ${exs.some(r=>r.auto_mirror)?`<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Shaded lines are payments to vendors marked <b>Expense vendor</b> under this head in Party Master — the payment itself sits in the vendor ledger; TDS deducted on it is shown as part of the bill.</p>`:''}
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Dept</th><th>Paid to / details</th><th class="amount">Bill ₹</th><th class="amount">GST ₹</th><th class="amount">TDS ₹</th><th class="amount">Paid ₹</th><th>Paid from</th><th></th></tr></thead><tbody>
-      ${exs.map(r=>`<tr><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td style="font-size:12px;">${esc(r.dept||'—')}</td>` +
-        `<td>${esc(r.payee||'—')}${allCats?'<br><span style="font-size:11px;color:#0b57d0;font-weight:600;">'+esc(r.category||'')+'</span>':''}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
+      ${exs.map(r=>`<tr${r.auto_mirror?' style="background:#f3f7fd;"':''}><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td style="font-size:12px;">${esc(r.dept||'—')}</td>` +
+        `<td>${esc(r.payee||'—')}${allCats?'<br><span style="font-size:11px;color:#0b57d0;font-weight:600;">'+esc(r.category||'')+'</span>':''}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}${acExpVenTag(r)}</td>` +
         `<td class="amount">${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td>` +
         `<td class="amount" style="color:#1a7f37">${Number(r.gst_amount)>0?inr(r.gst_amount):''}</td>` +
         `<td class="amount" style="color:#b8860b">${Number(r.tds_amount)>0?inr(r.tds_amount):''}</td>` +
@@ -7403,7 +7445,7 @@ async function acctTab(t){
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${docs.length} record${docs.length===1?'':'s'} across ${vendorsAll.length} vendors</h4>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>Vendor</th><th>Doc no.</th><th>Type</th><th>Details</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th></tr></thead><tbody>
       ${docs.map(r=>`<tr><td>${r.doc_date}</td><td><b>${esc(r.vname)}</b></td><td><b>${esc(r.doc_no)}</b></td>` +
-        `<td>${r.kind==='BILL'?'🧾 Purchase bill':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
+        `<td>${r.kind==='BILL'?'🧾 Purchase bill':r.kind==='TDS'?'🧾 TDS deducted':r.kind==='EXPENSE'?'🧾 Expense bill (paid)':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
         `<td class="amount" style="color:#b3261e">${Number(r.billed)?inr(r.billed):''}</td>` +
         `<td class="amount" style="color:#1a7f37">${Number(r.paid)?inr(r.paid):''}</td></tr>`).join('')
         || '<tr><td colspan="7" style="color:#555">No purchase bills or payments in this date range.</td></tr>'}
@@ -7509,16 +7551,18 @@ async function acctTab(t){
       const vidL = sel.slice(2);
       if (!(window.__ledVenNames||{})[vidL]){ try { const { data: vn1 } = await db.schema('sales').from('vendors').select('name').eq('id', vidL).maybeSingle(); window.__ledVenNames = window.__ledVenNames || {}; if (vn1) window.__ledVenNames[vidL] = vn1.name; } catch(e){} }
       const vnameL = (window.__ledVenNames||{})[vidL] || 'Vendor';
+      let venKindL = null; try { const { data: vk } = await db.schema('sales').from('vendors').select('id,name,vendor_kind,expense_head').eq('id', vidL).maybeSingle(); venKindL = vk; } catch(e){}
       const { data: vled, error: vlerr } = await A.rpc('vendor_ledger', { p_vendor: vidL, p_from: window.acLedFrom || null, p_to: window.acLedTo || null });
       if (vlerr){ B.innerHTML = `<div class="msg err">Load failed: ${esc(vlerr.message)}</div>`; return; }
       const docs = vled || [];
       // ids behind each line, for edit / delete
-      const VL = { pay:{}, po:{}, tds:{} };
-      try { const [{ data: vps }, { data: pos }, { data: tds }] = await Promise.all([
+      const VL = { pay:{}, po:{}, tds:{}, exp:{} };
+      try { const [{ data: vps }, { data: pos }, { data: tds }, { data: exs }] = await Promise.all([
           A.from('vendor_payments').select('id, pay_no, entry_id, amount, pay_date, mode, ref_no, remarks').eq('vendor_id', vidL),
           db.schema('mfg').from('purchase_orders').select('id, po_no, status').eq('vendor_id', vidL),
-          A.from('tds_deductions').select('*').eq('vendor_id', vidL) ]);
-        (vps||[]).forEach(x=>VL.pay[x.pay_no]=x); (pos||[]).forEach(x=>VL.po[x.po_no]=x); (tds||[]).forEach(x=>VL.tds[x.tds_no]=x); } catch(e){}
+          A.from('tds_deductions').select('*').eq('vendor_id', vidL),
+          A.from('expenses').select('id, exp_no, category').eq('vendor_id', vidL) ]);
+        (vps||[]).forEach(x=>VL.pay[x.pay_no]=x); (pos||[]).forEach(x=>VL.po[x.po_no]=x); (tds||[]).forEach(x=>VL.tds[x.tds_no]=x); (exs||[]).forEach(x=>VL.exp[x.exp_no]=x); } catch(e){}
       window.__vlIds = VL; window.__vlVendor = vidL;
       const vlAct = r => {
         const b = [];
@@ -7527,6 +7571,8 @@ async function acctTab(t){
           if (isDir()) b.push(`<button class="mini" onclick="vlBillEdit('${p.id}')">✏️ Edit</button>`, `<button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="vlBillDel('${p.id}','${esc(r.doc_no)}')">Delete</button>`); }
         else if (r.kind==='TDS'){ const t = VL.tds[r.doc_no]; if (!t) return '';
           if (isDir()) b.push(`<button class="mini" onclick="vlTdsEdit('${t.id}')">✏️ Edit</button>`, `<button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="vlTdsDel('${t.id}','${esc(r.doc_no)}')">Delete</button>`); }
+        else if (r.kind==='EXPENSE'){ const x = VL.exp[r.doc_no]; if (!x) return '';
+          b.push(`<button class="mini" onclick="acExpVoucher('${x.id}')" title="Print the expense voucher">🖨 Voucher</button>`, `<button class="mini" onclick="window.acLedType='E:';window.acLedSel='E:${esc(x.category||'').replace(/'/g,'&#39;')}';acctTab('ledger')" title="Open the expense ledger of this head">📖 ${esc(x.category||'')}</button>`); }
         else { const p = VL.pay[r.doc_no]; if (!p) return '';
           if (p.entry_id ? canFinApprove() : isDir()) b.push(`<button class="mini" onclick="vlPayEdit('${p.id}')">✏️ Edit</button>`);
           if (isDir()) b.push(`<button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="vlPayDel('${p.id}','${esc(r.doc_no)}')">Delete</button>`); }
@@ -7550,10 +7596,11 @@ async function acctTab(t){
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${docs.length} record${docs.length===1?'':'s'}</h4>
+      ${venKindL && venKindL.vendor_kind ? `<p style="font-size:12px;color:#555;margin:-4px 0 8px;padding:8px 10px;border-radius:8px;background:${venKindL.vendor_kind==='EXPENSE'?'#eef4fb':'#f4faf5'};">${acVenKindNote(venKindL)}</p>` : (isDir()||canPartyWrite()) ? `<p style="font-size:11.5px;color:#999;margin:-4px 0 8px;">Vendor type not set — in Party Master → Vendors → Edit vendor, mark it as a raw material supplier or an expense vendor (with its expense head) and its entries follow that ledger.</p>` : ''}
       <div id="ac-entry-form"></div>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>Doc no.</th><th>Type</th><th>Details</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th></th></tr></thead><tbody>
-      ${docs.map(r=>`<tr><td>${r.doc_date}</td><td><b>${esc(r.doc_no)}</b></td>` +
-        `<td>${r.kind==='BILL'?'🧾 Purchase bill':r.kind==='TDS'?'🧾 TDS deducted':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
+      ${docs.map(r=>`<tr${r.kind==='EXPENSE'?' style="background:#fbfaf4;"':''}><td>${r.doc_date}</td><td><b>${esc(r.doc_no)}</b></td>` +
+        `<td>${r.kind==='BILL'?'🧾 Purchase bill':r.kind==='TDS'?'🧾 TDS deducted':r.kind==='EXPENSE'?'🧾 Expense bill (paid)':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
         `<td class="amount" style="color:#b3261e">${Number(r.billed)?inr(r.billed):''}</td>` +
         `<td class="amount" style="color:#1a7f37">${Number(r.paid)?inr(r.paid):''}</td><td style="white-space:nowrap">${vlAct(r)}</td></tr>`).join('')
         || '<tr><td colspan="7" style="color:#777">No purchase bills or payments for this vendor in this date range.</td></tr>'}
@@ -7782,6 +7829,7 @@ async function acctTab(t){
   }
 
   if (t === 'vdues'){
+    await acVendorList();
     const [{ data: rows, error }, payRes, reqRes] = await Promise.all([
       A.rpc('vendor_outstanding'),
       A.from('vendor_payments').select('*').order('created_at',{ascending:false}).limit(100),
@@ -7835,7 +7883,7 @@ async function acctTab(t){
       <p style="font-size:12px;color:#777;margin:0 0 8px;">The moment a PO is placed on a vendor, its bill amount (incl. tax) lands here as that party's due. Payments are entered from the <b>New Entry</b> tab (Bank ledger entry &amp; vendor payment, or Payment via MMC); an entry by Accounts goes for approval and the approving authority releases it with the UTR or cheque details. Only then is the payment recorded, the outstanding reduced and the bank ledger posted. This tab is for viewing only.</p>
       <h4 class="sec">Party-wise outstanding</h4>
       <div class="table-scroll"><table><thead><tr><th>Vendor</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th class="amount"><b>Outstanding ₹</b></th><th class="amount">Due now ₹<br><span style="font-weight:400;font-size:10px;">as per material received</span></th><th></th></tr></thead><tbody>
-      ${vds.map(r=>{ const dd = dueBy[r.vendor_id] || {}; const dn = Number(dd.due_now||0); return `<tr><td><b>${esc(r.vendor)}</b> <span style="color:#999;font-size:11px;">(${esc(r.code)})</span></td>` +
+      ${vds.map(r=>{ const dd = dueBy[r.vendor_id] || {}; const dn = Number(dd.due_now||0); const vk = acVenById(r.vendor_id); return `<tr><td><b>${esc(r.vendor)}</b> <span style="color:#999;font-size:11px;">(${esc(r.code)})</span>${vk&&vk.vendor_kind?'<br><span style="font-size:10.5px;color:'+(vk.vendor_kind==='EXPENSE'?'#1a5fb4':'#1a7f37')+';">'+esc(acVenTag(vk).replace(/^ · /,''))+'</span>':''}</td>` +
         `<td class="amount">${inr(r.billed)}</td><td class="amount" style="color:#1a7f37">${inr(r.paid)}</td>` +
         `<td class="amount" style="font-weight:700;color:${Number(r.outstanding)>0?'#b3261e':'#1a7f37'}">${inr(r.outstanding)}</td>` +
         `<td class="amount" style="font-weight:700;color:${dn>0.005?'#b3261e':'#777'}">${dn>0.005?inr(dn):'—'}${Number(dd.not_yet_due||0)>0.005?'<br><span style="font-weight:400;font-size:10.5px;color:#777">₹ '+inr(dd.not_yet_due)+' not yet due'+(dd.next_due_date?' · next '+dd.next_due_date:'')+'</span>':''}${!dd.vendor_id?'<br><span style="font-weight:400;font-size:10.5px;color:#999">nothing received</span>':''}</td>` +
@@ -7903,7 +7951,7 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">GST in selection</div><div style="font-size:20px;font-weight:700;color:#1a7f37">₹ ${inr(selGst)}</div></div>
         <div class="card" style="flex:1;min-width:170px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">TDS in selection</div><div style="font-size:20px;font-weight:700;color:#b8860b">₹ ${inr(selTds)}</div></div>
       </div>
-      <p style="font-size:12px;color:#777;margin:0 0 8px;">This tab is for viewing. Expenses are entered from <b>New Entry → Business expense</b>.</p>
+      <p style="font-size:12px;color:#777;margin:0 0 8px;">This tab is for viewing. Expenses are entered from <b>New Entry → Business expense</b>. Payments to a vendor marked <b>Expense vendor</b> in Party Master appear here automatically under that vendor’s expense head (shaded lines) — they are deleted from the vendor ledger, not from here.</p>
       <div class="card" style="padding:12px;margin-bottom:12px;">
         <div class="row2c">
           <div><label>Expense head</label><select id="exf-cat" onchange="window.acExpCat=this.value;acctTab('exp')"><option value="">— all heads —</option>${cats.map(c=>`<option${window.acExpCat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div>
@@ -7927,14 +7975,14 @@ async function acctTab(t){
       </div>
       <h4 class="sec" style="margin-top:14px;">Expense book${filt?' — filtered':''} · ${window.acExpFrom||'beginning'} → ${window.acExpTo||'today'} · ${rows.length} entr${rows.length===1?'y':'ies'}</h4>
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / details</th><th class="amount">Bill ₹</th><th class="amount">GST ₹</th><th class="amount">TDS ₹</th><th class="amount">Paid ₹</th><th>Paid from</th><th></th></tr></thead><tbody>
-      ${rows.map(r=>`<tr><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td>${esc(r.category)}${r.dept?'<br><span style="font-size:10.5px;color:#7a6a4a">'+esc(r.dept)+'</span>':''}</td>` +
-        `<td>${esc(r.payee||'—')}${r.invoice_no?'<br><span style="font-size:10.5px;color:#7a6a4a">inv '+esc(r.invoice_no)+'</span>':''}${(r.items&&r.items.length)?'<br><span style="font-size:10.5px;color:#0b57d0">'+r.items.length+' item'+(r.items.length===1?'':'s')+'</span>':''}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}</td>` +
+      ${rows.map(r=>`<tr${r.auto_mirror?' style="background:#f3f7fd;"':''}><td><b>${esc(r.exp_no)}</b></td><td>${r.exp_date}</td><td>${esc(r.category)}${r.dept?'<br><span style="font-size:10.5px;color:#7a6a4a">'+esc(r.dept)+'</span>':''}</td>` +
+        `<td>${esc(r.payee||'—')}${r.invoice_no?'<br><span style="font-size:10.5px;color:#7a6a4a">inv '+esc(r.invoice_no)+'</span>':''}${(r.items&&r.items.length)?'<br><span style="font-size:10.5px;color:#0b57d0">'+r.items.length+' item'+(r.items.length===1?'':'s')+'</span>':''}${r.description?'<br><span style="font-size:11px;color:#777">'+esc(r.description)+'</span>':''}${acExpVenTag(r)}</td>` +
         `<td class="amount">${inr(r.bill_amount!=null?r.bill_amount:r.amount)}</td>` +
         `<td class="amount" style="color:#1a7f37">${Number(r.gst_amount)>0?inr(r.gst_amount)+'<br><span style="font-size:10.5px;">'+((r.items&&r.items.length)?'(itemised)':'('+Number(r.gst_rate)+'%'+(r.hsn_code?' · HSN '+esc(r.hsn_code):'')+')')+'</span>':'—'}</td>` +
         `<td class="amount" style="color:#b8860b">${Number(r.tds_amount)>0?inr(r.tds_amount)+'<br><span style="font-size:10.5px;">('+Number(r.tds_rate)+'%)</span>':'—'}</td>` +
         `<td class="amount" style="font-weight:600;color:#b3261e">${inr(r.amount)}</td>` +
         `<td>${r.mode==='ADVANCE'?'👤 Staff advance <span style="font-size:10.5px;color:#7a6a4a;font-weight:600;">('+esc((window.__exAdvNo||{})[r.advance_id]||'settled')+')</span>':(r.mode!=='PETTY'?'🏦 '+esc(r.bank?.name||'Bank')+' <span style="font-size:10px;color:#999">('+esc(r.mode)+')</span>':'💵 Petty cash '+(r.petty?'<span style="font-size:10.5px;color:'+(r.petty.status==='APPROVED'?'#1a7f37':(r.petty.status==='REJECTED'?'#b3261e':'#b8860b'))+';font-weight:600;">('+esc(r.petty.pc_no)+' · '+acLbl(r.petty.status)+')</span>':''))}</td>` +
-        `<td style="white-space:nowrap"><button class="mini" onclick="acExpVoucher('${r.id}')" title="Print or save a PDF voucher for your physical records">🖨 Voucher</button> ${dirDelBtn('acct','expenses', r.id, r.exp_no, "acctTab('exp')")}</td></tr>`).join('')
+        `<td style="white-space:nowrap"><button class="mini" onclick="acExpVoucher('${r.id}')" title="Print or save a PDF voucher for your physical records">🖨 Voucher</button> ${r.auto_mirror ? (isDir()?`<button class="mini" title="This line is the vendor payment itself — delete it from the vendor ledger" onclick="window.acLedType='V:';window.acLedSel='V:${r.vendor_id}';acctTab('ledger')">📖 Vendor ledger</button>`:'') : dirDelBtn('acct','expenses', r.id, r.exp_no, "acctTab('exp')")}</td></tr>`).join('')
         || '<tr><td colspan="10" style="color:#777">No expenses in this selection.</td></tr>'}
       ${rows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${inr(rows.reduce((s,r)=>s+Number(r.bill_amount!=null?r.bill_amount:r.amount),0))}</td><td class="amount">${inr(selGst)}</td><td class="amount">${inr(selTds)}</td><td class="amount">${inr(selTot)}</td><td colspan="2"></td></tr>`:''}
       </tbody></table></div>`;
@@ -8437,9 +8485,11 @@ async function acLinkForm(id){
   const A2 = db.schema('acct');
   const { data: e } = await A2.from('v_entries').select('*').eq('id', id).single();
   if (!e){ alert('Could not open that entry.'); return; }
-  if (!window.__enVendors){ const { data: vl } = await db.schema('sales').from('vendors').select('id,name').order('name'); window.__enVendors = vl || []; }
-  const vOpts = '<option value="">— none / not for a particular vendor —</option>' + window.__enVendors.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('');
-  const CATS = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Salary & wages','Bank charges & interest','Security deposit','Loan repayment','Miscellaneous'];
+  await acVendorList(); await vnLoadHeads();
+  const vOpts = '<option value="">— none / not for a particular vendor —</option>' + window.__enVendors.map(v=>acVenOpt(v)).join('');
+  const expVen = window.__enVendors.filter(v=>v.vendor_kind==='EXPENSE');
+  const evOpts = '<option value="">— not a registered expense vendor —</option>' + expVen.map(v=>acVenOpt(v)).join('');
+  const CATS = [...new Set([...['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Salary & wages','Bank charges & interest','Security deposit','Loan repayment','Miscellaneous'], ...(window.__vnHeadsExtra||[])])].sort((a,b)=>a.localeCompare(b));
   const old = $('ac-link-box'); if (old) old.remove();
   const host = $('ac-entry-form') || $('acct-body');
   const box = document.createElement('div'); box.id = 'ac-link-box';
@@ -8456,9 +8506,12 @@ async function acLinkForm(id){
       </select>
       <div id="lk-vendor-wrap"><div class="row2c" style="margin-top:8px;">
         <div><label id="lk-vendor-lbl">For vendor (optional)</label><select id="lk-vendor" onchange="acLinkLoadPos()">${vOpts}</select></div>
-        <div><label>Against PO</label><select id="lk-po"><option value="">— none —</option></select></div></div></div>
-      <div id="lk-exp-wrap" style="display:none"><div class="row2c" style="margin-top:8px;">
-        <div><label>Expense head *</label><select id="lk-cat">${CATS.map(c=>`<option>${c}</option>`).join('')}<option value="__other">Other (type below)</option></select><input type="text" id="lk-cat-other" placeholder="Type the head" style="display:none;margin-top:6px;"></div>
+        <div><label>Against PO</label><select id="lk-po"><option value="">— none —</option></select></div></div>
+        <div id="lk-vendor-note" style="font-size:11.5px;color:#1a5fb4;margin:4px 0 0;"></div></div>
+      <div id="lk-exp-wrap" style="display:none">
+        <div style="margin-top:8px;"><label>Paid to a registered expense vendor? <span style="font-weight:normal;color:#888;font-size:11px;">— picks the vendor’s head and shows the entry in that vendor’s ledger too</span></label><select id="lk-exp-vendor" onchange="acLinkExpVendor()">${evOpts}</select></div>
+        <div class="row2c" style="margin-top:8px;">
+        <div><label>Expense head *</label><select id="lk-cat">${CATS.map(c=>`<option>${esc(c)}</option>`).join('')}<option value="__other">Other (type below)</option></select><input type="text" id="lk-cat-other" placeholder="Type the head" style="display:none;margin-top:6px;"></div>
         <div><label>Department</label><select id="lk-dept"><option value="">—</option><option>Director</option><option>Admin</option><option>Sales</option><option>Production</option><option>Accounts</option></select></div></div></div>
       <label style="margin-top:8px;">Note (optional)</label><input type="text" id="lk-note" placeholder="e.g. security deposit, advance against PO">
       <div style="display:flex;gap:8px;margin-top:10px;">
@@ -8484,9 +8537,19 @@ function acLinkHeadChange(){
   $('lk-vendor-lbl').textContent = h === 'VENDOR' ? 'Vendor *' : 'For vendor (optional)';
   acLinkLoadPos();
 }
+// expense-vendor picked on the "Expense head" side: the vendor's head is the head
+function acLinkExpVendor(){
+  const v = acVenById($('lk-exp-vendor')?.value); if (!v) return;
+  const sel = $('lk-cat'); if (!sel) return;
+  if (v.expense_head && ![...sel.options].some(o=>o.value===v.expense_head)){ const o = document.createElement('option'); o.text = v.expense_head; sel.insertBefore(o, sel.firstChild); }
+  if (v.expense_head) sel.value = v.expense_head;
+  $('lk-cat-other').style.display = 'none';
+}
 async function acLinkLoadPos(){
   const h = $('lk-head')?.value, vsel = $('lk-vendor'), psel = $('lk-po'); if (!vsel || !psel) return;
   psel.innerHTML = '<option value="">— none —</option>';
+  { const n = $('lk-vendor-note'), v = acVenById(vsel.value);
+    if (n) n.innerHTML = (h !== 'EXPENSE' && v && v.vendor_kind === 'EXPENSE') ? `🧾 ${esc(v.name)} is an expense vendor — this payment will also be booked under <b>${esc(v.expense_head||'')}</b> in Expenses / the Expense ledger.` : (h !== 'EXPENSE' && v && v.vendor_kind === 'RM') ? '🏭 Raw material supplier — the payment goes against its purchase bills.' : ''; }
   if (!vsel.value || h === 'EXPENSE') return;
   const { data: pos } = await db.schema('acct').rpc(h === 'MMC' ? 'mmc_po_options' : 'vendor_po_options', { p_vendor: vsel.value });
   psel.innerHTML += (pos||[]).map(p=>`<option value="${p.po_id}">${esc(p.po_no)} · ${p.order_date} · ₹${inr(p.po_value)}</option>`).join('');
@@ -8497,7 +8560,9 @@ async function acLinkSave(id){
   if (h === 'MMC') res = await db.schema('acct').rpc('link_entry_mmc', { p_entry: id, p_vendor: vid, p_po: po, p_note: note });
   else if (h === 'VENDOR'){ if (!vid){ say('lk-msg','Choose the vendor.',false); return; } res = await db.schema('acct').rpc('link_entry_vendor', { p_entry: id, p_vendor: vid, p_po: po, p_note: note }); }
   else { const cat = $('lk-cat').value === '__other' ? $('lk-cat-other').value.trim() : $('lk-cat').value; if (!cat){ say('lk-msg','Type the expense head.',false); return; }
-    res = await db.schema('acct').rpc('link_entry_expense', { p_entry: id, p_category: cat, p_dept: $('lk-dept').value || null, p_payee: null, p_desc: note }); }
+    const ev = acVenById($('lk-exp-vendor')?.value);
+    res = await db.schema('acct').rpc('link_entry_expense', { p_entry: id, p_category: cat, p_dept: $('lk-dept').value || null, p_payee: ev ? ev.name : null, p_desc: note });
+    if (!res.error && ev && res.data){ const r2 = await db.schema('acct').rpc('expense_set_vendor', { p_exp: res.data, p_vendor: ev.id }); if (r2.error) alert('Linked under ' + cat + ', but the vendor could not be noted on it: ' + r2.error.message); } }
   if (res.error){ say('lk-msg','Could not link: '+res.error.message,false); return; }
   acctTab('ledger');
 }
@@ -8547,7 +8612,10 @@ async function acExpForm(fromKind){
   if (!canFinEdit()){ host.innerHTML = '<p style="color:#777">Expenses are entered by Accounts (finance) or the Director.</p>'; return; }
   if (!acBanks.length){ try { const b = await A.from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   window.__exItems = [];
-  const CATS_EXP = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'];
+  await acVendorList(); await vnLoadHeads();
+  const CATS_EXP = [...new Set([...['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'], ...(window.__vnHeadsExtra||[])])].sort((a,b)=>a.localeCompare(b));
+  const expVen = (window.__enVendors||[]).filter(v=>v.vendor_kind==='EXPENSE');
+  const exVenOpts = '<option value="">— not from a registered expense vendor (type the payee below) —</option>' + expVen.map(v=>acVenOpt(v)).join('');
   const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   let advOpen = [];
   try { const { data: av } = await A.from('v_advances').select('*').eq('adv_type','EXPENSE').eq('status','APPROVED').order('given_on');
@@ -8556,8 +8624,10 @@ async function acExpForm(fromKind){
   const advOpts = advOpen.map(a=>`<option value="${a.id}">${esc(a.adv_no)} — ${esc(a.staff_name||'')} — outstanding ₹ ${inr(a.outstanding)}</option>`).join('');
   host.innerHTML = `<div class="card" style="margin-bottom:14px;max-width:720px;">${fromKind?`<div style="margin-bottom:6px;"><button class="btn ghost sm" onclick="acEntryForm()">‹ Back to bank ledger entry &amp; vendor payment</button></div>`:''}<h2 style="font-size:15px;">Post an expense</h2>
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there.</p>
+        <div style="margin-bottom:8px;"><label>Expense vendor <span style="font-weight:normal;color:#888;font-size:11px;">— from Party Master (vendor type “Expense vendor”); picks its expense head and shows the bill in that vendor’s ledger too</span></label><select id="ex-vendor" onchange="acExpVendorPick()">${exVenOpts}</select>
+          <div id="ex-vendor-note" style="font-size:11.5px;color:#1a5fb4;margin-top:4px;"></div></div>
         <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
-          <div><label>Category *</label><select id="ex-cat" onchange="acExpCatChange()">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}<option value="__ADV__">⇄ Settle staff expense advance (bills against advance given)</option></select></div></div>
+          <div><label>Category *</label><select id="ex-cat" onchange="acExpCatChange()">${CATS_EXP.map(c=>`<option>${esc(c)}</option>`).join('')}<option value="__ADV__">⇄ Settle staff expense advance (bills against advance given)</option></select></div></div>
         <div id="ex-adv-wrap" class="hidden" style="margin-top:8px;border:1px solid #e6d9b0;background:#fdf9ee;border-radius:8px;padding:10px;">
           <div class="row2c"><div><label>Advance to settle *</label><select id="ex-adv" onchange="acExpAdvPick()">${advOpts || '<option value="">— no open expense advances —</option>'}</select></div>
             <div><label>Expense head *</label><select id="ex-head">${CATS_EXP.map(c=>`<option>${c}</option>`).join('')}</select></div></div>
@@ -8622,6 +8692,18 @@ function acExpCalc(){
     (gst > 0 ? ` + GST ₹ ${inr(gst)}` : '') + (rate > 0 ? ` − TDS ${rate}% (₹ ${inr(tds)})` : '') +
     ` = <b>Paid ₹ ${inr(paid)}</b> <span style="color:#999">· GST & TDS show in Purchase Tax</span>`;
 }
+// an expense vendor chosen on the expense form: its head becomes the category, its name the payee
+function acExpVendorPick(){
+  const v = acVenById($('ex-vendor')?.value), n = $('ex-vendor-note');
+  if (!v){ if (n) n.innerHTML = ''; return; }
+  const sel = $('ex-cat');
+  if (sel && v.expense_head){
+    if (![...sel.options].some(o=>o.value===v.expense_head)){ const o = document.createElement('option'); o.text = v.expense_head; sel.insertBefore(o, sel.firstChild); }
+    sel.value = v.expense_head; acExpCatChange();
+  }
+  if ($('ex-payee') && !$('ex-payee').value.trim()) $('ex-payee').value = v.name;
+  if (n) n.innerHTML = `🧾 Booked under <b>${esc(v.expense_head||'')}</b> and shown in ${esc(v.name)}’s vendor ledger.`;
+}
 function acExpCatChange(){
   const adv = $('ex-cat') && $('ex-cat').value === '__ADV__';
   if ($('ex-adv-wrap')) $('ex-adv-wrap').classList.toggle('hidden', !adv);
@@ -8664,15 +8746,17 @@ async function acExpenseAdd(){
     return;
   }
   const mode = $('ex-mode').value;
-  const { error } = await db.schema('acct').rpc('expense_add', {
+  const exVen = acVenById($('ex-vendor')?.value);
+  const { data: newId, error } = await db.schema('acct').rpc('expense_add', {
     p_date: $('ex-date').value || null, p_category: $('ex-cat').value,
     p_bill: null, p_amount: null, p_tds_rate: rate, p_hsn: null, p_gst_rate: 0,
     p_dept: $('ex-dept')?.value || null,
     p_invoice: $('ex-inv')?.value.trim() || null,
     p_items: items,
-    p_payee: $('ex-payee').value.trim() || null, p_desc: $('ex-desc').value.trim() || null,
+    p_payee: $('ex-payee').value.trim() || (exVen ? exVen.name : null), p_desc: $('ex-desc').value.trim() || null,
     p_mode: mode, p_bank: mode !== 'PETTY' ? $('ex-bank').value : null });
   if (error){ say('ex-msg','Could not record: '+error.message,false); return; }
+  if (exVen && newId){ const r2 = await db.schema('acct').rpc('expense_set_vendor', { p_exp: newId, p_vendor: exVen.id }); if (r2.error) alert('Expense recorded, but the vendor could not be noted on it: ' + r2.error.message); }
   window.__exItems = [];
   acctTab('exp');
 }
@@ -8816,8 +8900,8 @@ async function acEntryForm(kind){
   if (!acBanks.length){ try { const b = await db.schema('acct').from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
-  if (!window.__enVendors){ const { data: vl } = await db.schema('sales').from('vendors').select('id,name').order('name'); window.__enVendors = vl || []; }
-  const vendorOpts = '<option value="">— choose the vendor —</option>' + window.__enVendors.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('');
+  await acVendorList();
+  const vendorOpts = '<option value="">— choose the vendor —</option>' + window.__enVendors.map(v=>acVenOpt(v)).join('');
   $('ac-entry-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Bank ledger entry &amp; vendor payment</h3>
     <div class="row2c"><div><label>Kind *</label><select id="en-kind" onchange="acKindChange()">
@@ -8907,6 +8991,8 @@ async function acEnLoadPos(){
   const k = $('en-kind')?.value, vsel = $('en-vendor'), psel = $('en-po'); if (!vsel || !psel) return;
   psel.innerHTML = '<option value="">— none / not yet —</option>'; window.__enPos = []; $('en-ponote').textContent = '';
   if (!vsel.value) return;
+  { const v = acVenById(vsel.value);
+    if (v && v.vendor_kind === 'EXPENSE') $('en-ponote').innerHTML = `🧾 <b>${esc(v.name)}</b> is an expense vendor — this payment is also booked under <b>${esc(v.expense_head||'')}</b> in Accounting → Expenses / the Expense ledger (TDS deducted here counts as part of that bill).`; }
   const isMmc = (k !== 'VPAY' && k !== 'PAYMENT');
   const { data: pos, error } = await db.schema('acct').rpc(isMmc ? 'mmc_po_options' : 'vendor_po_options', { p_vendor: vsel.value });
   if (error){ say('en-msg','Could not load the purchase orders: '+error.message,false); return; }
@@ -8915,7 +9001,7 @@ async function acEnLoadPos(){
     const left = isMmc ? (k==='MMC_PAY' ? Number(p.po_value)-Number(p.to_mmc) : Number(p.to_mmc)-Number(p.by_mmc)) : Number(p.po_value)-Number(p.paid||0)-Number(p.requested||0);
     return `<option value="${p.po_id}">${esc(p.po_no)} · ${p.order_date} · value ₹${inr(p.po_value)}${isMmc ? ' · sent to MMC ₹'+inr(p.to_mmc)+' · MMC paid ₹'+inr(p.by_mmc) : (left>0 ? ' · left ₹'+inr(left) : ' · fully covered')}</option>`;
   }).join('');
-  if (!window.__enPos.length) $('en-ponote').textContent = isMmc ? 'This vendor has no purchase order marked "billed & delivered to MMC" — you can still record the amount without a PO.' : 'This vendor has no purchase order yet — you can still record the payment without a PO.';
+  if (!window.__enPos.length && !$('en-ponote').innerHTML) $('en-ponote').textContent = isMmc ? 'This vendor has no purchase order marked "billed & delivered to MMC" — you can still record the amount without a PO.' : 'This vendor has no purchase order yet — you can still record the payment without a PO.';
 }
 function acEnTdsToggle(){
   const on = $('en-tds-on').checked; $('en-tds-box').style.display = on ? '' : 'none';
@@ -9287,13 +9373,14 @@ async function acDelEntry(id){
   ]);
   const linked = [...(ex.data||[]).map(x=>'expense '+x.exp_no), ...(vp.data||[]).map(x=>'vendor payment '+x.pay_no)];
   if (linked.length && !confirm('This ledger entry belongs to ' + linked.join(' and ') + '. Deleting it will also delete that record (with its bill items). Continue?')) return;
-  if ((ex.data||[]).length){
-    const { error: e1 } = await A2.from('expenses').delete().eq('entry_id', id);
-    if (e1){ alert('Could not delete the linked expense: '+e1.message); return; }
-  }
+  // the vendor payment goes first: an expense line booked from it is removed with it
   if ((vp.data||[]).length){
     const { error: e2 } = await A2.from('vendor_payments').delete().eq('entry_id', id);
     if (e2){ alert('Could not delete the linked vendor payment: '+e2.message); return; }
+  }
+  if ((ex.data||[]).length){
+    const { error: e1 } = await A2.from('expenses').delete().eq('entry_id', id);
+    if (e1){ alert('Could not delete the linked expense: '+e1.message); return; }
   }
   const { error } = await db.schema('acct').rpc('delete_entry', { p_entry: id });
   if (error){ alert('Could not delete: '+error.message); return; }
