@@ -479,39 +479,6 @@
       <p>Everyone in one place — vendors, distributors, employees and your personal contacts. Add details, sort them into groups, and never miss a birthday or anniversary.</p></div>
     <div id="contacts-body"></div>
   </section>
-  <!-- ============ WHATSAPP BUSINESS ============ -->
-  <section id="view-wa" class="hidden">
-    <div class="crumb" onclick="waLeave();show('home')">&larr; Back to Home</div>
-    <div class="welcome"><h2>WhatsApp Business Messenger</h2>
-      <p>Read and reply to WhatsApp messages sent to the company's WhatsApp Business number — distributors, vendors, retailers and customers — from inside the ERP. Every message is kept here, whoever answers it.</p></div>
-    <div id="wa-setup"></div>
-    <div id="wa-body" style="display:flex;gap:14px;align-items:stretch;min-height:520px;">
-      <div id="wa-left" style="flex:0 0 320px;max-width:45%;display:flex;flex-direction:column;border:1px solid #e6e0d2;border-radius:10px;background:#fff;overflow:hidden;">
-        <div style="padding:8px;border-bottom:1px solid #eee;display:flex;gap:6px;">
-          <input type="text" id="wa-search" placeholder="Search name, number, vendor / distributor / retailer" oninput="waRenderList()" style="flex:1;padding:8px 10px;font-size:13px;">
-          <button class="btn gold sm" onclick="waNewChat()" title="Start a new conversation">＋</button>
-        </div>
-        <div id="wa-list" style="flex:1;overflow:auto;"></div>
-      </div>
-      <div id="wa-right" style="flex:1;display:flex;flex-direction:column;border:1px solid #e6e0d2;border-radius:10px;background:#efe7dc;overflow:hidden;min-width:0;">
-        <div id="wa-head" style="padding:10px 14px;background:#fff;border-bottom:1px solid #eee;font-size:13px;color:#777;">Pick a conversation on the left, or start a new one.</div>
-        <div id="wa-thread" style="flex:1;overflow:auto;padding:14px;"></div>
-        <div id="wa-compose" class="hidden" style="background:#fff;border-top:1px solid #eee;padding:10px;">
-          <div id="wa-window" style="font-size:11.5px;color:#7a6a4a;margin-bottom:6px;"></div>
-          <div style="display:flex;gap:8px;align-items:flex-end;">
-            <textarea id="wa-text" rows="2" placeholder="Type a message… (Enter to send, Shift+Enter for a new line)" style="flex:1;font-family:inherit;font-size:13.5px;padding:9px 11px;border:1px solid #ddd;border-radius:10px;resize:vertical;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();waSend();}"></textarea>
-            <input type="file" id="wa-file" accept="image/jpeg,image/png,application/pdf" style="display:none;" onchange="waFilePick()">
-            <button class="btn ghost sm" id="wa-attach-btn" onclick="$('wa-file').click()" title="Send a photo (JPG/PNG) or a PDF" style="padding:11px 13px;">📎</button>
-            <button class="btn gold sm" id="wa-send-btn" onclick="waSend()" style="padding:11px 16px;">Send</button>
-            <button class="btn ghost sm" id="wa-wame-btn" onclick="waOpenChat()" title="Open this number in your own WhatsApp with the message ready — works for any number, and you can attach anything">💬 WhatsApp</button>
-          </div>
-          <div id="wa-file-name" style="font-size:12px;color:#7a6a4a;margin-top:6px;"></div>
-          <div id="wa-tpl"></div>
-          <div id="wa-msg"></div>
-        </div>
-      </div>
-    </div>
-  </section>
   <section id="view-docs" class="hidden">
     <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
     <div class="welcome"><h2>Documents</h2>
@@ -647,7 +614,7 @@
       <div><label>Contact person</label><input type="text" id="pe-contact"></div>
       <div><label>Phone</label><input type="text" id="pe-phone"></div>
     </div>
-    <label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="pe-whatsapp" placeholder="WhatsApp number (mobile, e.g. 98765 43210)">
+    <label>WhatsApp number</label><input type="text" id="pe-whatsapp" placeholder="WhatsApp number (mobile, e.g. 98765 43210)">
     <label>Email</label><input type="text" id="pe-email">
     <label>Postal address (for communication)</label><textarea id="pe-address" rows="2" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;" placeholder="Building, street, area"></textarea>
     <label>PIN code</label><input type="text" id="pe-pincode" maxlength="6" placeholder="6-digit PIN">
@@ -738,7 +705,6 @@ const MODULES = [
   {key:'comp',    ico:'📜', name:'License & Renewal',desc:'Licences, permits, registrations, expiries', live:true,  open:()=>openComp()},
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
   {key:'contacts',ico:'📇', name:'Contact Book',     desc:'Vendors, distributors, staff & personal contacts — with birthday reminders', live:true, open:()=>openContacts()},
-  {key:'wa',      ico:'💬', name:'WhatsApp Business', desc:'Read & reply to WhatsApp messages on the company number', live:true, waOnly:true, open:()=>openWa()},
   {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles, permissions & Recently deleted',             live:true,  dirOnly:true, open:()=>openAdmin()},
 ];
 const PERM_ACTIONS = ['view','add','edit','admin'];
@@ -833,7 +799,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts','wa','findash'])
+  for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts','findash'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
   if (view === 'home' && me && me.id) refreshMe();   // pick up permission changes the Director made since sign-in
@@ -1029,7 +995,6 @@ function drawModules(){
     if (m.mktOnly && !(isDir() || me?.permissions_json?.mkt?.view || me?.permissions_json?.mkt?.edit || inAccountsJS()) && !forced) continue;
     if (m.fieldOnly && !(isDir() || window.__hasReports) && !forced) continue;
     if (m.docsOnly && !(isDir() || me?.permissions_json?.docs?.view || me?.permissions_json?.docs?.add || me?.permissions_json?.docs?.edit) && !forced) continue;
-    if (m.waOnly && !waCan('view') && !forced) continue;
     if (!modTicked(m.key) && !forced) continue;   // the Director has left every box for this module unticked
     if (!secAnyAllowed(m.key)) continue;   // every tab inside was taken away — hide the module itself
     const el = document.createElement('div');
@@ -3795,420 +3760,6 @@ async function saveMcActual(structId){
   if (error) say('rates-msg', error.message, false);
 }
 
-/* ================= WHATSAPP BUSINESS MESSENGER =================
-   Inbound messages arrive through the wa-webhook edge function into wa.messages;
-   replies go out through wa-api (which holds the Meta token — never the browser). */
-function waCan(a){ const p = (me && me.permissions_json && me.permissions_json.wa) || {}; return isDir() || !!(p[a] || p.admin); }
-function waCanSend(){ return isDir() || waCan('add') || waCan('edit'); }
-let waContacts = [], waCur = null, waTimer = null, waMsgs = [], waStatus = null, waCfg = {};
-// "app" mode: messages go out from the office number's own WhatsApp (phone + WhatsApp Web); the ERP opens
-// the chat with the text ready and keeps a log. "api" mode: Meta Cloud API (not permitted for this business in India).
-async function waLoadCfg(){ try { const { data } = await db.schema('wa').from('settings').select('key,value'); waCfg = {}; (data||[]).forEach(r=>waCfg[r.key]=r.value||''); } catch(e){ /* not readable for this role */ } }
-function waAppMode(){ return (waCfg.WA_MODE||'app') === 'app'; }
-function waAppNumber(){ return String(waCfg.WA_APP_NUMBER||'').replace(/\D/g,''); }
-function waAppBanner(){
-  const n = waAppNumber();
-  const pretty = n ? '+' + n.replace(/^(\d{2})(\d{5})(\d{5})$/, '$1 $2 $3') : '(office number not set)';
-  $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">
-    <b>Sending from the office WhatsApp ${esc(pretty)}</b> — press <b>Send</b> on any chat and the message opens in WhatsApp, ready to go; photos and files are attached there. Replies arrive on the office phone / WhatsApp Web.
-    <a class="mini" href="https://web.whatsapp.com" target="_blank" rel="noopener" style="text-decoration:none;margin-left:6px;">Open WhatsApp Web</a>
-    <span style="font-size:11.5px;color:#555;display:block;margin-top:4px;">First time on this computer: open WhatsApp Web and scan the QR code from the office phone (WhatsApp → Linked devices). After that it stays linked.</span>
-    ${isDir()?'<div id="wa-settings-box" style="margin-top:8px;"></div>':''}</div>`;
-  if (isDir()) waSettingsForm();
-}
-async function waApi(payload){
-  const t = await mailToken();
-  const r = await fetch(FN_BASE + '/wa-api', { method:'POST', headers:{ 'content-type':'application/json', authorization:'Bearer '+t }, body: JSON.stringify(payload) });
-  const j = await r.json().catch(()=>({ error:'Bad response from WhatsApp service' }));
-  if (!r.ok) throw new Error(j.error || 'WhatsApp service failed');
-  return j;
-}
-async function openWa(){
-  show('wa');
-  $('wa-setup').innerHTML = '';
-  await waLoadCfg();
-  await waLoadContacts();
-  waRenderList();
-  if (waAppMode()) waAppBanner(); else if (isDir()) waSetupCheck();
-  // keep the inbox fresh while it is open
-  clearInterval(waTimer); waTimer = setInterval(waPoll, 8000);
-}
-function waLeave(){ clearInterval(waTimer); waTimer = null; }
-async function waSetupCheck(){
-  try {
-    waStatus = await waApi({ action:'status' });
-    const c = waStatus.config || {};
-    const ok = c.token && c.phone_id && c.verify_token;
-    const ph = waStatus.phone;
-    const d = waStatus.drive || {};
-    const connectBtn = `<button class="mini" onclick="waDriveConnect()">${d.ok?'Re-connect':'Connect'} Google Drive</button>`;
-    const driveLine = d.ok
-      ? `☁ Google Drive connected — media and monthly archives go to <b>${esc(d.root||'WhatsApp data')}</b> <button class="mini" onclick="waArchive()">Archive finished months to Drive now</button> ${connectBtn}`
-      : `<span style="color:#b3261e;">☁ Google Drive not connected — ${esc(d.error||'')}.</span> ${(!waStatus.oauth_client||!waStatus.oauth_secret)?'<span style="font-size:11.5px;color:#777;">(needs the Google OAuth client ID in WhatsApp settings and the GDRIVE_OAUTH_CLIENT_SECRET secret in Supabase)</span>':connectBtn} <span style="font-size:11.5px;color:#777;">Sign in with <b>vinayaks7711@gmail.com</b> — files go only to the folder “WhatsApp data” in that Drive.</span>`;
-    // Meta can block the whole developer account / business portfolio — then every call fails and
-    // nothing sends or arrives. Say so plainly instead of hiding it in one grey line.
-    if (/blocked|restricted|confirm/i.test(String(waStatus.error || ''))){
-      $('wa-setup').innerHTML = `<div class="card" style="margin-bottom:12px;border-color:#b3261e;background:#fff5f5;">
-        <h4 class="sec" style="margin:0 0 6px;color:#b3261e;">Meta has blocked this WhatsApp app — nothing can be sent or received</h4>
-        <p style="font-size:13px;margin:0 0 8px;">Every request to WhatsApp comes back with: <b>${esc(waStatus.error)}</b>. This is a block on the Facebook/Meta account that owns the WhatsApp app — not a fault in the ERP. While it lasts, text, photos, PDFs, templates <i>and</i> incoming replies are all stopped.</p>
-        <p style="font-size:13px;margin:0 0 8px;"><b>How to clear it (only the Director can, in Meta):</b></p>
-        <ol style="font-size:13px;margin:0 0 8px 18px;padding:0;">
-          <li>Open <a href="https://developers.facebook.com/" target="_blank" rel="noopener">developers.facebook.com</a> in the browser where the Meta account is signed in.</li>
-          <li>If it says <i>“Account confirmation needed — we've noticed unusual activity on this developer account”</i>, press <b>Confirm Account</b> and finish Meta's identity check (phone / ID). Nothing here needs to change.</li>
-          <li>Also open <a href="https://business.facebook.com/business-support-home" target="_blank" rel="noopener">Business Support Home</a> and clear or appeal any restriction shown on the business portfolio.</li>
-          <li>When Meta says access is restored, come back and press <b>Re-check</b> — sending starts working again on its own.</li>
-        </ol>
-        <p style="font-size:12.5px;margin:0;color:#555;">Settings in the ERP are fine: token, Phone number ID, Business Account ID and verify token are all set. <button class="mini" onclick="waSetupCheck()">Re-check</button></p>
-        <p style="font-size:12px;margin:8px 0 0;">${driveLine}</p><div id="wa-arch-msg"></div></div>`;
-      return;
-    }
-    if (ok && ph && !waStatus.error){
-      const digits = String(ph.display_phone_number||'').replace(/\D/g,'');
-      const meLink = digits ? `https://wa.me/${digits}` : '';
-      $('wa-setup').innerHTML = `<div class="msg ok" style="margin-bottom:10px;">Connected to WhatsApp Business number <b>${esc(ph.display_phone_number||'')}</b> (${esc(ph.verified_name||'')}) · quality: ${esc(ph.quality_rating||'—')}${c.waba_id?'':' · set the WhatsApp Business Account ID in settings to send templates'}<br><span style="font-size:12px;">${driveLine}</span>
-        ${meLink?`<div style="margin-top:8px;padding:8px 10px;background:#fff;border:1px solid #cfe3d3;border-radius:8px;font-size:12.5px;color:#1a1a2e;"><b>How anyone can reach you:</b> share <a href="${meLink}" target="_blank" rel="noopener"><b>${esc(meLink)}</b></a> <button class="mini" onclick="navigator.clipboard&&navigator.clipboard.writeText('${meLink}');say('wa-arch-msg','Link copied.',true)">Copy</button><br><span style="color:#555;">WhatsApp's rule: once a person has sent you <i>any</i> message, you can reply with text, photos and PDFs freely for 24 hours (each reply of theirs restarts the clock). Until they write first, only an approved opening message can go out — and Meta limits those. So put this link on invoices, the website and your signature; a single “Hi” from them opens the door.</span></div>`:''}
-        <div id="wa-arch-msg"></div></div>`;
-      return;
-    }
-    const miss = ['token','phone_id','verify_token','waba_id','drive'].filter(k=>!c[k]).map(k=>({token:'WA_TOKEN secret',phone_id:'Phone number ID',verify_token:'Verify token',waba_id:'WhatsApp Business Account ID',drive:'GDRIVE_SA_JSON secret'})[k]);
-    $('wa-setup').innerHTML = `<div class="card" style="margin-bottom:12px;border-color:#e6c97a;background:#fdf9ee;">
-      <h2 style="font-size:15px;">Connect the WhatsApp Business account <span style="font-weight:normal;font-size:12px;color:#777">(Director only — once)</span></h2>
-      <ol style="font-size:12.5px;color:#444;margin:6px 0 0 18px;line-height:1.6;">
-        <li>In Meta Business → WhatsApp → <b>API setup</b>, note the <b>Phone number ID</b> and the <b>WhatsApp Business Account ID</b>, and create a permanent <b>System User access token</b> with <i>whatsapp_business_messaging</i> and <i>whatsapp_business_management</i>.</li>
-        <li>Enter the <b>Phone number ID</b>, <b>WhatsApp Business Account ID</b> and a <b>verify token</b> (any word you choose) in the box below — they are saved in the ERP. Only the access token is a real secret: in Supabase → Edge Functions → <b>Secrets</b> add <code>WA_TOKEN</code> (optional <code>WA_APP_SECRET</code> from the Meta app for signature checks).</li>
-        <li>In the Meta app → WhatsApp → <b>Configuration → Webhook</b>: Callback URL <code>${esc(waStatus.webhook_url||'')}</code>, Verify token = the same word as below, then subscribe to the <b>messages</b> field.</li>
-        <li><b>Google Drive storage — vinayaks7711@gmail.com</b> (WhatsApp files never sit on the ERP server): in <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud → APIs &amp; Services → Credentials</a> create an <b>OAuth client ID</b> (Web application) with redirect URI <code>${esc((waStatus.webhook_url||'').replace('wa-webhook','wa-gdrive-auth'))}?action=callback</code>; put the <b>Client ID</b> in the settings box below and the <b>Client secret</b> in Supabase as <code>GDRIVE_OAUTH_CLIENT_SECRET</code>. Then press <b>Connect Google Drive</b> and sign in as vinayaks7711@gmail.com. Photos, documents and voice notes go to <i>WhatsApp data / Media / &lt;number&gt;</i> as they arrive and each finished month's chat to <i>WhatsApp data / Archive</i> — nowhere else.</li>
-        <li>Give your staff access in Control Panel → Users → <b>💬 WhatsApp Business</b> row (view = read only; add/edit = may reply).</li>
-      </ol>
-      <div id="wa-settings-box" style="margin-top:8px;"></div>
-      <p style="font-size:12px;margin:6px 0 0;">${driveLine}</p><div id="wa-arch-msg"></div>
-      <p style="font-size:12px;margin:8px 0 0;color:${miss.length?'#b3261e':'#1a7f37'};">${miss.length ? 'Not set yet: ' + miss.join(', ') : 'Secrets are set'}${waStatus.error ? ' · WhatsApp says: ' + esc(waStatus.error) : ''} <button class="mini" onclick="waSetupCheck()">Re-check</button></p></div>`;
-    waSettingsForm();
-  } catch(e){ $('wa-setup').innerHTML = `<div class="msg err">Could not reach the WhatsApp service: ${esc(e.message)}</div>`; }
-}
-// Director-editable WhatsApp settings (non-secret): stored in wa.settings, read by the edge functions
-const WA_SETTING_KEYS = [['WA_APP_NUMBER','Office WhatsApp number','with country code, digits only — e.g. 917977193329'],['WA_PHONE_ID','Phone number ID','from Meta app → WhatsApp → API Setup'],['WA_WABA_ID','WhatsApp Business Account ID','same page'],['WA_VERIFY_TOKEN','Verify token','any word; type the same in Meta → Configuration → Webhook'],['GDRIVE_OAUTH_CLIENT_ID','Google OAuth client ID','Google Cloud → Credentials (ends with .apps.googleusercontent.com)']];
-async function waSettingsForm(){
-  const box = $('wa-settings-box'); if (!box || !isDir()) return;
-  let cur = {};
-  try { const { data } = await db.schema('wa').from('settings').select('key,value'); (data||[]).forEach(r=>cur[r.key]=r.value||''); } catch(e){ /* table may be hidden */ }
-  box.innerHTML = `<div style="border:1px solid #e5e0d0;border-radius:8px;padding:10px;background:#fff;">
-    <b style="font-size:13px;">WhatsApp settings</b> <span style="font-size:11px;color:#777;">(saved in the ERP — no Supabase needed)</span>
-    <div style="display:grid;grid-template-columns:220px 1fr;gap:6px 10px;align-items:center;margin-top:8px;font-size:12.5px;">
-      <label for="was-WA_MODE">How messages are sent<br><span style="font-size:11px;color:#888;">app = office phone's WhatsApp via WhatsApp Web (recommended)</span></label>
-      <select id="was-WA_MODE"><option value="app" ${(cur.WA_MODE||'app')==='app'?'selected':''}>Office WhatsApp app (WhatsApp Web)</option><option value="api" ${cur.WA_MODE==='api'?'selected':''}>Meta Cloud API (test number)</option></select>
-      ${WA_SETTING_KEYS.map(([k,l,h])=>`<label for="was-${k}">${l}<br><span style="font-size:11px;color:#888;">${h}</span></label><input id="was-${k}" value="${esc(cur[k]||'')}" style="font-family:monospace;">`).join('')}
-    </div>
-    <div style="margin-top:8px;"><button class="mini" onclick="waSettingsSave()">Save settings</button> <span id="was-msg" style="font-size:12px;"></span></div></div>`;
-}
-async function waDriveConnect(){
-  const t = (await db.auth.getSession()).data.session?.access_token;
-  if (!t){ alert('Sign in first'); return; }
-  location.href = FN_BASE + '/wa-gdrive-auth?action=start&t=' + encodeURIComponent(t);
-}
-async function waSettingsSave(){
-  try {
-    for (const [k] of WA_SETTING_KEYS){
-      const { error } = await db.schema('wa').rpc('set_setting', { p_key:k, p_value: $('was-'+k).value.trim() });
-      if (error) throw error;
-    }
-    if ($('was-WA_MODE')){ const { error } = await db.schema('wa').rpc('set_setting', { p_key:'WA_MODE', p_value: $('was-WA_MODE').value }); if (error) throw error; }
-    say('was-msg', 'Saved.', true);
-    await waLoadCfg();
-    if (waAppMode()) waAppBanner(); else await waSetupCheck();
-  } catch(e){ say('was-msg', e.message, false); }
-}
-async function waArchive(){
-  if (!isDir()) return;
-  const prune = confirm('Write every finished month\'s WhatsApp messages to Google Drive → WhatsApp data / Archive (JSON + CSV)?\n\nPress OK to archive only.\nPress Cancel to stop.');
-  if (!prune) return;
-  const trim = confirm('Also remove archived messages older than 90 days from the ERP database (they stay in Drive)?\n\nOK = yes, trim the ERP copy · Cancel = keep everything in the ERP as well');
-  const box = $('wa-arch-msg'); if (box) box.innerHTML = '<span style="font-size:12px;color:#777;">Archiving…</span>';
-  try {
-    const j = await waApi({ action:'archive', prune: trim, keep_days: 90 });
-    const done = (j.archived||[]).map(a=>`${a.month}: ${a.messages} messages`).join(', ') || 'nothing new to archive';
-    if (box) box.innerHTML = `<div class="msg ok">Archived — ${esc(done)}${trim?` · ${j.pruned} old messages removed from the ERP`:''}.</div>`;
-    if (waCur) await waLoadThread(false);
-  } catch(e){ if (box) box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
-}
-async function waLoadContacts(){
-  const { data, error } = await db.schema('wa').from('contacts').select('*').order('last_msg_at', { ascending:false, nullsFirst:false }).limit(500);
-  if (error){ $('wa-list').innerHTML = `<div class="msg err" style="margin:8px;">${esc(error.message)}</div>`; return; }
-  waContacts = (data || []).sort((a,b) => {
-    if (a.last_msg_at && b.last_msg_at) return a.last_msg_at < b.last_msg_at ? 1 : -1;
-    if (a.last_msg_at) return -1; if (b.last_msg_at) return 1;
-    return (a.name||a.wa_id).localeCompare(b.name||b.wa_id);
-  });
-}
-const WA_KIND = { VENDOR:['Vendor','#6b4fbb'], DISTRIBUTOR:['Distributor','#0b7a5b'], RETAILER:['Retailer','#b3601e'] };
-const waKindTag = c => c.kind && WA_KIND[c.kind] ? `<span style="font-size:10px;font-weight:600;color:#fff;background:${WA_KIND[c.kind][1]};border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;">${WA_KIND[c.kind][0]}</span>` : '';
-const waWhen = ts => { if (!ts) return ''; const d = new Date(ts), now = new Date();
-  return d.toDateString() === now.toDateString() ? d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}); };
-const waNum = n => { n = String(n||''); return n.startsWith('91') && n.length === 12 ? '+91 ' + n.slice(2,7) + ' ' + n.slice(7) : '+' + n; };
-function waRenderList(){
-  const q = ($('wa-search').value || '').trim().toLowerCase();
-  const list = waContacts.filter(c => !q || (c.name||'').toLowerCase().includes(q) || (c.kind||'').toLowerCase().includes(q) || (q.replace(/\D/g,'') && c.wa_id.includes(q.replace(/\D/g,''))));
-  $('wa-list').innerHTML = list.map(c => `
-    <div onclick="waOpen('${c.id}')" style="padding:10px 12px;border-bottom:1px solid #f1ede4;cursor:pointer;background:${waCur===c.id?'#fdf6e3':'#fff'};">
-      <div style="display:flex;justify-content:space-between;gap:6px;"><b style="font-size:13.5px;">${esc(c.name || waNum(c.wa_id))}${waKindTag(c)}</b><span style="font-size:11px;color:#999;white-space:nowrap;">${waWhen(c.last_msg_at)}</span></div>
-      <div style="display:flex;justify-content:space-between;gap:6px;"><span style="font-size:12px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name?'<span style="color:#999">'+waNum(c.wa_id)+' · </span>':''}${esc(c.last_msg_preview||'')}</span>${c.unread?`<span style="background:#25d366;color:#fff;border-radius:10px;padding:0 7px;font-size:11px;font-weight:700;">${c.unread}</span>`:''}</div>
-    </div>`).join('') || `<p style="padding:14px;font-size:12.5px;color:#777;">${waContacts.length ? 'No match for the search above. <button class="mini" onclick="$(\'wa-search\').value=\'\';waRenderList()">Show all conversations</button>' : 'Vendors, distributors and retailers with a mobile number appear here automatically from their master records — or press ＋ to add any number.'}</p>`;
-}
-async function waOpen(id){
-  waCur = id; waRenderList();
-  const c = waContacts.find(x=>x.id===id); if (!c) return;
-  $('wa-head').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-    <div><b style="font-size:14px;color:#1a1a2e;">${esc(c.name || waNum(c.wa_id))}</b>${waKindTag(c)} <span style="color:#777">${c.name ? waNum(c.wa_id) : ''}</span></div>
-    <div><button class="mini" onclick="waOpenWhatsApp('${esc(c.wa_id)}', true)" title="Open this number in your own WhatsApp — any number, any attachment, no limits">💬 Open in WhatsApp</button> ${waCanSend()?`<button class="mini" onclick="waRename('${c.id}')">✏️ Name</button>`:''} <button class="mini" onclick="waLoadThread(true)">↻</button></div></div>`;
-  $('wa-compose').classList.toggle('hidden', !waCanSend());
-  $('wa-tpl').innerHTML = ''; $('wa-msg').innerHTML = '';
-  await waLoadThread(true);
-  if (c.unread){ try { await db.schema('wa').rpc('mark_read', { p_contact: id }); c.unread = 0; waRenderList(); } catch(e){} }
-  // blue ticks for the customer — best effort, last inbound message
-  const lastIn = [...waMsgs].reverse().find(m=>m.direction==='IN' && m.wa_msg_id);
-  if (lastIn && waCanSend()) waApi({ action:'mark_read', wa_msg_id: lastIn.wa_msg_id }).catch(()=>{});
-}
-async function waLoadThread(scroll){
-  if (!waCur) return;
-  const { data, error } = await db.schema('wa').from('messages').select('*').eq('contact_id', waCur).order('ts').limit(400);
-  if (error){ $('wa-thread').innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
-  waMsgs = data || [];
-  const c = waContacts.find(x=>x.id===waCur) || {};
-  const tick = m => m.direction!=='OUT' ? '' : ({accepted:'🕓', sent:'✓', delivered:'✓✓', read:'<span style="color:#34b7f1">✓✓</span>', failed:'<span style="color:#b3261e">✗ failed</span>', app:'<span title="Opened in the office WhatsApp">↗ WhatsApp</span>'}[m.status] || '');
-  let lastDay = '';
-  $('wa-thread').innerHTML = waMsgs.map(m => {
-    const day = new Date(m.ts).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
-    const sep = day !== lastDay ? `<div style="text-align:center;margin:8px 0;"><span style="background:#fff;border-radius:8px;padding:2px 10px;font-size:11px;color:#777;">${day}</span></div>` : '';
-    lastDay = day;
-    const out = m.direction === 'OUT';
-    let body = esc(m.body||'').replace(/\n/g,'<br>');
-    if (m.media_id){
-      const isImg = (m.media_mime||'').startsWith('image/');
-      const driveA = m.drive_link?` <a href="${esc(m.drive_link)}" target="_blank" rel="noopener" class="mini" style="text-decoration:none;" title="Saved in Google Drive → WhatsApp data">☁ Drive</a>`:'';
-      const cached = waMediaCache[m.id];
-      if (cached) body = `<div id="wa-media-${m.id}"><img src="${cached}" style="max-width:100%;max-height:360px;border-radius:8px;cursor:zoom-in;" onclick="window.open(this.src,'_blank')">${driveA}</div>`;
-      else body = `<div id="wa-media-${m.id}" data-auto="${isImg?1:0}" data-mid="${m.media_id}" data-did="${m.drive_file_id||''}"><button class="mini" onclick="waMedia('${m.id}','${m.media_id}','${m.drive_file_id||''}')">${isImg?'🖼 Show image':'📎 Open '+esc(m.media_name||m.msg_type)}</button>${driveA}</div>`;
-      body += (m.caption?`<div style="margin-top:4px;">${esc(m.caption)}</div>`:'');
-    }
-    if (m.msg_type === 'template') body = `<span style="font-size:11px;color:#7a6a4a;">Template · ${esc(m.template_name||'')}</span><br>` + body;
-    const who = out ? `<span style="font-size:10.5px;color:#7a6a4a;">${esc(waUserName(m.sent_by))}</span>` : '';
-    return sep + `<div style="display:flex;justify-content:${out?'flex-end':'flex-start'};margin:4px 0;"><div style="max-width:72%;background:${out?'#dcf8c6':'#fff'};border-radius:10px;padding:7px 10px;font-size:13.5px;box-shadow:0 1px 1px rgba(0,0,0,.08);">
-      ${who}<div>${body}</div>
-      <div style="text-align:right;font-size:10.5px;color:#888;margin-top:2px;">${new Date(m.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})} ${tick(m)}${m.error_text?' <span style="color:#b3261e">'+esc(m.error_text)+'</span>':''}</div></div></div>`;
-  }).join('') || '<p style="text-align:center;color:#777;font-size:12.5px;">No messages yet.</p>';
-  if (scroll) $('wa-thread').scrollTop = $('wa-thread').scrollHeight;
-  // photos load by themselves (documents / audio on click)
-  document.querySelectorAll('#wa-thread [data-auto="1"]').forEach(el => { const id = el.id.replace('wa-media-',''); if (!waMediaCache[id] && !waMediaBusy[id]) waMedia(id, el.dataset.mid, el.dataset.did); });
-  // 24-hour reply window
-  const win = c.last_in_at ? (Date.now() - new Date(c.last_in_at).getTime()) : Infinity;
-  const left = 24*3600*1000 - win;
-  if (waAppMode()){
-    $('wa-window').innerHTML = '';
-    const aB0 = $('wa-attach-btn'); if (aB0) aB0.style.display = 'none';
-    const wB0 = $('wa-wame-btn'); if (wB0) wB0.style.display = 'none';
-    const fN0 = $('wa-file-name'); if (fN0) fN0.innerHTML = '';
-    return;
-  }
-  $('wa-window').innerHTML = left > 0
-    ? `Open chat — ${Math.floor(left/3600000)} h ${Math.floor((left%3600000)/60000)} min left. Text, photos and PDFs all go straight through.`
-    : `They have not written in the last 24 hours, so WhatsApp will only carry an approved opening message. Just type and press <b>Send</b> — the ERP handles it. If WhatsApp refuses, use <b>💬 WhatsApp</b>.`;
-  const aB = $('wa-attach-btn');
-  if (aB) aB.style.opacity = left > 0 ? '1' : '.45';
-}
-function waUserName(uid){ const u = (M.users||[]).find(x=>x.id===uid) || (allUsers||[]).find(x=>x.id===uid); return u ? u.full_name : (uid===me.id ? (me.full_name||'me') : 'ERP'); }
-async function waPoll(){
-  if ($('view-wa').classList.contains('hidden')){ waLeave(); return; }
-  const prevCount = waMsgs.length, prevLast = waMsgs.length ? waMsgs[waMsgs.length-1].status + waMsgs[waMsgs.length-1].id : '';
-  await waLoadContacts(); waRenderList();
-  if (waCur){
-    const before = JSON.stringify(waMsgs.map(m=>m.id+m.status));
-    await waLoadThread(false);
-    const after = JSON.stringify(waMsgs.map(m=>m.id+m.status));
-    if (after !== before && waMsgs.length > prevCount) $('wa-thread').scrollTop = $('wa-thread').scrollHeight;
-    const c = waContacts.find(x=>x.id===waCur);
-    if (c && c.unread){ try { await db.schema('wa').rpc('mark_read', { p_contact: waCur }); c.unread = 0; waRenderList(); } catch(e){} }
-  }
-}
-// ---- photo / PDF attachment -------------------------------------------------
-let waFile = null;
-function waFilePick(){
-  const f = ($('wa-file').files || [])[0];
-  if (!f){ waFileClear(); return; }
-  const ok = ['image/jpeg','image/png','application/pdf'];
-  if (!ok.includes(f.type)){ say('wa-msg','WhatsApp accepts JPG or PNG photos and PDF files only. Save the file in one of those formats and try again.', false); $('wa-file').value=''; return; }
-  const cap = f.type === 'application/pdf' ? 15*1024*1024 : 5*1024*1024;
-  if (f.size > cap){ say('wa-msg', `That file is ${(f.size/1048576).toFixed(1)} MB — the limit is ${cap/1048576} MB${f.type==='application/pdf'?'':' for photos'}.`, false); $('wa-file').value=''; return; }
-  waFile = f;
-  $('wa-msg').innerHTML = '';
-  $('wa-file-name').innerHTML = `📎 <b>${esc(f.name)}</b> · ${(f.size/1024).toFixed(0)} KB — press <b>Send</b>. Anything typed above goes with it as a caption. <button class="mini" onclick="waFileClear()">✕ remove</button>`;
-}
-function waFileClear(){ waFile = null; const i = $('wa-file'); if (i) i.value=''; const n = $('wa-file-name'); if (n) n.innerHTML=''; }
-function waFileB64(f){ return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); }); }
-function waOutOfWindow(){
-  const c = waContacts.find(x=>x.id===waCur) || {};
-  return !c.last_in_at || (Date.now() - new Date(c.last_in_at).getTime()) > 24*3600*1000;
-}
-// Open this number in the Director's own WhatsApp (web or phone), message ready to send.
-// No Meta limits apply here — any number, any attachment.
-function waOpenWhatsApp(waId, withText){
-  const num = String(waId || '').replace(/\D/g, '');
-  if (!num){ say('wa-msg','No number for this contact.', false); return; }
-  const t = withText ? ($('wa-text') ? $('wa-text').value.trim() : '') : '';
-  // web.whatsapp.com/send opens the chat straight away in WhatsApp Web (wa.me adds an extra "continue" page)
-  // one small WhatsApp window that lives beside the ERP; every Send just switches its chat
-  const w = Math.min(600, screen.availWidth - 40), h = Math.min(860, screen.availHeight - 60);
-  window.open('https://web.whatsapp.com/send?phone=' + num + (t ? '&text=' + encodeURIComponent(t) : ''), 'aurum-wa',
-    `noopener,popup=yes,width=${w},height=${h},left=${screen.availWidth - w - 10},top=30`);
-}
-function waOpenChat(){ const c = waContacts.find(x=>x.id===waCur); if (c) waOpenWhatsApp(c.wa_id, true); }
-// Explain a refusal in plain words and offer the way that always works.
-function waSendProblem(msg){
-  let why = '';
-  if (/healthy ecosystem engagement|131049/i.test(msg))
-    why = 'WhatsApp counted this as a <b>marketing</b> message to somebody who has never written to you, and Meta limits those. Nothing is wrong with the ERP.';
-  else if (/not in allowed list|131030/i.test(msg))
-    why = 'This number is not on the allowed list of the Meta <b>test</b> number. Adding your own business number in WhatsApp Manager removes that limit for good.';
-  else if (/24 hours/i.test(msg))
-    why = 'Only an approved opening message may start a conversation.';
-  $('wa-msg').innerHTML = `<div class="msg err" style="margin-top:6px;">${esc(msg)}${why?'<br>'+why:''}
-    <div style="margin-top:8px;">Quickest way right now: <button class="btn gold sm" onclick="waOpenChat()">💬 Open in WhatsApp</button>
-    <span style="font-size:12px;color:#555;">— opens this number in your own WhatsApp with the message ready; any number, and you can attach photos or files there.</span></div></div>`;
-}
-async function waSend(){
-  if (!waCur) return;
-  const text = $('wa-text').value.trim();
-  if (waAppMode()){
-    if (!text){ say('wa-msg','Type a message first.',false); return; }
-    const c = waContacts.find(x=>x.id===waCur); if (!c) return;
-    // open WhatsApp FIRST, while the click is still fresh — after an await the browser treats it as a pop-up and blocks it
-    waOpenWhatsApp(c.wa_id, true);
-    try { await db.schema('wa').rpc('log_app_message', { p_contact: waCur, p_text: text }); } catch(e){ /* log is best effort */ }
-    $('wa-text').value = ''; $('wa-msg').innerHTML = '<span style="font-size:12px;color:#1a7f37;">Opened in WhatsApp — press its Send button there.</span> <span style="font-size:11.5px;color:#777;">Nothing opened? Your browser blocked the pop-up — allow pop-ups for this site (icon at the right end of the address bar), or use the <b>💬 Open in WhatsApp</b> button at the top of the chat.</span>';
-    await waLoadContacts(); waRenderList(); await waLoadThread(true);
-    return;
-  }
-  if (waOutOfWindow()){
-    if (waFile){ waSendProblem('A photo or file cannot open a conversation — WhatsApp needs an approved opening message first.'); return; }
-    if (!text){ say('wa-msg','Type a message first.',false); return; }
-    return waSendOpening(text);
-  }
-  if (waFile) return waSendFile(text);
-  if (!text){ say('wa-msg','Type a message first.',false); return; }
-  $('wa-msg').innerHTML = '<span style="font-size:12px;color:#777;">Sending…</span>';
-  try {
-    await waApi({ action:'send_text', contact_id: waCur, text });
-    $('wa-text').value = ''; $('wa-msg').innerHTML = '';
-    await waLoadContacts(); waRenderList(); await waLoadThread(true);
-  } catch(e){ waSendProblem(e.message); await waLoadThread(true); }
-}
-// Outside the 24-hour window the ERP wraps what you typed in an approved opening
-// message by itself — no forms, no blanks to fill.
-async function waSendOpening(text){
-  $('wa-msg').innerHTML = '<span style="font-size:12px;color:#777;">Sending…</span>';
-  try {
-    const list = (await waApi({ action:'templates' })).templates || [];
-    const body = t => ((t.components||[]).find(x=>x.type==='BODY')||{}).text || '';
-    const one = list.find(t => t.name === 'aurum_message');
-    const two = list.find(t => t.name === 'aurum_reach_out');
-    const c = waContacts.find(x=>x.id===waCur) || {};
-    if (one){
-      await waApi({ action:'send_template', contact_id: waCur, template: one.name, language: one.language,
-        params: [text], preview: body(one).replace('{{1}}', text) });
-    } else if (two){
-      const who = c.name || 'Sir/Madam';
-      await waApi({ action:'send_template', contact_id: waCur, template: two.name, language: two.language,
-        params: [who, text], preview: body(two).replace('{{1}}', who).replace('{{2}}', text) });
-    } else {
-      throw new Error('WhatsApp has not approved an opening message for this account yet.');
-    }
-    $('wa-text').value = ''; $('wa-msg').innerHTML = '';
-    await waLoadContacts(); waRenderList(); await waLoadThread(true);
-  } catch(e){ waSendProblem(e.message); await waLoadThread(true); }
-}
-async function waSendFile(caption){
-  const f = waFile; if (!f) return;
-  $('wa-msg').innerHTML = `<span style="font-size:12px;color:#777;">Sending ${esc(f.name)}…</span>`;
-  try {
-    const data_b64 = await waFileB64(f);
-    await waApi({ action:'send_media', contact_id: waCur, filename: f.name, mime: f.type, caption: caption || '', data_b64 });
-    waFileClear(); $('wa-text').value = ''; $('wa-msg').innerHTML = '';
-    await waLoadContacts(); waRenderList(); await waLoadThread(true);
-  } catch(e){ waSendProblem(e.message); await waLoadThread(true); }
-}
-async function waNewChat(){
-  if (!waCanSend()){ alert('You can read WhatsApp messages but not send — ask the Director for add/edit on WhatsApp Business.'); return; }
-  const num = (prompt('WhatsApp number (with country code, e.g. 91 98765 43210):')||'').trim();
-  if (!num) return;
-  const name = (prompt('Name (optional):')||'').trim();
-  const { data: id, error } = await db.schema('wa').rpc('upsert_contact', { p_wa_id: num, p_name: name || null });
-  if (error){ alert('Could not add: ' + error.message); return; }
-  $('wa-search').value = '';
-  await waLoadContacts(); waRenderList(); waOpen(id);
-}
-async function waRename(id){
-  const c = waContacts.find(x=>x.id===id); if (!c) return;
-  const name = prompt('Name for ' + waNum(c.wa_id) + ':', c.name || '');
-  if (name === null) return;
-  const { error } = await db.schema('wa').from('contacts').update({ name: name.trim() || null }).eq('id', id);
-  if (error){ alert('Could not save: ' + error.message); return; }
-  await waLoadContacts(); waRenderList(); waOpen(id);
-}
-const waMediaCache = {}, waMediaBusy = {};
-async function waMedia(msgId, mediaId, driveId){
-  const box = $('wa-media-'+msgId); if (!box) return;
-  const driveA = box.querySelector('a') ? box.querySelector('a').outerHTML : '';
-  box.innerHTML = '<span style="font-size:12px;color:#777;">Loading…</span>';
-  waMediaBusy[msgId] = true;
-  try {
-    const j = await waApi({ action:'media', media_id: mediaId, drive_file_id: driveId || null });
-    const src = `data:${j.mime};base64,${j.data_b64}`;
-    const box2 = $('wa-media-'+msgId) || box;
-    if ((j.mime||'').startsWith('image/')){ waMediaCache[msgId] = src; box2.innerHTML = `<img src="${src}" style="max-width:100%;max-height:360px;border-radius:8px;cursor:zoom-in;" onclick="window.open(this.src,'_blank')">${driveA}`; waMediaBusy[msgId] = false; return; }
-    if ((j.mime||'').startsWith('audio/')) box.innerHTML = `<audio controls src="${src}" style="max-width:100%;"></audio>`;
-    else if ((j.mime||'').startsWith('video/')) box.innerHTML = `<video controls src="${src}" style="max-width:100%;max-height:360px;border-radius:8px;"></video>`;
-    else box.innerHTML = `<a href="${src}" download="${esc((waMsgs.find(m=>m.id===msgId)||{}).media_name||'file')}" class="mini" style="text-decoration:none;">⬇ Download file (${Math.round(j.size/1024)} KB)</a>`;
-  } catch(e){ box.innerHTML = `<span style="color:#b3261e;font-size:12px;">${esc(e.message)}</span> <button class="mini" onclick="waMedia('${msgId}','${mediaId}','${driveId||''}')">Retry</button>`; }
-  waMediaBusy[msgId] = false;
-}
-async function waTemplateForm(){
-  if (!waCur) return;
-  $('wa-tpl').innerHTML = '<p style="font-size:12px;color:#777;margin:8px 0 0;">Loading approved templates…</p>';
-  try {
-    const j = await waApi({ action:'templates' });
-    const tpls = j.templates || [];
-    if (!tpls.length){ $('wa-tpl').innerHTML = '<p style="font-size:12px;color:#b3261e;margin:8px 0 0;">No approved templates yet — create them in Meta Business → WhatsApp → Message templates.</p>'; return; }
-    window.__waTpls = tpls;
-    $('wa-tpl').innerHTML = `<div style="border:1px solid #e6d9b0;background:#fdf9ee;border-radius:8px;padding:10px;margin-top:8px;">
-      <div class="row2c"><div><label>Template</label><select id="wa-tpl-name" onchange="waTplPick()">${tpls.map((t,i)=>`<option value="${i}">${esc(t.name)} (${esc(t.language)})</option>`).join('')}</select></div><div id="wa-tpl-params"></div></div>
-      <div id="wa-tpl-preview" style="font-size:12.5px;color:#444;white-space:pre-wrap;margin-top:6px;"></div>
-      <div style="margin-top:8px;"><button class="btn gold sm" onclick="waTplSend()">Send template</button> <button class="btn ghost sm" onclick="$('wa-tpl').innerHTML=''">Cancel</button></div></div>`;
-    waTplPick();
-  } catch(e){ $('wa-tpl').innerHTML = `<p style="font-size:12px;color:#b3261e;margin:8px 0 0;">${esc(e.message)}</p>`; }
-}
-function waTplBody(t){ const b = (t.components||[]).find(c=>c.type==='BODY'); return b ? b.text : ''; }
-function waTplPick(){
-  const t = (window.__waTpls||[])[Number($('wa-tpl-name').value)]; if (!t) return;
-  const body = waTplBody(t); const n = (body.match(/\{\{\d+\}\}/g)||[]).length;
-  $('wa-tpl-params').innerHTML = n ? `<label>Fill in ${n} value${n>1?'s':''}</label>` + Array.from({length:n},(_,i)=>`<input type="text" class="wa-tpl-p" placeholder="{{${i+1}}}" oninput="waTplPreview()" style="margin-bottom:4px;">`).join('') : '<span style="font-size:11.5px;color:#777;">No fill-in values.</span>';
-  waTplPreview();
-}
-function waTplPreview(){
-  const t = (window.__waTpls||[])[Number($('wa-tpl-name').value)]; if (!t) return;
-  const vals = [...document.querySelectorAll('.wa-tpl-p')].map(i=>i.value);
-  $('wa-tpl-preview').textContent = waTplBody(t).replace(/\{\{(\d+)\}\}/g, (_,i)=> vals[Number(i)-1] || `{{${i}}}`);
-}
-async function waTplSend(){
-  const t = (window.__waTpls||[])[Number($('wa-tpl-name').value)]; if (!t) return;
-  const params = [...document.querySelectorAll('.wa-tpl-p')].map(i=>i.value.trim());
-  if (params.some(v=>!v)){ say('wa-msg','Fill in every template value first.',false); return; }
-  $('wa-msg').innerHTML = '<span style="font-size:12px;color:#777;">Sending…</span>';
-  try {
-    await waApi({ action:'send_template', contact_id: waCur, template: t.name, language: t.language, params, preview: $('wa-tpl-preview').textContent });
-    $('wa-tpl').innerHTML = ''; $('wa-msg').innerHTML = '';
-    await waLoadContacts(); waRenderList(); await waLoadThread(true);
-  } catch(e){ say('wa-msg', e.message, false); await waLoadThread(true); }
-}
-
 /* ================= MODULE 2: MANUFACTURING ================= */
 // Awaited on purpose: openProd() opens this section and then switches to the
 // targets tab, and an unawaited FG load would land in the body afterwards.
@@ -4893,7 +4444,7 @@ function rtEdit(id){
       <div style="margin-top:8px;"><label>Address</label><input type="text" id="re-address" value="${esc(v.address||'')}" style="width:100%;"></div>
       <div class="row2c" style="margin-top:8px;"><div><label>Contact number</label><input type="text" id="re-phone" value="${esc(v.phone||'')}"></div>
         <div><label>License number</label><input type="text" id="re-license" value="${esc(v.license_no||'')}"></div></div>
-      <div style="margin-top:8px;"><label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="re-whatsapp" value="${esc(v.whatsapp||'')}" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
+      <div style="margin-top:8px;"><label>WhatsApp number</label><input type="text" id="re-whatsapp" value="${esc(v.whatsapp||'')}" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
       <div class="row2c" style="margin-top:8px;"><div><label>Contact person</label><input type="text" id="re-contact" value="${esc(v.contact_person||'')}"></div>
         <div><label>District</label><input type="text" id="re-district" value="${esc(v.district||'')}"></div></div>
       <div style="margin-top:8px;"><label>Area / locality</label><input type="text" id="re-area" value="${esc(v.area||'')}"></div>
@@ -4976,7 +4527,7 @@ function vnEdit(id, boxId){
         <div><label>Phone</label><input type="text" id="ve-phone" value="${esc(v.phone||'')}"></div></div>
       <div class="row2c" style="margin-top:8px;"><div><label>Contact person</label><input type="text" id="ve-contact" value="${esc(v.contact_person||'')}"></div>
         <div><label>Email</label><input type="text" id="ve-email" value="${esc(v.email||'')}"></div></div>
-      <div class="row2c" style="margin-top:8px;"><div><label>WhatsApp number <span style="font-weight:normal;color:#888;font-size:11px;">— goes straight into the WhatsApp list</span></label><input type="text" id="ve-whatsapp" value="${esc(v.whatsapp||'')}" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
+      <div class="row2c" style="margin-top:8px;"><div><label>WhatsApp number</label><input type="text" id="ve-whatsapp" value="${esc(v.whatsapp||'')}" placeholder="WhatsApp number (mobile, e.g. 98765 43210)"></div>
         <div><label>PAN</label><input type="text" id="ve-pan" value="${esc(v.pan||'')}"></div></div>
       <div style="margin-top:8px;"><label>Postal address (for communication)</label><textarea id="ve-address" rows="2" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;" placeholder="Building, street, area">${esc(v.address||'')}</textarea></div>
       <div class="row2c" style="margin-top:8px;"><div><label>City / town</label><input type="text" id="ve-city" value="${esc(v.city||'')}"></div>
