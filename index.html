@@ -2257,9 +2257,9 @@ function fdTab(t, keep){
         <button class="btn ghost sm" onclick="fdCsv('pl')">⬇ CSV</button><button class="btn ghost sm" onclick="fdPrint('pl')">🖨 Print</button></div>
       <div class="table-scroll"><table><thead><tr><th style="min-width:240px;"></th>${qh}<th class="amount">FY Total</th></tr></thead><tbody>
         ${row('Revenue from Operations', R.rev, R.fy.rev, {bold:true})}
-        ${row('Commission (on manufacturer\'s bill)', R.commTot, R.fy.comm, {ind:true})}
+        ${row('1 · Commission — commission rates', R.commTot, R.fy.comm, {ind:true})}
         ${fdCommCats(D,R).map(c=>row('Commission – '+c, R.comm[c], R.comm[c].reduce((s,v)=>s+v,0), {ind:true, ind2:true})).join('')}
-        ${fdHasOwn(D,R) ? row('Sales (on own bill)', R.sales, R.fy.sales, {ind:true}) + FD_CATS.filter(c=>fdOwnOn(D,c) || R.own[c].some(v=>v)).map(c=>row('Sales – '+c, R.own[c], R.own[c].reduce((s,v)=>s+v,0), {ind:true, ind2:true})).join('') : ''}
+        ${row('2 · Sales — on the company\'s own bill', R.sales, R.fy.sales, {ind:true}) + FD_CATS.filter(c=>fdOwnOn(D,c) || R.own[c].some(v=>v)).map(c=>row('Sales – '+c, R.own[c], R.own[c].reduce((s,v)=>s+v,0), {ind:true, ind2:true})).join('')}
         ${row('Other Income', R.otherInc, R.fy.otherInc, {bold:true})}
         ${FD_OI.map(([k,l])=>inRow(l,k)).join('')}
         ${row('Total Income', R.totInc, R.fy.totInc, {bold:true})}
@@ -2623,8 +2623,8 @@ async function fdErpSnapshot(){
 function fdStmtRows(kind){
   const R = FD.R || fdCompute(FD.data), S = R.S, C = R.C, D = FD.data; const sum = a => a.reduce((s,v)=>s+v,0);
   if (kind === 'pl') return { head: ['', ...FD_Q, 'FY Total'], rows: [
-    ['Revenue from Operations', ...R.rev, R.fy.rev], ['  Commission (on manufacturer\'s bill)', ...R.commTot, R.fy.comm], ...fdCommCats(D,R).map(c=>['    Commission – '+c, ...R.comm[c], sum(R.comm[c])]),
-    ...(fdHasOwn(D,R) ? [['  Sales (on own bill)', ...R.sales, R.fy.sales], ...FD_CATS.filter(c=>fdOwnOn(D,c) || R.own[c].some(v=>v)).map(c=>['    Sales – '+c, ...R.own[c], sum(R.own[c])])] : []),
+    ['Revenue from Operations', ...R.rev, R.fy.rev], ['  1 · Commission — commission rates', ...R.commTot, R.fy.comm], ...fdCommCats(D,R).map(c=>['    Commission – '+c, ...R.comm[c], sum(R.comm[c])]),
+    ['  2 · Sales — on the company\'s own bill', ...R.sales, R.fy.sales], ...FD_CATS.filter(c=>fdOwnOn(D,c) || R.own[c].some(v=>v)).map(c=>['    Sales – '+c, ...R.own[c], sum(R.own[c])]),
     ['Other Income', ...R.otherInc, R.fy.otherInc], ...FD_OI.map(([k,l])=>['  '+l, ...D.pl[k].map(fdNum), sum(D.pl[k].map(fdNum))]),
     ['Total Income', ...R.totInc, R.fy.totInc], ['Expenses', ...R.exp, R.fy.exp], ...(fdHasOwn(D,R) ? [['  Cost of Goods Sold (own-bill sales)', ...R.cogs, R.fy.cogs]] : []), ...fdExpHeads(D, FD.erp).map(h=>['  '+h, ...fdHeadVal(D,h).map(fdNum), sum(fdHeadVal(D,h).map(fdNum))]), ['  Depreciation & Amortisation', ...D.pl.dep.map(fdNum), sum(D.pl.dep.map(fdNum))],
     ['Profit Before Tax', ...R.pbt, R.fy.pbt], ['Tax Expense', ...R.tax, R.fy.tax], ['Profit After Tax', ...R.pat, R.fy.pat],
