@@ -1859,7 +1859,7 @@ function fdDefaults(fy){
   const own = {}; FD_CATS.forEach(c => own[c] = { on: true, cogs: 0 });                       // Sales on the company's own bill — settings
   const ownq = {}; FD_CATS.forEach(c => ownq[c] = [0,1,2,3].map(()=>({ cases: 0, value: 0 })));  // Sales on the company's own bill — quarterly
   const opening = {}; FD_OPEN.forEach(([k]) => opening[k] = 0);
-  const pl = {}; [...FD_EXP, ...FD_OI].forEach(([k]) => pl[k] = fdZ4()); pl.dividend = fdZ4();
+  const pl = { heads: {} }; FD_OI.forEach(([k]) => pl[k] = fdZ4()); pl.dep = fdZ4(); pl.dividend = fdZ4();
   const bs = {}; FD_BSIN.forEach(([k]) => bs[k] = fdN4());
   return { company: 'Aurum Spirits India LTD', tax_rate: 0.2517, face_value: 10, shares_issued: 0,
     comm, opening, sales, comm_received: fdZ4(), own, ownq, sales_received: fdZ4(), brand_links: {}, exp_links: {}, shareholders: [], loans: [], pl, bs };
@@ -1938,7 +1938,8 @@ function fdCompute(D){
   const P = D.pl;
   R.otherInc = [0,1,2,3].map(q => fdNum(P.interest[q]) + fdNum(P.misc[q]));
   R.totInc = [0,1,2,3].map(q => R.rev[q] + R.otherInc[q]);
-  R.exp = [0,1,2,3].map(q => R.cogs[q] + FD_EXP.reduce((s,[k])=>s+fdNum(P[k][q]),0));
+  const HD = P.heads || {};
+  R.exp = [0,1,2,3].map(q => R.cogs[q] + Object.keys(HD).reduce((s,h)=>s+fdNum((HD[h]||[])[q]),0) + fdNum((P.dep||[])[q]));
   R.pbt = [0,1,2,3].map(q => R.totInc[q] - R.exp[q]);
   R.tax = R.pbt.map(v => Math.max(0, v) * rate);
   R.pat = [0,1,2,3].map(q => R.pbt[q] - R.tax[q]);
@@ -2246,20 +2247,13 @@ function fdTab(t, keep){
   }
   if (t === 'pl'){
     const row = (lbl, arr, fy, o) => `<tr${o&&o.bold?' style="font-weight:700;background:#faf6ea"':''}><td${o&&o.ind2?' style="padding-left:40px;color:#555"':o&&o.ind?' style="padding-left:22px"':''}>${lbl}</td>${arr.map(v=>`<td class="amount">${o&&o.pct?(v*100).toFixed(1)+'%':o&&o.eps?Number(v).toFixed(2):fdV(v)}</td>`).join('')}<td class="amount" style="font-weight:700">${o&&o.pct?(fy*100).toFixed(1)+'%':o&&o.eps?Number(fy).toFixed(2):fdV(fy)}</td></tr>`;
-    const accAll = fdExpAccounts(FD.erp);
-    const linkedTo = k => { const L = D.exp_links || {};
-      const explicit = [], def = [];
-      accAll.exp.forEach(c => { const key = 'E:'+c; if (fdExpHead('E', c) === k) (Object.prototype.hasOwnProperty.call(L, key) ? explicit : def).push(c); });
-      accAll.petty.forEach(c => { const key = 'P:'+c; if (fdExpHead('P', c) === k) (Object.prototype.hasOwnProperty.call(L, key) ? explicit : def).push(c + ' (petty)'); });
-      const fixed = k==='emp' ? ['Salary slips'] : k==='dep' ? ['Asset register'] : k==='interest' ? ['Bank receipts "interest"'] : [];
-      const parts = [];
-      if (fixed.length || explicit.length) parts.push(`<span style="color:#1a5fb4">🔗 ${esc([...fixed, ...explicit].join(', '))}</span>`);
-      if (def.length) parts.push(`<span style="color:#999">${fixed.length||explicit.length?'· ':'🔗 '}${esc(def.join(', '))} <i>(default)</i></span>`);
-      return parts.length ? `<br><span style="font-size:10.5px">${parts.join(' ')}</span>` : (FD_EXP.some(([x])=>x===k) ? '<br><span style="font-size:10.5px;color:#bbb">no account linked</span>' : ''); };
-    const inRow = (lbl, k) => `<tr><td style="padding-left:22px">${lbl}${linkedTo(k)}</td>${[0,1,2,3].map(q=>`<td class="amount">${fdIn('pl.'+k+'.'+q, D.pl[k][q])}</td>`).join('')}<td class="amount" style="font-weight:700">${inr(D.pl[k].reduce((s,v)=>s+fdNum(v),0))}</td></tr>`;
+    const inRow = (lbl, k) => `<tr><td style="padding-left:22px">${lbl}</td>${[0,1,2,3].map(q=>`<td class="amount">${fdIn('pl.'+k+'.'+q, D.pl[k][q])}</td>`).join('')}<td class="amount" style="font-weight:700">${inr(D.pl[k].reduce((s,v)=>s+fdNum(v),0))}</td></tr>`;
+    const heads = fdExpHeads(D, FD.erp);
+    const headRow = h => { const v = fdHeadVal(D, h); const petty = /^Petty cash — /.test(h);
+      return `<tr><td style="padding-left:22px">${esc(h)}${petty?'':' <span style="font-size:10px;color:#999">(Expenses ledger)</span>'}</td>${[0,1,2,3].map(q=>`<td class="amount">${ed ? `<input class="fd-in" type="number" step="any" data-head="${esc(h)}" data-q="${q}" value="${esc(String(v[q]??0))}" onchange="fdHeadSet(this)" style="width:110px;text-align:right;padding:5px 6px;font-size:12.5px;">` : inr(v[q])}</td>`).join('')}<td class="amount" style="font-weight:700">${inr(v.reduce((s,x)=>s+fdNum(x),0))}</td></tr>`; };
     B.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;"><h4 class="sec" style="margin:0;">Profit &amp; Loss Statement — ${fdFYLabel(FD.fy)}</h4>
-        ${ed ? `<button class="btn ghost sm" onclick="fdExpLinks()">🔗 Link expense heads to Accounting</button><button class="btn ghost sm" onclick="fdFillPL()">⇣ Fill expenses &amp; interest from the ERP</button>` : ''}
+        ${ed ? `<button class="btn ghost sm" onclick="fdFillPL()">⇣ Fill expenses &amp; interest from the ERP</button>` : ''}
         <button class="btn ghost sm" onclick="fdCsv('pl')">⬇ CSV</button><button class="btn ghost sm" onclick="fdPrint('pl')">🖨 Print</button></div>
       <div class="table-scroll"><table><thead><tr><th style="min-width:240px;"></th>${qh}<th class="amount">FY Total</th></tr></thead><tbody>
         ${row('Revenue from Operations', R.rev, R.fy.rev, {bold:true})}
@@ -2271,7 +2265,8 @@ function fdTab(t, keep){
         ${row('Total Income', R.totInc, R.fy.totInc, {bold:true})}
         ${row('Expenses', R.exp, R.fy.exp, {bold:true})}
         ${fdHasOwn(D,R) ? row('Cost of Goods Sold (own-bill sales)', R.cogs, R.fy.cogs, {ind:true}) : ''}
-        ${FD_EXP.map(([k,l])=>inRow(l,k)).join('')}
+        ${heads.map(headRow).join('')}
+        ${inRow('Depreciation &amp; Amortisation <span style="font-size:10px;color:#999">(asset register)</span>','dep')}
         ${row('Profit Before Tax', R.pbt, R.fy.pbt, {bold:true})}
         ${row('Tax Expense @ '+(fdNum(D.tax_rate)*100).toFixed(2)+'%', R.tax, R.fy.tax)}
         ${row('Profit After Tax', R.pat, R.fy.pat, {bold:true})}
@@ -2280,6 +2275,7 @@ function fdTab(t, keep){
         ${row('Net Profit Margin', R.npm, R.fy.npm, {pct:true})}
         ${row('Earnings per Share (₹)', R.eps, R.fy.eps, {eps:true})}
       </tbody></table></div>
+      <p style="font-size:11.5px;color:#777;margin:6px 0 0;">Expense heads are the same heads as <b>Accounting → Expenses</b> (head-wise), with petty cash categories as their own heads and depreciation from the asset register. New heads used in Accounting appear here automatically.</p>
       <div id="fd-fill"></div>`;
     return;
   }
@@ -2442,6 +2438,22 @@ function fdExpAccounts(E){
   ((E && E.petty) || []).forEach(x => { if (x.entry_kind === 'EXPENSE' && x.category) pc.add(x.category); });
   return { exp: [...ex].sort(), petty: [...pc].sort() };
 }
+// P&L expense heads = the expense heads of Accounting → Expenses (every head, head-wise), plus petty cash categories as their own heads
+function fdExpHeads(D, E){
+  const acc = fdExpAccounts(E);
+  const set = new Set(acc.exp);
+  acc.petty.forEach(c => set.add('Petty cash — ' + c));
+  Object.keys((D && D.pl && D.pl.heads) || {}).forEach(h => set.add(h));
+  return [...set].sort((a,b) => a.localeCompare(b));
+}
+function fdHeadVal(D, h){ const v = ((D.pl||{}).heads||{})[h]; return Array.isArray(v) ? v : fdZ4(); }
+function fdHeadSet(el){
+  const h = el.dataset.head, q = Number(el.dataset.q);
+  FD.data.pl.heads = FD.data.pl.heads || {}; FD.data.pl.heads[h] = FD.data.pl.heads[h] || fdZ4();
+  FD.data.pl.heads[h][q] = fdNum(el.value);
+  FD.dirty = true; fdSaveBar();
+  const y = window.scrollY; fdTab(FD.tab, true); window.scrollTo(0, y);
+}
 function fdExpHead(kind, cat){
   const L = (FD.data && FD.data.exp_links) || {}; const key = kind + ':' + cat;
   if (Object.prototype.hasOwnProperty.call(L, key)) return L[key] || null;   // '' = left out
@@ -2464,28 +2476,30 @@ function fdExpLine(cat){
 }
 async function fdFillPL(){
   const E = await fdErpData();
-  const v = {}; [...FD_EXP, ...FD_OI].forEach(([k]) => v[k] = fdZ4()); const src = {};
-  const add = (k, q, amt, label) => { if (q < 0 || !k) return; v[k][q] += amt; src[k] = src[k] || {}; src[k][label] = (src[k][label]||0) + amt; };
+  const v = {}; const src = {};
+  const add = (k, q, amt, label) => { if (q < 0 || !k) return; v[k] = v[k] || fdZ4(); v[k][q] += amt; src[k] = src[k] || {}; src[k][label] = (src[k][label]||0) + amt; };
   // months that have salary slips take their salary from the slips; a "Salary & wages" expense in such a month is the same money paid out, so it is skipped
   const slipMonths = new Set((E.slips||[]).filter(s=>['APPROVED','PAID'].includes(s.status)).map(s=>s.period));
-  (E.exps||[]).forEach(x => { if (x.petty_id) return; if (/salary|wage/i.test(x.category||'') && slipMonths.has(String(x.exp_date).slice(0,7))) return; add(fdExpHead('E', x.category), fdQOf(FD.fy, x.exp_date), Number(x.amount||0), 'Expenses: ' + (x.category||'—')); });
-  (E.petty||[]).forEach(p => { if (p.entry_kind !== 'EXPENSE') return; const q = fdQOf(FD.fy, p.expense_date); if (q < 0) return; add(fdExpHead('P', p.category), q, Number(p.amount||0), 'Petty cash: ' + (p.category||'—')); });
-  (E.slips||[]).forEach(s => { if (!['APPROVED','PAID'].includes(s.status)) return; add('emp', fdQOf(FD.fy, s.period + '-15'), Number(s.gross||0), 'Salary slips (gross)'); });
+  (E.exps||[]).forEach(x => { if (x.petty_id || !x.category) return; if (/salary|wage/i.test(x.category||'') && slipMonths.has(String(x.exp_date).slice(0,7))) return; add(x.category, fdQOf(FD.fy, x.exp_date), Number(x.amount||0), 'Expenses: ' + x.category); });
+  (E.petty||[]).forEach(p => { if (p.entry_kind !== 'EXPENSE') return; const q = fdQOf(FD.fy, p.expense_date); if (q < 0) return; add('Petty cash — ' + (p.category||'Other'), q, Number(p.amount||0), 'Petty cash: ' + (p.category||'Other')); });
+  const salHead = fdExpHeads(FD.data, E).find(h => /salary|wage/i.test(h)) || 'Salary & wages';
+  (E.slips||[]).forEach(s => { if (!['APPROVED','PAID'].includes(s.status)) return; add(salHead, fdQOf(FD.fy, s.period + '-15'), Number(s.gross||0), 'Salary slips (gross)'); });
   (E.avl||[]).forEach(a => { if (a.kind !== 'DEPRECIATION') return; add('dep', fdQOf(FD.fy, a.as_on), Math.abs(Number(a.change_amount||0)), 'Asset register depreciation'); });
   (E.ents||[]).forEach(e => { if (e.kind !== 'BANK_IN' || !/interest/i.test(e.narration||'')) return; add('interest', fdQOf(FD.fy, e.entry_date), Number(e.amount||0), 'Bank receipts marked "interest"'); });
-  const lines = [...FD_OI, ...FD_EXP];
+  const lines = [...FD_OI.map(([k,l])=>[k,l]), ...fdExpHeads(FD.data, E).map(h=>['H:'+h, h]), ['dep','Depreciation & Amortisation']];
+  const capital = h => /asset|tds/i.test(h);   // capital purchase / tax deducted — shown, but unticked
   const box = $('fd-fill');
   box.innerHTML = `<div class="card" style="margin-top:12px;padding:12px 14px;border:1px solid #1a5fb4;">
     <h4 class="sec" style="margin-top:0;">⇣ From the ERP — ${fdFYLabel(FD.fy)}</h4>
-    <p style="font-size:12px;color:#555;margin:0 0 6px;">Each Accounting expense account and petty cash category goes to the P&amp;L head it is linked to (<b>🔗 Link expense heads</b>); approved/paid Salary slips go to Employee Benefits, the Asset register's depreciation to Depreciation, and bank receipts marked "interest" to Interest. In a month that has salary slips, a "Salary &amp; wages" expense entry is not counted twice. Tick the lines to copy into the P&amp;L, then press <b>Save</b>.</p>
+    <p style="font-size:12px;color:#555;margin:0 0 6px;">Head-wise from <b>Accounting → Expenses</b>, approved Petty cash (as "Petty cash — …" heads), approved/paid Salary slips (into the salary head), the Asset register's depreciation and bank receipts marked "interest". In a month that has salary slips, a "Salary &amp; wages" expense entry is not counted twice. Capital purchases and TDS are left unticked — tick them if you want them in the P&amp;L. Tick the lines to copy into the P&amp;L, then press <b>Save</b>.</p>
     <div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th></th><th>Line</th>${FD_Q.map(q=>`<th class="amount">${q}</th>`).join('')}<th>Sources</th></tr></thead><tbody>
-    ${lines.map(([k,l])=>{ const has = v[k].some(x=>x); return `<tr><td><input type="checkbox" class="fd-fillchk" value="${k}" ${has?'checked':''}></td><td>${l}<br><span style="font-size:11px;color:#999">now: ${D_now(k)}</span></td>${v[k].map(x=>`<td class="amount">${inr(x)}</td>`).join('')}
+    ${lines.map(([k,l])=>{ v[k] = v[k] || fdZ4(); const has = v[k].some(x=>x) && !capital(l); return `<tr><td><input type="checkbox" class="fd-fillchk" value="${esc(k)}" ${has?'checked':''}></td><td>${esc(l)}<br><span style="font-size:11px;color:#999">now: ${D_now(k)}</span></td>${v[k].map(x=>`<td class="amount">${inr(x)}</td>`).join('')}
       <td style="font-size:11px;color:#777;max-width:260px;">${Object.entries(src[k]||{}).map(([s,a])=>esc(s)+' ₹'+inr(a)).join('<br>')||'—'}</td></tr>`; }).join('')}
     </tbody></table></div>
     <div style="display:flex;gap:8px;margin-top:8px;"><button class="btn gold sm" onclick="fdFillApply('pl')">Copy ticked lines into the P&amp;L</button><button class="btn ghost sm" onclick="$('fd-fill').innerHTML=''">Close</button></div></div>`;
   FD.fillVals = v;
   box.scrollIntoView({behavior:'smooth'});
-  function D_now(k){ return FD.data.pl[k].map(x=>inr(x)).join(' · '); }
+  function D_now(k){ const arr = k.startsWith('H:') ? fdHeadVal(FD.data, k.slice(2)) : (FD.data.pl[k] || fdZ4()); return arr.map(x=>inr(x)).join(' · '); }
 }
 // Panel: every Accounting expense account / petty cash category → which P&L head
 async function fdExpLinks(){
@@ -2508,7 +2522,8 @@ async function fdExpLinks(){
 }
 function fdFillApply(kind){
   const v = FD.fillVals || {};
-  if (kind === 'pl'){ document.querySelectorAll('.fd-fillchk:checked').forEach(c => { FD.data.pl[c.value] = v[c.value].map(x=>Math.round(x*100)/100); }); }
+  if (kind === 'pl'){ document.querySelectorAll('.fd-fillchk:checked').forEach(c => { const k = c.value, arr = (v[k] || fdZ4()).map(x=>Math.round(x*100)/100);
+      if (k.startsWith('H:')){ FD.data.pl.heads = FD.data.pl.heads || {}; FD.data.pl.heads[k.slice(2)] = arr; } else FD.data.pl[k] = arr; }); }
   if (kind === 'bs'){ FD.data.bs.gross_block = v.gross_block.slice(); if (document.querySelector('.fd-fillopen:checked')) FD.data.opening.gross_block = v.gbOpen; }
   FD.dirty = true; fdSaveBar(); $('fd-fill').innerHTML = ''; fdTab(FD.tab);
 }
@@ -2589,8 +2604,8 @@ async function fdErpSnapshot(){
   const bankNow = E.banks ? E.banks.reduce((s,b)=>s+Number(b.balance||0),0) : null;
   const pettyNow = E.petty ? E.petty.reduce((s,p)=>s+(p.entry_kind==='TOPUP'?1:-1)*Number(p.amount||0),0) : null;
   let expYtd = null;
-  if (E.exps || E.petty){ expYtd = 0; (E.exps||[]).forEach(x=>{ if (!x.petty_id && fdExpHead('E', x.category)) expYtd += Number(x.amount||0); });
-    (E.petty||[]).forEach(p=>{ if (p.entry_kind==='EXPENSE' && fdQOf(FD.fy,p.expense_date)>=0 && fdExpHead('P', p.category)) expYtd += Number(p.amount||0); }); }
+  if (E.exps || E.petty){ expYtd = 0; (E.exps||[]).forEach(x=>{ if (!x.petty_id && !/asset|tds/i.test(x.category||'')) expYtd += Number(x.amount||0); });
+    (E.petty||[]).forEach(p=>{ if (p.entry_kind==='EXPENSE' && fdQOf(FD.fy,p.expense_date)>=0) expYtd += Number(p.amount||0); }); }
   const salYtd = E.slips ? E.slips.filter(s=>['APPROVED','PAID'].includes(s.status)).reduce((s,x)=>s+Number(x.gross||0),0) : null;
   const gbNow = E.assets ? fdGBAt(E, today) : null;
   const item = (l, v, sub) => `<div style="flex:1;min-width:170px;"><div style="font-size:11.5px;color:#777">${l}</div><div style="font-size:16px;font-weight:700;color:#1a1a2e">${v==null?'—':'₹ '+fdV(v)}</div>${sub?`<div style="font-size:11px;color:#999">${sub}</div>`:''}</div>`;
@@ -2611,7 +2626,7 @@ function fdStmtRows(kind){
     ['Revenue from Operations', ...R.rev, R.fy.rev], ['  Commission (on manufacturer\'s bill)', ...R.commTot, R.fy.comm], ...fdCommCats(D,R).map(c=>['    Commission – '+c, ...R.comm[c], sum(R.comm[c])]),
     ...(fdHasOwn(D,R) ? [['  Sales (on own bill)', ...R.sales, R.fy.sales], ...FD_CATS.filter(c=>fdOwnOn(D,c) || R.own[c].some(v=>v)).map(c=>['    Sales – '+c, ...R.own[c], sum(R.own[c])])] : []),
     ['Other Income', ...R.otherInc, R.fy.otherInc], ...FD_OI.map(([k,l])=>['  '+l, ...D.pl[k].map(fdNum), sum(D.pl[k].map(fdNum))]),
-    ['Total Income', ...R.totInc, R.fy.totInc], ['Expenses', ...R.exp, R.fy.exp], ...(fdHasOwn(D,R) ? [['  Cost of Goods Sold (own-bill sales)', ...R.cogs, R.fy.cogs]] : []), ...FD_EXP.map(([k,l])=>['  '+l, ...D.pl[k].map(fdNum), sum(D.pl[k].map(fdNum))]),
+    ['Total Income', ...R.totInc, R.fy.totInc], ['Expenses', ...R.exp, R.fy.exp], ...(fdHasOwn(D,R) ? [['  Cost of Goods Sold (own-bill sales)', ...R.cogs, R.fy.cogs]] : []), ...fdExpHeads(D, FD.erp).map(h=>['  '+h, ...fdHeadVal(D,h).map(fdNum), sum(fdHeadVal(D,h).map(fdNum))]), ['  Depreciation & Amortisation', ...D.pl.dep.map(fdNum), sum(D.pl.dep.map(fdNum))],
     ['Profit Before Tax', ...R.pbt, R.fy.pbt], ['Tax Expense', ...R.tax, R.fy.tax], ['Profit After Tax', ...R.pat, R.fy.pat],
     ['Dividend Paid to Shareholders', ...R.div, R.fy.div], ['Transferred to Reserves & Surplus', ...R.toRes, R.fy.toRes],
     ['Net Profit Margin %', ...R.npm.map(v=>(v*100).toFixed(2)), (R.fy.npm*100).toFixed(2)], ['Earnings per Share (Rs)', ...R.eps.map(v=>v.toFixed(2)), R.fy.eps.toFixed(2)] ] };
