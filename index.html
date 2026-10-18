@@ -214,6 +214,7 @@
       <tbody id="user-rows"></tbody>
     </table></div>
     <div id="invite-rows"></div>
+    <div id="bin-box"></div>
   </section>
 
   <!-- ============ MODULE 1: ORDERS ============ -->
@@ -738,7 +739,7 @@ const MODULES = [
   {key:'docs',    ico:'🗂️', name:'Documents',        desc:'Agreements & important papers — upload, scan, print', live:true, docsOnly:true, open:()=>openDocs()},
   {key:'contacts',ico:'📇', name:'Contact Book',     desc:'Vendors, distributors, staff & personal contacts — with birthday reminders', live:true, open:()=>openContacts()},
   {key:'wa',      ico:'💬', name:'WhatsApp Business', desc:'Read & reply to WhatsApp messages on the company number', live:true, waOnly:true, open:()=>openWa()},
-  {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles & permissions',             live:true,  dirOnly:true, open:()=>openAdmin()},
+  {key:'control', ico:'⚙️', name:'Control Panel',    desc:'Users, roles, permissions & Recently deleted',             live:true,  dirOnly:true, open:()=>openAdmin()},
 ];
 const PERM_ACTIONS = ['view','add','edit','admin'];
 
@@ -889,7 +890,7 @@ async function dirDel(sch, tbl, id, label, afterB64){
       note = '\n\nThis will also remove attached records:\n' + prev.map(x=>'  • ' + x.count + ' in ' + x.table).join('\n');
     }
   } catch(e){ /* preview is best-effort */ }
-  if (!confirm('Delete ' + (label||'this entry') + '?' + note + '\n\nThis is permanent and cannot be undone.')) return;
+  if (!confirm('Delete ' + (label||'this entry') + '?' + note + '\n\nIt goes to Recently deleted (Control Panel) for 30 days, where a Director can put it back.')) return;
   const { error } = await db.schema('app').rpc('dir_delete', { p_schema: sch, p_table: tbl, p_id: id });
   if (error){ alert('Could not delete: ' + error.message); return; }
   let aj=''; try { aj = decodeURIComponent(escape(atob(afterB64||''))); } catch(e){ aj=''; }
@@ -1125,6 +1126,42 @@ async function openAdmin(){
   }
   await renderInvites();
   show('admin');
+  renderDeletedBin();
+}
+/* ---- Recently deleted: every Director delete is kept for 30 days and can be put back ---- */
+const BIN_NAMES = { 'sales.vendors':'Vendor', 'sales.parties':'Party (distributor / vendor)', 'sales.orders':'Sales order', 'sales.brands':'Brand', 'sales.skus':'SKU',
+  'mfg.purchase_orders':'Purchase order', 'mfg.rm_receipts':'RM receipt', 'mfg.rm_inspections':'Receipt & QC record', 'mfg.rm_requests':'RM request', 'mfg.rm_items':'RM item', 'mfg.rm_issues':'RM issue', 'mfg.po_dispatches':'Dispatch',
+  'acct.entries':'Bank ledger entry', 'acct.expenses':'Expense', 'acct.petty_cash':'Petty cash entry', 'acct.vendor_payments':'Vendor payment', 'acct.vendor_pay_requests':'Vendor payment request',
+  'acct.salary_slips':'Salary slip', 'acct.advances':'Advance', 'acct.assets':'Asset', 'acct.tds_deductions':'TDS record', 'acct.mmc_txns':'MMC ledger line', 'acct.bank_accounts':'Bank account', 'adm.users':'User', 'adm.people':'Person' };
+function binName(t){ return BIN_NAMES[t] || (t||'').split('.').pop().replace(/_/g,' '); }
+async function renderDeletedBin(){
+  const box = $('bin-box'); if (!box) return;
+  box.innerHTML = '';
+  if (!isDir()) return;
+  const { data, error } = await db.schema('app').rpc('deleted_batches');
+  if (error){ box.innerHTML = `<p style="font-size:12px;color:#b3261e;margin-top:18px;">Recently deleted could not be loaded: ${esc(error.message)}</p>`; return; }
+  const rows = data || [];
+  const when = ts => { const d = new Date(ts); return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) + ' ' + d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}); };
+  const left = ts => Math.max(0, 30 - Math.floor((Date.now() - new Date(ts).getTime()) / 86400000));
+  box.innerHTML = `
+    <h3 style="margin:22px 0 6px;font-size:15px;">🗑 Recently deleted <span style="font-weight:normal;font-size:12px;color:#777">— last 30 days</span></h3>
+    <p style="font-size:12px;color:#666;margin:0 0 8px;">Everything a Director deletes anywhere in the ERP lands here with all the records that went with it (a vendor with its purchase orders, a payment with its bank entry…). Press <b>Restore</b> to put it back exactly as it was. After 30 days it is cleared for good.</p>
+    <div class="table-scroll"><table><thead><tr><th>Deleted</th><th>By</th><th>What</th><th>Records</th><th>Days left</th><th></th></tr></thead><tbody>
+    ${rows.map(r => { const done = r.rows_restored >= r.rows_total; return `<tr${done?' class="inactive"':''}><td style="white-space:nowrap">${when(r.deleted_at)}</td><td>${esc(r.deleted_by||'—')}</td>` +
+      `<td><b>${esc(binName(r.root_table))}</b> — ${esc(r.label||'')}<br><span style="font-size:10.5px;color:#777">${esc((r.tables||'').split(', ').map(binName).join(', '))}</span></td>` +
+      `<td class="amount">${r.rows_total}${r.rows_restored?' <span style="font-size:10.5px;color:#1a7f37">('+r.rows_restored+' restored)</span>':''}</td><td class="amount">${left(r.deleted_at)}</td>` +
+      `<td style="white-space:nowrap">${done ? '<span style="font-size:11.5px;color:#1a7f37">✔ restored</span>' : `<button class="mini" onclick="binRestore('${r.batch_id}','${esc(r.label||'').replace(/'/g,'&#39;')}')">↩ Restore</button>`}</td></tr>`; }).join('')
+      || '<tr><td colspan="6" style="color:#777">Nothing deleted in the last 30 days.</td></tr>'}
+    </tbody></table></div>`;
+}
+async function binRestore(batch, label){
+  if (!confirm('Put back ' + (label||'this record') + ' and everything that was deleted with it?')) return;
+  const { data, error } = await db.schema('app').rpc('dir_restore', { p_batch: batch });
+  if (error){ alert('Could not restore: ' + error.message); return; }
+  const errs = (data && data.errors) || [];
+  if (errs.length) alert('Restored ' + data.restored + ' record' + (data.restored===1?'':'s') + '. ' + errs.length + ' could not be put back:\n' + errs.map(e=>'  • ' + binName(e.table) + ' ' + e.row + ' — ' + e.error).join('\n'));
+  else alert('Restored ' + data.restored + ' record' + (data.restored===1?'':'s') + ' — ' + (label||'') + ' is back where it was.');
+  renderDeletedBin();
 }
 
 /* ---- people added but not yet signed in ---- */
