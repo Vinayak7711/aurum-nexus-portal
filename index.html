@@ -2061,7 +2061,7 @@ function fdIn(path, val, opts){
   if (ro) return opts.text ? esc(String(val ?? '')) : (opts.pct ? shown + '%' : (opts.blank && val == null ? '<span style="color:#aaa">↳ prev</span>' : inr(val)));
   return `<input class="fd-in" ${opts.text?'type="text"':'type="number" step="any"'} data-p="${path}" ${opts.pct?'data-k="pct"':opts.blank?'data-k="blank"':opts.text?'data-k="text"':''} value="${esc(String(shown))}" ${opts.ph?`placeholder="${esc(opts.ph)}"`:''} onchange="fdSet(this)" style="width:${opts.w||110}px;text-align:${opts.text?'left':'right'};padding:5px 6px;font-size:12.5px;">`;
 }
-const fdV = (v, neg) => { const n = Number(v)||0; const s = inr(Math.abs(n)); return n < 0 ? `<span style="color:#b3261e">(${s})</span>` : s; };
+const fdV = (v, neg) => { let n = Number(v)||0; if (Math.abs(n) < 0.005) n = 0; const s = inr(Math.abs(n)); return n < 0 ? `<span style="color:#b3261e">(${s})</span>` : s; };
 
 function fdTab(t, keep){
   FD.tab = t;
