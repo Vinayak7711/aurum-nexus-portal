@@ -2103,16 +2103,28 @@ const fdV = (v, neg) => { let n = Number(v)||0; if (Math.abs(n) < 0.005) n = 0; 
 const fdIsMmc = l => /\bMMC\b/i.test(String((l && l.name) || ''));
 async function fdMmcLoad(){
   FD.mmc = null;
-  try { const { data, error } = await db.schema('acct').from('v_mmc_ledger').select('txn_date, kind, amount, status').limit(20000);
-    if (!error) FD.mmc = (data || []).filter(r => r.status !== 'REJECTED' && ['PAY_TO_MMC','MMC_PAID_AURUM','MMC_PAID_VENDOR'].includes(r.kind)); } catch(e){}
+  try {
+    const { data, error } = await db.schema('acct').from('v_mmc_ledger').select('txn_no, txn_date, kind, amount, status, entry_id, payment_id').limit(20000);
+    if (error) return;
+    const rows = (data || []).filter(r => r.status !== 'REJECTED' && ['PAY_TO_MMC','MMC_PAID_AURUM','MMC_PAID_VENDOR'].includes(r.kind));
+    // the date that decides the quarter is the source document's own date — the bank entry for money paid to / received from MMC,
+    // the vendor payment for money MMC paid out — never the day the line was keyed in
+    const eIds = [...new Set(rows.map(r=>r.entry_id).filter(Boolean))], pIds = [...new Set(rows.map(r=>r.payment_id).filter(Boolean))];
+    const eDate = {}, pDate = {};
+    for (let i = 0; i < eIds.length; i += 200){ const { data: es } = await db.schema('acct').from('v_entries').select('id, entry_date').in('id', eIds.slice(i,i+200)); (es||[]).forEach(e => { eDate[e.id] = e.entry_date; }); }
+    for (let i = 0; i < pIds.length; i += 200){ const { data: ps } = await db.schema('acct').from('vendor_payments').select('id, pay_date').in('id', pIds.slice(i,i+200)); (ps||[]).forEach(x => { pDate[x.id] = x.pay_date; }); }
+    rows.forEach(r => { r.doc_date = (r.kind === 'MMC_PAID_VENDOR' ? pDate[r.payment_id] : eDate[r.entry_id]) || r.txn_date; });
+    FD.mmc = rows;
+  } catch(e){}
 }
 // figures for one FY: { opening, given[4], repaid[4], vendor[4], vendorOpen }
 function fdMmcFigures(fy, vendorAsRepaid){
   const f = { opening: 0, given: fdZ4(), repaid: fdZ4(), vendor: fdZ4(), vendorOpen: 0, n: 0 };
   if (!FD.mmc) return null;
   const start = fdQRange(fy, 0)[0];
+  f.lines = [[],[],[],[]];
   FD.mmc.forEach(r => {
-    const amt = Number(r.amount) || 0, d = String(r.txn_date).slice(0,10);
+    const amt = Number(r.amount) || 0, d = String(r.doc_date || r.txn_date).slice(0,10);
     if (d < start){
       if (r.kind === 'PAY_TO_MMC') f.opening += amt;
       else if (r.kind === 'MMC_PAID_AURUM') f.opening -= amt;
@@ -2120,7 +2132,7 @@ function fdMmcFigures(fy, vendorAsRepaid){
       return;
     }
     const q = fdQOf(fy, d); if (q < 0) return;
-    f.n++;
+    f.n++; f.lines[q].push({ no: r.txn_no, date: d, kind: r.kind, amt });
     if (r.kind === 'PAY_TO_MMC') f.given[q] += amt;
     else if (r.kind === 'MMC_PAID_AURUM') f.repaid[q] += amt;
     else { f.vendor[q] += amt; if (vendorAsRepaid) f.repaid[q] += amt; }
@@ -2325,7 +2337,12 @@ function fdTab(t, keep){
         const vendTot = mf.vendor.reduce((a,b)=>a+b,0);
         return `<div class="card" style="margin-top:12px;padding:12px 14px;border:1px solid #cfe0f5;background:#f7faff;">
           <b style="font-size:13px;">⛓ MMC — taken from the ERP</b> <a href="#" style="font-size:12px;margin-left:8px;" onclick="event.preventDefault();(async()=>{await openAcct();window.acLedType='M:';window.acLedSel='M:MMC';await acctTab('ledger');})()">Open the MMC ledger</a>
-          <p style="font-size:12px;color:#555;margin:6px 0 0;">The MMC row is filled from Accounting → MMC ledger and cannot be typed over: <b>Loan given</b> = money Aurum paid to MMC from its banks (“Payment to MMC”); <b>Repaid</b> = money MMC paid to Aurum (“Receipt from MMC”). Opening 01-Apr is the net of everything before ${fdQRange(FD.fy,0)[0]}. ${mf.n} MMC ledger entr${mf.n===1?'y':'ies'} fall in this year.</p>
+          <p style="font-size:12px;color:#555;margin:6px 0 0;">The MMC row is filled from Accounting → MMC ledger and cannot be typed over: <b>Loan given</b> = money Aurum paid to MMC from its banks (“Payment to MMC”); <b>Repaid</b> = money MMC paid to Aurum (“Receipt from MMC”). Opening 01-Apr is the net of everything before ${fdQRange(FD.fy,0)[0]}. Each line is placed in the quarter of its own transaction date (the bank entry’s date, or the vendor payment’s date) — ${mf.n} MMC ledger entr${mf.n===1?'y':'ies'} fall in this year.</p>
+          <details style="margin-top:6px;font-size:12px;"><summary style="cursor:pointer;color:#1a5fb4;">Show how the entries fell into the quarters</summary>
+            <div class="table-scroll" style="margin-top:6px;"><table style="font-size:12px;"><thead><tr><th>Quarter</th><th>Dates</th><th class="amount">Entries</th><th class="amount">Paid to MMC ₹</th><th class="amount">MMC paid Aurum ₹</th><th class="amount">MMC paid vendors ₹</th><th>First → last entry</th></tr></thead><tbody>
+            ${[0,1,2,3].map(q => { const L = mf.lines[q]; const sum = k => L.filter(x=>x.kind===k).reduce((a,x)=>a+x.amt,0); const ds = L.map(x=>x.date).sort();
+              return `<tr><td>${FD_Q[q]}</td><td style="white-space:nowrap">${fdQRange(FD.fy,q)[0]} → ${fdQRange(FD.fy,q)[1]}</td><td class="amount">${L.length}</td><td class="amount">${inr(sum('PAY_TO_MMC'))}</td><td class="amount">${inr(sum('MMC_PAID_AURUM'))}</td><td class="amount">${inr(sum('MMC_PAID_VENDOR'))}</td><td style="white-space:nowrap">${ds.length ? ds[0] + ' → ' + ds[ds.length-1] : '—'}</td></tr>`; }).join('')}
+            </tbody></table></div></details>
           ${vendTot || mf.vendorOpen ? `<label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px;"><input type="checkbox" data-p="mmc_vendor_repaid" data-k="bool" ${D.mmc_vendor_repaid?'checked':''} ${ed?'':'disabled'} onchange="fdSet(this)" style="width:auto;"> Also count MMC’s payments to vendors on Aurum’s behalf as repayment (₹ ${inr(vendTot)} this year${mf.vendorOpen?', ₹ '+inr(mf.vendorOpen)+' before':''}) — this matches the “held by MMC” balance in the ledger.</label>` : ''}
           ${!has && ed ? `<button class="btn ghost sm" style="margin-top:8px;" onclick="fdMmcAddRow()">+ Add the MMC row from the ERP</button>` : ''}
         </div>`; })()}`;
