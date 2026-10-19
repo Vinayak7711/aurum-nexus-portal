@@ -1927,7 +1927,8 @@ function fdCommCats(D, R){ const l = FD_CATS.filter(c => fdCommShow(D, R, c)); r
 function fdCompute(D){
   const R = {};
   const fv = fdNum(D.face_value), rate = fdNum(D.tax_rate);
-  // Commission
+  // Commission — the cases come from the ERP (what the manufacturer billed to distributors each quarter); the bill value is typed
+  fdCasesApply(D);
   R.comm = {}; R.rev = fdZ4(); R.cases = fdZ4(); R.bill = fdZ4();
   for (const c of FD_CATS){
     const m = D.comm[c] || {}; const rr = fdNum(m.rate);
@@ -2041,7 +2042,7 @@ async function fdLoad(){
   FD.dirty = false; FD.erp = null;
   const [{ data, error }] = await Promise.all([
     db.schema('acct').from('fin_models').select('*').eq('fy', FD.fy).maybeSingle(),
-    fdMmcLoad() ]);
+    fdMmcLoad(), fdCasesLoad() ]);
   if (error){ FD.data = fdDefaults(FD.fy); FD.exists = false; FD.loadErr = error.message; }
   else { FD.loadErr = null; FD.exists = !!data; FD.data = fdMerge(fdDefaults(FD.fy), data ? data.data : null); FD.updatedAt = data ? data.updated_at : null; }
   fdHeader();
@@ -2145,6 +2146,44 @@ function fdMmcApply(D){
     l.erp = true; l.opening = Math.round(f.opening*100)/100;
     l.q = [0,1,2,3].map(q => ({ given: Math.round(f.given[q]*100)/100, repaid: Math.round(f.repaid[q]*100)/100 })); });
 }
+// ----- Cases from the ERP: approved sales orders (the manufacturer's bill to distributors), by order date, per category per quarter -----
+async function fdCasesLoad(){
+  FD.cases = null;
+  try {
+    const S = db.schema('sales'); const from = fdQRange(FD.fy,0)[0], to = fdQRange(FD.fy,3)[1];
+    const { data: ords, error } = await S.from('orders').select('id, order_date, status').in('status',['APPROVED','DISPATCHED','DELIVERED','CLOSED']).gte('order_date', from).lte('order_date', to).limit(5000);
+    if (error) return;
+    const qOf = {}; (ords||[]).forEach(o => qOf[o.id] = fdQOf(FD.fy, o.order_date));
+    const lines = [];
+    for (let i = 0; i < (ords||[]).length; i += 200){ const { data: l } = await S.from('order_lines').select('order_id, sku_id, cases').in('order_id', ords.slice(i,i+200).map(o=>o.id)); lines.push(...(l||[])); }
+    try { await loadMasters(); } catch(e){}
+    const skuBrand = {}; (M.skus||[]).forEach(x => { skuBrand[x.id] = x.brand_id; });
+    const brandCat = {}, brandName = {}; (M.brands||[]).forEach(b => { brandCat[b.id] = b.category_id; brandName[b.id] = b.name; });
+    // kept per brand, so the split between Commission and Sales (own bill) follows the brand links in Assumptions at all times
+    const out = { byBrand: {}, orders: (ords||[]).length, lines: 0, other: 0 };
+    const dates = [[],[],[],[]]; const dateOf = {}; (ords||[]).forEach(o => dateOf[o.id] = o.order_date);
+    lines.forEach(l => { const q = qOf[l.order_id]; if (q == null || q < 0) return; const b = skuBrand[l.sku_id], c = brandCat[b]; const n = Number(l.cases||0);
+      if (!c || !FD_CATS.includes(c)){ out.other += n; return; }
+      out.lines++; const r = out.byBrand[b] || (out.byBrand[b] = { cat: c, name: brandName[b] || '', q: fdZ4() }); r.q[q] += n;
+      dates[q].push(dateOf[l.order_id]); });
+    out.range = dates.map(d => { d = d.filter(Boolean).sort(); return d.length ? [d[0], d[d.length-1]] : null; });
+    FD.cases = out;
+  } catch(e){}
+}
+// cases per category per quarter for one section ('comm' = manufacturer's bill, 'own' = company's own bill), by the brand links
+function fdCasesFor(D, sec){
+  const BL = (D && D.brand_links) || {}; const o = {}; FD_CATS.forEach(c => o[c] = fdZ4());
+  if (!FD.cases) return o;
+  Object.entries(FD.cases.byBrand).forEach(([b, r]) => { const s = BL[b] === 'own' ? 'own' : 'comm'; if (s !== sec) return; [0,1,2,3].forEach(q => { o[r.cat][q] += r.q[q]; }); });
+  return o;
+}
+function fdCasesApply(D){
+  if (!FD.cases) return;
+  const comm = fdCasesFor(D, 'comm');
+  D.sales = D.sales || {};
+  FD_CATS.forEach(c => { D.sales[c] = D.sales[c] || [0,1,2,3].map(()=>({ cases: 0, bill: 0 }));
+    [0,1,2,3].forEach(q => { D.sales[c][q] = D.sales[c][q] || { cases: 0, bill: 0 }; D.sales[c][q].cases = comm[c][q]; }); });
+}
 function fdMmcAddRow(){
   if (!fdCan('edit')) return;
   FD.data.loans = FD.data.loans || [];
@@ -2241,7 +2280,7 @@ function fdTab(t, keep){
     return;
   }
   if (t === 'com'){
-    const cell = (c,q,f) => fdIn(`sales.${c}.${q}.${f}`, ((D.sales[c]||[])[q]||{})[f], {w: f==='cases'?80:110});
+    const cell = (c,q,f) => (f === 'cases' && FD.cases) ? `<span title="From the ERP — approved sales orders dated ${fdQRange(FD.fy,q)[0]} to ${fdQRange(FD.fy,q)[1]}" style="color:#1a5fb4;font-weight:600;">${inr(((D.sales[c]||[])[q]||{}).cases)}</span>` : fdIn(`sales.${c}.${q}.${f}`, ((D.sales[c]||[])[q]||{})[f], {w: f==='cases'?80:110});
     const ocell = (c,q,f) => fdIn(`ownq.${c}.${q}.${f}`, (((D.ownq||{})[c]||[])[q]||{})[f], {w: f==='cases'?80:110});
     const ownBr = fdOwnBrands(D); const ownCats = FD_CATS.filter(c => ownBr[c].length);
     const commBr = fdCommBrands(D); const CB = D.comm_brands || {};
@@ -2253,7 +2292,9 @@ function fdTab(t, keep){
       <p style="font-size:12px;color:#555;margin-top:-4px;">Two parts: <b>1 · Commission</b> on sales made on the manufacturer's bill, and <b>2 · Sales</b> on the company's own bill. Rates and settings come from <b>Assumptions</b>.</p>
       <h4 class="sec" style="font-size:14px;">1 · Commission — sales on manufacturer's bill</h4>
       <p style="font-size:12px;color:#555;margin-top:-4px;">Cases sold and bill value per category each quarter — brands linked under Commission in <b>Assumptions</b>: ${FD_CATS.some(c=>commBr[c].length) ? FD_CATS.filter(c=>commBr[c].length).map(c=>c+': '+commBr[c].map(b=>esc(b.name)).join(', ')).join(' · ') : 'none linked yet (orders of unlinked brands count here)'}.
-      ${ed ? `<button class="btn ghost sm" style="margin-left:6px;" onclick="fdFillSales('comm')">⇣ Fill cases &amp; bill value from sales orders</button>` : ''}</p>
+      ${ed ? `<button class="btn ghost sm" style="margin-left:6px;" onclick="fdFillSales('comm')">⇣ Fill bill values from sales orders</button>` : ''}</p>
+      ${FD.cases ? `<p style="font-size:11.5px;color:#1a5fb4;margin:-2px 0 6px;">⛓ <b>Cases</b> (blue) are taken from the ERP and cannot be typed over: the cases on approved sales orders — the manufacturer's bill to distributors — placed in the quarter of the order date. ${FD.cases.orders} order${FD.cases.orders===1?'':'s'}, ${FD.cases.lines} line${FD.cases.lines===1?'':'s'} in ${fdFYLabel(FD.fy)}${FD.cases.other?' · '+inr(FD.cases.other)+' cases in categories outside this table are left out':''}. ${[0,1,2,3].map(q=>FD_Q[q].split(' ')[0]+': '+(FD.cases.range[q]?FD.cases.range[q][0]+' → '+FD.cases.range[q][1]:'no orders')).join(' · ')}. Bill values are typed, or filled from the orders with the button above.</p>`
+        : `<p style="font-size:11.5px;color:#b8860b;margin:-2px 0 6px;">Sales orders could not be read with your access — cases keep the figures typed in.</p>`}
       <div class="table-scroll"><table style="font-size:12.5px;"><thead>
         <tr><th rowspan="2">Category</th><th rowspan="2">Method · rate</th>${FD_Q.map(q=>`<th colspan="3" style="text-align:center">${q}</th>`).join('')}<th rowspan="2" class="amount">FY commission ₹</th></tr>
         <tr>${FD_Q.map(()=>'<th class="amount">Cases</th><th class="amount">Bill value ₹</th><th class="amount">Commission ₹</th>').join('')}</tr></thead><tbody>
