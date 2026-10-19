@@ -1957,7 +1957,8 @@ function fdCompute(D){
   (D.shareholders||[]).forEach(h => { if (R.shCat[h.category] != null) R.shCat[h.category] += fdNum(h.shares); });
   const issued = fdNum(D.shares_issued);
   R.shCheck = R.shTotal === 0 ? 'Enter shares' : (R.shTotal === issued ? 'OK' : 'Mismatch: ' + (R.shTotal - issued).toLocaleString('en-IN'));
-  // Manufacturer loans
+  // Manufacturer loans — the MMC row is filled from the MMC ledger (money sent to MMC = loan, money MMC paid us = repayment)
+  fdMmcApply(D);
   R.loanRows = (D.loans||[]).map(l => { let b = fdNum(l.opening); const cl = [0,1,2,3].map(q => { const x = (l.q||[])[q] || {}; b = b + fdNum(x.given) - fdNum(x.repaid); return b; });
     return { closing: cl, over: Math.min(...cl) < 0 }; });
   R.loanOpen = (D.loans||[]).reduce((s,l)=>s+fdNum(l.opening),0);
@@ -2038,7 +2039,9 @@ async function openFinDash(fy){
 async function fdLoad(){
   $('fd-body').innerHTML = '<p style="font-size:13px;color:#777">Loading…</p>';
   FD.dirty = false; FD.erp = null;
-  const { data, error } = await db.schema('acct').from('fin_models').select('*').eq('fy', FD.fy).maybeSingle();
+  const [{ data, error }] = await Promise.all([
+    db.schema('acct').from('fin_models').select('*').eq('fy', FD.fy).maybeSingle(),
+    fdMmcLoad() ]);
   if (error){ FD.data = fdDefaults(FD.fy); FD.exists = false; FD.loadErr = error.message; }
   else { FD.loadErr = null; FD.exists = !!data; FD.data = fdMerge(fdDefaults(FD.fy), data ? data.data : null); FD.updatedAt = data ? data.updated_at : null; }
   fdHeader();
@@ -2093,6 +2096,49 @@ function fdIn(path, val, opts){
   return `<input class="fd-in" ${opts.text?'type="text"':'type="number" step="any"'} data-p="${path}" ${opts.pct?'data-k="pct"':opts.blank?'data-k="blank"':opts.text?'data-k="text"':''} value="${esc(String(shown))}" ${opts.ph?`placeholder="${esc(opts.ph)}"`:''} onchange="fdSet(this)" style="width:${opts.w||110}px;text-align:${opts.text?'left':'right'};padding:5px 6px;font-size:12.5px;">`;
 }
 const fdV = (v, neg) => { let n = Number(v)||0; if (Math.abs(n) < 0.005) n = 0; const s = inr(Math.abs(n)); return n < 0 ? `<span style="color:#b3261e">(${s})</span>` : s; };
+// ----- MMC loan account from the ERP (Accounting → MMC ledger) -----
+// Loan given  = Aurum's payments to MMC from our banks  (kind PAY_TO_MMC)
+// Repaid      = MMC's payments to Aurum                 (kind MMC_PAID_AURUM)
+//               + MMC's payments to vendors on our behalf (kind MMC_PAID_VENDOR) when the Director ticks that box
+const fdIsMmc = l => /\bMMC\b/i.test(String((l && l.name) || ''));
+async function fdMmcLoad(){
+  FD.mmc = null;
+  try { const { data, error } = await db.schema('acct').from('v_mmc_ledger').select('txn_date, kind, amount, status').limit(20000);
+    if (!error) FD.mmc = (data || []).filter(r => r.status !== 'REJECTED' && ['PAY_TO_MMC','MMC_PAID_AURUM','MMC_PAID_VENDOR'].includes(r.kind)); } catch(e){}
+}
+// figures for one FY: { opening, given[4], repaid[4], vendor[4], vendorOpen }
+function fdMmcFigures(fy, vendorAsRepaid){
+  const f = { opening: 0, given: fdZ4(), repaid: fdZ4(), vendor: fdZ4(), vendorOpen: 0, n: 0 };
+  if (!FD.mmc) return null;
+  const start = fdQRange(fy, 0)[0];
+  FD.mmc.forEach(r => {
+    const amt = Number(r.amount) || 0, d = String(r.txn_date).slice(0,10);
+    if (d < start){
+      if (r.kind === 'PAY_TO_MMC') f.opening += amt;
+      else if (r.kind === 'MMC_PAID_AURUM') f.opening -= amt;
+      else { f.vendorOpen += amt; if (vendorAsRepaid) f.opening -= amt; }
+      return;
+    }
+    const q = fdQOf(fy, d); if (q < 0) return;
+    f.n++;
+    if (r.kind === 'PAY_TO_MMC') f.given[q] += amt;
+    else if (r.kind === 'MMC_PAID_AURUM') f.repaid[q] += amt;
+    else { f.vendor[q] += amt; if (vendorAsRepaid) f.repaid[q] += amt; }
+  });
+  return f;
+}
+function fdMmcApply(D){
+  const f = fdMmcFigures(FD.fy, !!D.mmc_vendor_repaid); if (!f) return;
+  (D.loans||[]).forEach(l => { if (!fdIsMmc(l)) return;
+    l.erp = true; l.opening = Math.round(f.opening*100)/100;
+    l.q = [0,1,2,3].map(q => ({ given: Math.round(f.given[q]*100)/100, repaid: Math.round(f.repaid[q]*100)/100 })); });
+}
+function fdMmcAddRow(){
+  if (!fdCan('edit')) return;
+  FD.data.loans = FD.data.loans || [];
+  if (!FD.data.loans.some(fdIsMmc)) FD.data.loans.push({ name: 'MMC', opening: 0, q: [0,1,2,3].map(()=>({ given: 0, repaid: 0 })) });
+  FD.dirty = true; fdSaveBar(); fdTab('ln', true);
+}
 
 function fdTab(t, keep){
   FD.tab = t;
@@ -2267,12 +2313,22 @@ function fdTab(t, keep){
       <div class="table-scroll"><table style="font-size:12.5px;"><thead>
         <tr><th rowspan="2">Manufacturer</th><th rowspan="2" class="amount">Opening 01-Apr</th>${FD_Q.map(q=>`<th colspan="3" style="text-align:center">${q}</th>`).join('')}<th rowspan="2">Status</th>${ed?'<th rowspan="2"></th>':''}</tr>
         <tr>${FD_Q.map(()=>'<th class="amount">Loan given</th><th class="amount">Repaid</th><th class="amount">Closing</th>').join('')}</tr></thead><tbody>
-        ${(D.loans||[]).map((l,i)=>`<tr><td>${fdIn(`loans.${i}.name`, l.name, {text:true, w:160})}</td><td class="amount">${fdIn(`loans.${i}.opening`, l.opening)}</td>` +
-          [0,1,2,3].map(q=>`<td class="amount">${fdIn(`loans.${i}.q.${q}.given`, ((l.q||[])[q]||{}).given, {w:95})}</td><td class="amount">${fdIn(`loans.${i}.q.${q}.repaid`, ((l.q||[])[q]||{}).repaid, {w:95})}</td><td class="amount" style="font-weight:600">${fdV(R.loanRows[i].closing[q])}</td>`).join('') +
-          `<td style="color:#b3261e;font-size:12px;">${R.loanRows[i].over?'Over-repaid – check':''}</td>${ed?`<td><button class="mini" style="color:#b3261e" onclick="fdRowDel('loans',${i})">✕</button></td>`:''}</tr>`).join('') || `<tr><td colspan="16" style="color:#777">No manufacturer loans entered.</td></tr>`}
+        ${(D.loans||[]).map((l,i)=>{ const mm = fdIsMmc(l) && FD.mmc; const ro = (p, v, o) => mm ? `<span title="From the MMC ledger">${inr(v)}</span>` : fdIn(p, v, o);
+          return `<tr${mm?' style="background:#eef4fb;"':''}><td>${fdIn(`loans.${i}.name`, l.name, {text:true, w:160})}${mm?'<br><span style="font-size:10.5px;color:#1a5fb4;">⛓ from the MMC ledger</span>':''}</td><td class="amount">${ro(`loans.${i}.opening`, l.opening)}</td>` +
+          [0,1,2,3].map(q=>`<td class="amount">${ro(`loans.${i}.q.${q}.given`, ((l.q||[])[q]||{}).given, {w:95})}</td><td class="amount">${ro(`loans.${i}.q.${q}.repaid`, ((l.q||[])[q]||{}).repaid, {w:95})}</td><td class="amount" style="font-weight:600">${fdV(R.loanRows[i].closing[q])}</td>`).join('') +
+          `<td style="color:#b3261e;font-size:12px;">${R.loanRows[i].over?'Over-repaid – check':''}</td>${ed?`<td><button class="mini" style="color:#b3261e" onclick="fdRowDel('loans',${i})">✕</button></td>`:''}</tr>`; }).join('') || `<tr><td colspan="16" style="color:#777">No manufacturer loans entered.</td></tr>`}
         <tr style="font-weight:700;background:#faf6ea"><td>Total</td><td class="amount">${inr(R.loanOpen)}</td>${[0,1,2,3].map(q=>`<td class="amount">${inr(R.loanGiven[q])}</td><td class="amount">${inr(R.loanRepaid[q])}</td><td class="amount">${fdV(R.loanClose[q])}</td>`).join('')}<td></td>${ed?'<td></td>':''}</tr>
       </tbody></table></div>
-      ${ed ? `<button class="btn ghost sm" style="margin-top:8px;" onclick="fdRowAdd('loans')">+ Add manufacturer</button>` : ''}`;
+      ${ed ? `<button class="btn ghost sm" style="margin-top:8px;" onclick="fdRowAdd('loans')">+ Add manufacturer</button>` : ''}
+      ${(() => { const mf = fdMmcFigures(FD.fy, !!D.mmc_vendor_repaid); const has = (D.loans||[]).some(fdIsMmc);
+        if (!FD.mmc) return `<p style="font-size:11.5px;color:#b8860b;margin-top:10px;">The MMC ledger could not be read with your access, so the MMC row (if any) keeps the figures typed in.</p>`;
+        const vendTot = mf.vendor.reduce((a,b)=>a+b,0);
+        return `<div class="card" style="margin-top:12px;padding:12px 14px;border:1px solid #cfe0f5;background:#f7faff;">
+          <b style="font-size:13px;">⛓ MMC — taken from the ERP</b> <a href="#" style="font-size:12px;margin-left:8px;" onclick="event.preventDefault();(async()=>{await openAcct();window.acLedType='M:';window.acLedSel='M:MMC';await acctTab('ledger');})()">Open the MMC ledger</a>
+          <p style="font-size:12px;color:#555;margin:6px 0 0;">The MMC row is filled from Accounting → MMC ledger and cannot be typed over: <b>Loan given</b> = money Aurum paid to MMC from its banks (“Payment to MMC”); <b>Repaid</b> = money MMC paid to Aurum (“Receipt from MMC”). Opening 01-Apr is the net of everything before ${fdQRange(FD.fy,0)[0]}. ${mf.n} MMC ledger entr${mf.n===1?'y':'ies'} fall in this year.</p>
+          ${vendTot || mf.vendorOpen ? `<label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px;"><input type="checkbox" data-p="mmc_vendor_repaid" data-k="bool" ${D.mmc_vendor_repaid?'checked':''} ${ed?'':'disabled'} onchange="fdSet(this)" style="width:auto;"> Also count MMC’s payments to vendors on Aurum’s behalf as repayment (₹ ${inr(vendTot)} this year${mf.vendorOpen?', ₹ '+inr(mf.vendorOpen)+' before':''}) — this matches the “held by MMC” balance in the ledger.</label>` : ''}
+          ${!has && ed ? `<button class="btn ghost sm" style="margin-top:8px;" onclick="fdMmcAddRow()">+ Add the MMC row from the ERP</button>` : ''}
+        </div>`; })()}`;
     return;
   }
   if (t === 'pl'){
