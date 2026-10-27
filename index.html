@@ -235,10 +235,11 @@
   <section id="view-order-new" class="hidden">
     <div class="crumb" onclick="openOrders()">&larr; Back to Orders</div>
     <div class="card" style="max-width:560px;">
-      <h2>New order</h2>
-      <p class="sub">Cases only — billing values appear after Director approval.</p>
+      <h2 id="no-title">New order</h2>
+      <p class="sub" id="no-sub">Cases only — billing values appear after Director approval.</p>
       <label>Distributor</label>
       <select id="no-party"></select>
+      <div id="no-date-wrap" class="hidden"><label>Order date</label><input type="date" id="no-date"></div>
       <label style="margin-top:14px;">Add items — brand first, then its pack, then cases</label>
       <div class="row2c" style="margin-top:4px;">
         <select id="nol-brand" onchange="noBrandPick(this.value)"></select>
@@ -252,6 +253,7 @@
       <label>Remarks (optional)</label>
       <input type="text" id="no-remarks" placeholder="e.g. urgent — festival stock">
       <button class="btn gold" id="btn-create-order">Create order</button>
+      <button class="btn ghost hidden" id="btn-cancel-edit-order" onclick="openOrderDetail(window.__noEditId)">Cancel</button>
       <div id="no-msg"></div>
     </div>
   </section>
@@ -1518,7 +1520,7 @@ async function openOrders(){
     tr.innerHTML =
       `<td><b>${esc(o.so_no)}</b></td><td>${o.order_date}</td>` +
       `<td>${esc(o.party?.name||'')}<br><span style="font-size:11px;color:#777">${esc(o.party?.code||'')}</span></td>` +
-      `<td><span class="pill ${o.status}">${o.status}</span></td>` +
+      `<td><span class="pill ${o.status}">${o.status}</span>${canEditOrder(o)?` <button class="mini" onclick="event.stopPropagation();openEditOrder('${o.id}')" title="Change items, cases, distributor, date or remarks before approval">✎ Edit</button>`:''}</td>` +
       `<td class="amount">${caseTotals[o.id]||0}</td>` +
       (isDir()?`<td class="amount">${amtTotals[o.id]!=null?inr(amtTotals[o.id]):'—'} ${dirDelBtn('sales','orders', o.id, 'SO '+(o.so_no||''), "openOrders()")}</td>`:'');
     tr.onclick = () => openOrderDetail(o.id);
@@ -1571,7 +1573,13 @@ function noRenderLines(){
       <td><button class="mini" onclick="noDelLine(${i})" style="color:#b3261e;">✕</button></td></tr>`).join('') +
     `<tr><td><b>Total</b></td><td></td><td class="amount"><b>${tot}</b></td><td></td></tr></tbody></table></div>`;
 }
-async function openNewOrder(){
+// An order can be edited only while it is still RECEIVED (before approval): Director, sales admin, or the salesperson who entered it.
+function canEditOrder(o){
+  if (!o || o.status !== 'RECEIVED') return false;
+  const sp = me?.permissions_json?.sales || {};
+  return isDir() || !!sp.admin || (!!sp.add && o.created_by === me?.id);
+}
+async function noPrepForm(){
   await loadMasters();
   const mine = M.parties.filter(p=>p.is_active && (p.party_type||'DISTRIBUTOR')==='DISTRIBUTOR');
   $('no-party').innerHTML = mine.map(p=>`<option value="${p.id}">${esc(p.code)} — ${esc(p.name)}</option>`).join('');
@@ -1580,6 +1588,36 @@ async function openNewOrder(){
   $('nol-sku').innerHTML = '<option value="">— choose a brand first —</option>'; $('nol-sku').disabled = true;
   $('nol-cases').value = ''; noLines = []; noRenderLines();
   $('no-remarks').value = ''; say('no-msg','');
+}
+async function openNewOrder(){
+  await noPrepForm();
+  window.__noEditId = null;
+  $('no-title').textContent = 'New order'; $('no-sub').textContent = 'Cases only — billing values appear after Director approval.';
+  $('no-date-wrap').classList.add('hidden'); $('btn-cancel-edit-order').classList.add('hidden');
+  $('btn-create-order').textContent = 'Create order';
+  show('order-new');
+}
+// Edit a received order: same form, pre-filled; saving replaces the lines and updates distributor / date / remarks.
+async function openEditOrder(id){
+  const S = db.schema('sales');
+  const { data: o, error } = await S.from('orders').select('*').eq('id', id).single();
+  if (error){ say('od-msg','Load failed: '+error.message,false); return; }
+  if (!canEditOrder(o)){ say('od-msg', o.status === 'RECEIVED' ? 'You do not have permission to edit this order.' : 'Only an order that is still RECEIVED (not yet approved) can be edited.', false); return; }
+  const { data: ls } = await S.from('order_lines').select('sku_id, cases').eq('order_id', id);
+  await noPrepForm();
+  window.__noEditId = id;
+  if (![...$('no-party').options].some(x=>x.value===o.party_id)){   // the order's distributor is deactivated — still show it
+    const p = (M.parties||[]).find(x=>x.id===o.party_id);
+    $('no-party').insertAdjacentHTML('afterbegin', `<option value="${o.party_id}">${esc(p?.code||'')} — ${esc(p?.name||'(current distributor)')} (inactive)</option>`);
+  }
+  $('no-party').value = o.party_id;
+  $('no-date').value = o.order_date || ''; $('no-date-wrap').classList.remove('hidden');
+  $('no-remarks').value = o.remarks || '';
+  noLines = (ls||[]).map(l => { const sku = M.skus.find(s=>s.id===l.sku_id) || {}; const brand = M.brands.find(b=>b.id===sku.brand_id) || {};
+    return { sku_id: l.sku_id, sku_code: sku.sku_code || '', brand_name: brand.name || '', cases: Number(l.cases) }; });
+  noRenderLines();
+  $('no-title').textContent = 'Edit order ' + (o.so_no || ''); $('no-sub').textContent = 'Received — not yet approved, so the items, cases, distributor, date and remarks can still be changed. Saving replaces the order lines.';
+  $('btn-create-order').textContent = 'Save changes'; $('btn-cancel-edit-order').classList.remove('hidden');
   show('order-new');
 }
 $('btn-create-order').onclick = async () => {
@@ -1588,10 +1626,13 @@ $('btn-create-order').onclick = async () => {
   const lines = noLines.map(l => ({ sku_id: l.sku_id, cases: l.cases }));
   if (!lines.length){ say('no-msg','Add at least one item — choose the brand, then the SKU, enter cases and press ➕ Add line.',false); return; }
   $('btn-create-order').disabled = true;
-  const { data, error } = await db.schema('sales').rpc('create_order',
-    { p_party: $('no-party').value, p_lines: lines, p_remarks: $('no-remarks').value.trim() || null });
+  const editId = window.__noEditId;
+  const { data, error } = editId
+    ? await db.schema('sales').rpc('edit_order', { p_order: editId, p_party: $('no-party').value, p_lines: lines, p_remarks: $('no-remarks').value.trim() || null, p_order_date: $('no-date').value || null })
+    : await db.schema('sales').rpc('create_order', { p_party: $('no-party').value, p_lines: lines, p_remarks: $('no-remarks').value.trim() || null });
   $('btn-create-order').disabled = false;
   if (error){ say('no-msg', error.message, false); return; }
+  window.__noEditId = null;
   openOrderDetail(data);
 };
 
@@ -1682,6 +1723,10 @@ async function openOrderDetail(id){
   // stage buttons
   const A = $('od-actions'); A.innerHTML = '';
   const btn = (label, cls, fn) => { const b=document.createElement('button'); b.className='btn sm '+cls; b.style.marginRight='8px'; b.textContent=label; b.onclick=fn; A.appendChild(b); };
+  if (canEditOrder(o)){
+    A.insertAdjacentHTML('beforeend', `<p style="font-size:12px;color:#555;margin:0 0 8px;">📝 Received, not yet approved — the items, cases, distributor, order date and remarks can still be changed.</p>`);
+    btn('✎ Edit order','ghost', ()=>openEditOrder(id));
+  }
   if (canApproveSO){
     if (o.status==='RECEIVED'){
       const calc = window.__odCalc || { T:{}, missing:[] };
