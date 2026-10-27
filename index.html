@@ -289,7 +289,7 @@
     <div id="pm-sec-d">
     <div class="pm-add hidden" style="margin:0 0 8px;"><button class="btn gold sm" onclick="openPartyEdit(null,'DISTRIBUTOR')">＋ Add distributor</button> <span style="font-size:11.5px;color:#777;">Formal applications (signed form) go through <b>Distributor applications</b>; use this for a direct entry.</span></div>
     <div class="table-scroll"><table>
-      <thead><tr><th>Code</th><th>Name</th><th>District</th><th>Territory</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
+      <thead><tr><th>Code</th><th>Name</th><th>District</th><th>Territory</th><th>VAT no.</th><th>FSSAI license no.</th><th>Salesperson</th><th>Active</th><th></th></tr></thead>
       <tbody id="party-rows"></tbody>
     </table></div>
     </div>
@@ -609,6 +609,10 @@
     <div class="row2c">
       <div><label>License no.</label><input type="text" id="pe-license"></div>
       <div><label>GSTIN</label><input type="text" id="pe-gstin"></div>
+    </div>
+    <div class="row2c">
+      <div><label>VAT number</label><input type="text" id="pe-vat" placeholder="State VAT / TIN no."></div>
+      <div><label>FSSAI license number</label><input type="text" id="pe-fssai" placeholder="14-digit FSSAI licence no." maxlength="20"></div>
     </div>
     <div class="row2c">
       <div><label>Contact person</label><input type="text" id="pe-contact"></div>
@@ -1805,7 +1809,13 @@ async function orderReport(id){
   const S = db.schema('sales');
   const { data: pays } = await S.from('payments').select('*').eq('order_id', id).order('pay_date');
   const { data: tcsPaysR } = await S.from('tcs_payments').select('*').eq('order_id', id).order('pay_date');
-  const { data: party } = await S.from('parties').select('name, code, city, address, pincode, gstin, phone').eq('id', o.party_id).maybeSingle();
+  const { data: party } = await S.from('parties').select('name, code, city, address, pincode, gstin, phone, license_no, vat_no, fssai_no, contact_person, whatsapp, email, credit_days').eq('id', o.party_id).maybeSingle();
+  // the distributor's registration numbers and contact details, as kept in Party Master
+  const pLic = [['License no.', party?.license_no], ['GSTIN', party?.gstin], ['VAT no.', party?.vat_no], ['FSSAI license no.', party?.fssai_no]]
+    .map(([k,v]) => `${k}: ${v ? esc(v) : '<span style="color:#999">not on record</span>'}`).join(' &nbsp;·&nbsp; ');
+  const pCon = [party?.contact_person ? 'Contact: ' + esc(party.contact_person) : '', party?.phone ? 'Phone: ' + esc(party.phone) : '',
+    party?.whatsapp ? 'WhatsApp: ' + esc(party.whatsapp) : '', party?.email ? 'Email: ' + esc(party.email) : ''].filter(Boolean).join(' &nbsp;·&nbsp; ');
+  const pAddr = [party?.address, party?.city, party?.pincode ? 'PIN ' + party.pincode : ''].filter(Boolean).map(esc).join(', ');
   let approver = '';
   if (o.approved_by){ const u = (window.allUsers||[]).find(x=>x.id===o.approved_by) || (acStaff||[]).find(x=>x.id===o.approved_by); if (u) approver = u.full_name; else { try { const { data: au } = await db.schema('adm').from('users').select('full_name').eq('id', o.approved_by).maybeSingle(); if (au) approver = au.full_name; } catch(e){} } }
   const rowsHtml = lines.map(l=>{ const v = vals[l.id] || {}; const c = Number(l.cases);
@@ -1819,8 +1829,11 @@ async function orderReport(id){
     <h1>AURUM SPIRITS INDIA LIMITED</h1>
     <h2>Sales order report · ${esc(o.so_no)}</h2>
     <table style="margin-bottom:10px;"><tbody>
-      <tr><td><b>Distributor</b></td><td>${esc(party?.name||'')} (${esc(party?.code||'')})${party?.city?', '+esc(party.city):''}${party?.address?'<br>'+esc(party.address)+(party.pincode?' — '+esc(party.pincode):''):''}${party?.gstin?'<br>GSTIN '+esc(party.gstin):''}</td>
-          <td><b>Order date</b></td><td>${o.order_date}</td></tr>
+      <tr><td style="width:110px;"><b>Distributor</b></td><td><b>${esc(party?.name||'')}</b> (${esc(party?.code||'')})${party?.credit_days!=null?' · '+Number(party.credit_days)+' days credit':''}
+          ${pAddr?'<br>'+pAddr:''}
+          <br><span style="font-size:11.5px;">${pLic}</span>
+          ${pCon?'<br><span style="font-size:11.5px;">'+pCon+'</span>':''}</td>
+          <td style="width:90px;"><b>Order date</b></td><td>${o.order_date}</td></tr>
       <tr><td><b>Status</b></td><td>${esc(o.status)}${o.invoice_no?' · Invoice '+esc(o.invoice_no):''}</td><td><b>Approved</b></td><td>${o.approved_at?String(o.approved_at).slice(0,10):'—'}${approver?' by '+esc(approver):''}</td></tr>
       ${o.remarks?`<tr><td><b>Remarks</b></td><td colspan="3">${esc(o.remarks)}</td></tr>`:''}
     </tbody></table>
@@ -2897,7 +2910,8 @@ async function openParties(){
     } else {
       nD++;
       const tname = ((M.terr||[]).find(t=>t.id===p.territory_id)||{}).name;
-      tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${esc(p.city||'—')}</td><td>${esc(tname||'—')}</td>` +
+      tr.innerHTML = `<td><b>${esc(p.code)}</b></td><td>${esc(p.name)}${p.license_no?'<br><span style="font-size:11px;color:#777">Lic: '+esc(p.license_no)+'</span>':''}${p.gstin?'<br><span style="font-size:11px;color:#777">GSTIN: '+esc(p.gstin)+'</span>':''}</td><td>${esc(p.city||'—')}</td><td>${esc(tname||'—')}</td>` +
+        `<td>${esc(p.vat_no||'—')}</td><td>${esc(p.fssai_no||'—')}</td>` +
         `<td>${esc(ownerName(p.owner_id))}</td><td>${p.is_active?'✔':'✖'}</td>` +
         `<td style="white-space:nowrap">${pmCanEdit(p)?'<button class="mini btn-edit">Edit</button>':''} ${dirDelBtn('sales','parties', p.id, p.name, "openParties()")}</td>`;
       if (tr.querySelector('.btn-edit')) tr.querySelector('.btn-edit').onclick = ()=>openPartyEdit(p);
@@ -2905,7 +2919,7 @@ async function openParties(){
     }
   }
   $('party-count-d').textContent = nD; $('party-count-v').textContent = nV;
-  if (!nD) tbD.innerHTML = '<tr><td colspan="7" style="color:#777">No distributors yet — new distributors come in through Onboarding &amp; Vendors.</td></tr>';
+  if (!nD) tbD.innerHTML = '<tr><td colspan="9" style="color:#777">No distributors yet — new distributors come in through Onboarding &amp; Vendors.</td></tr>';
   if (!nV) tbV.innerHTML = '<tr><td colspan="7" style="color:#777">No vendors yet — register vendors through Onboarding &amp; Vendors.</td></tr>';
   // Retailers — linked straight from the Onboarding retailer register, category and all.
   const tbR = $('party-rows-r'); tbR.innerHTML = '';
@@ -2955,6 +2969,7 @@ function openPartyEdit(p, kind){
   $('pe-name').value = p?.name||''; $('pe-city').value = p?.city||'';
   $('pe-credit').value = p?.credit_days??0; $('pe-license').value = p?.license_no||'';
   $('pe-gstin').value = p?.gstin||''; $('pe-contact').value = p?.contact_person||'';
+  if ($('pe-vat')) $('pe-vat').value = p?.vat_no||''; if ($('pe-fssai')) $('pe-fssai').value = p?.fssai_no||'';
   $('pe-phone').value = p?.phone||''; $('pe-email').value = p?.email||''; if ($('pe-whatsapp')) $('pe-whatsapp').value = p?.whatsapp||'';
   if ($('pe-address')) $('pe-address').value = p?.address||''; if ($('pe-pincode')) $('pe-pincode').value = p?.pincode||'';
   $('pe-active').checked = p ? p.is_active : true;
@@ -2992,6 +3007,7 @@ $('btn-save-party').onclick = async () => {
   const patch = {
     name, city: $('pe-city').value.trim()||null, credit_days: Number($('pe-credit').value)||0,
     license_no: $('pe-license').value.trim()||null, gstin: $('pe-gstin').value.trim()||null,
+    vat_no: $('pe-vat') ? ($('pe-vat').value.trim()||null) : null, fssai_no: $('pe-fssai') ? ($('pe-fssai').value.trim()||null) : null,
     contact_person: $('pe-contact').value.trim()||null, phone: $('pe-phone').value.trim()||null, whatsapp: $('pe-whatsapp').value.trim()||null,
     email: $('pe-email').value.trim()||null, owner_id: $('pe-owner').value, is_active: $('pe-active').checked,
     address: $('pe-address') ? ($('pe-address').value.trim()||null) : null, pincode: $('pe-pincode') ? ($('pe-pincode').value.trim()||null) : null,
