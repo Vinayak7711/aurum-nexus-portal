@@ -4274,14 +4274,18 @@ async function prodTab(t){
     if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
     const rows = data || [];
     const now = monthLabelJS();
-    const cur = rows.filter(r=>r.period===now);
+    // the tiles follow the running targets: this month's if any are set, otherwise the latest month that has targets (they stay open until met)
+    const statPeriod = rows.some(r=>r.period===now) ? now : (rows[0] ? rows[0].period : now);
+    const cur = rows.filter(r=>r.period===statPeriod);
     const curTgt = cur.reduce((a,r)=>a+Number(r.target_cases||0),0);
     const curDone = cur.reduce((a,r)=>a+Math.max(Number(r.reported_cases||0), Number(r.produced_cases||0)),0);
     const curPct = curTgt ? Math.round(curDone*100/curTgt) : 0;
+    const lbl = statPeriod === now ? "This month's" : 'Targets of ' + statPeriod + ' —';
     let html = `<div class="statgrid">
-      <div class="stat"><div class="n">${inr(curTgt)}</div><div class="l">This month's target (cases)</div></div>
-      <div class="stat"><div class="n">${inr(curDone)}</div><div class="l">Marked completed</div></div>
-      <div class="stat"><div class="n" style="color:${curPct>=100?'#1f7a4d':(curPct>=60?'#7a5c10':'#b3382c')}">${curPct}%</div><div class="l">This month's progress</div></div></div>`;
+      <div class="stat"><div class="n">${inr(curTgt)}</div><div class="l">${lbl} target (cases)</div></div>
+      <div class="stat"><div class="n">${inr(curDone)}</div><div class="l">Produced / completed</div></div>
+      <div class="stat"><div class="n" style="color:${curPct>=100?'#1f7a4d':(curPct>=60?'#7a5c10':'#b3382c')}">${curPct}%</div><div class="l">${lbl} progress</div></div></div>
+      <p style="font-size:12px;color:#555;margin:-4px 0 12px;">⛓ Linked to the <b>Production report</b>: every batch recorded there counts toward the latest target set for its SKU on or before the production date, so a target stays open until it is met — production in a later month fills it until a new target is set for that SKU. QC-failed batches are left out. “Mark completion” is only for cases produced outside the batch book.</p>`;
     if (isDir()){
       const skuOpts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
       html += `<div class="card" style="margin-bottom:14px;max-width:620px;"><h2 style="font-size:15px;">Set / revise a monthly target</h2>
@@ -4302,7 +4306,7 @@ async function prodTab(t){
       html += `<tr><td><b>${r.period}</b></td><td>${esc(r.sku_code)}${r.brand_name?'<br><span style="font-size:11px;color:#777">'+esc(r.brand_name)+'</span>':''}</td>` +
         `<td class="amount">${inr(r.target_cases)}</td>` +
         `<td class="amount"><b>${effDone?inr(effDone):'—'}</b><br><span style="font-size:11px;color:#777">${effDone?(fromProd?'from production report':'marked manually'+(r.reported_on?' · '+r.reported_on:'')):''}</span></td>` +
-        `<td class="amount" style="color:#555">${inr(r.produced_cases)}</td>` +
+        `<td class="amount" style="color:#555">${inr(r.produced_cases)}${Number(r.produced_cases||0) > Number(r.produced_in_month||0) ? '<br><span style="font-size:10.5px;color:#1a5fb4;" title="Counted from the production reports dated after '+r.period+' (no later target set for this SKU)">incl. '+inr(Number(r.produced_cases)-Number(r.produced_in_month||0))+' from later months</span>' : ''}</td>` +
         `<td><div style="background:#eee;border-radius:6px;height:16px;width:120px;overflow:hidden;"><div style="height:16px;width:${Math.min(pct,100)}%;background:${barColor};"></div></div><span style="font-size:11px;color:${barColor};font-weight:600">${pct}%</span></td>` +
         `<td style="white-space:nowrap">${canUpd?`<button class="mini" onclick="updProdCompletion('${r.id}','${esc(r.sku_code)}',${r.reported_cases||0})">Mark completion</button>`:''}` +
           `${isDir()?` <button class="mini" onclick="delProdTarget('${r.id}')">Delete</button>`:''}</td></tr>`;
