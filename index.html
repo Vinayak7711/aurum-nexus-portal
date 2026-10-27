@@ -3895,8 +3895,9 @@ async function mfgTab(which){
     B.innerHTML = html + '</tbody></table></div><p style="font-size:11px;color:#777;margin-top:8px;">IN = QC-passed batches · OUT = dispatched orders · adjustments are Director-only with a reason.</p>';
   }
   if (which === 'batches'){
-    const { data, error } = await MF.from('batches').select('*, sku:sku_id(sku_code)').order('created_at',{ascending:false}).limit(100);
+    const { data, error } = await MF.from('batches').select('*').order('created_at',{ascending:false}).limit(100);
     if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    (data||[]).forEach(b => { b.sku = { sku_code: skuCodeOf(b.sku_id) }; });
     const opts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
     let html = `<div class="card" style="margin-bottom:14px;max-width:560px;"><h2 style="font-size:15px;">New production batch</h2>
       <div class="row2c" style="margin-top:8px;"><select id="nb-sku">${opts}</select>
@@ -3918,12 +3919,14 @@ async function mfgTab(which){
     B.innerHTML = html + '</tbody></table></div><div id="mfg-msg2"></div>';
   }
   if (which === 'report'){
-    const [{ data: stock }, { data: batches }, { data: skusFG }] = await Promise.all([
+    await loadUserNames();
+    const [{ data: stock }, { data: batches, error: bErr }, { data: skusFG }] = await Promise.all([
       MF.from('v_rm_stock').select('*').order('code'),
-      MF.from('batches').select('*, sku:sku_id(sku_code)').order('created_at',{ascending:false}).limit(30),
+      MF.from('batches').select('*').order('created_at',{ascending:false}).limit(60),
       MF.from('v_fg_stock').select('*')
     ]);
-    window.__prStock = stock || [];
+    (batches||[]).forEach(b => { b.sku = { sku_code: skuCodeOf(b.sku_id) }; });
+    window.__prStock = stock || []; window.__prBatches = batches || [];
     const consumable = (stock||[]).filter(r => Number(r.balance) > 0);
     const iopts = consumable.map(i=>`<option value="${i.rm_item_id}">${esc(i.code)} — ${esc(i.name)} (at MMC: ${Number(i.balance)} ${i.unit})</option>`).join('');
     const skuOpts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
@@ -3931,9 +3934,11 @@ async function mfgTab(which){
     // consumption lines for the batches shown
     let rmBy = {};
     if ((batches||[]).length){
-      const { data: brm } = await MF.from('batch_rm').select('batch_id, qty, item:rm_item_id(code,unit)').in('batch_id', batches.map(b=>b.id));
-      (brm||[]).forEach(l => { (rmBy[l.batch_id] ??= []).push(l); });
+      if (!rmItems.length){ const { data: ri } = await MF.from('rm_items').select('*').order('code'); rmItems = ri || []; }
+      const { data: brm } = await MF.from('batch_rm').select('id, batch_id, rm_item_id, qty').in('batch_id', batches.map(b=>b.id));
+      (brm||[]).forEach(l => { const it = rmItems.find(x=>x.id===l.rm_item_id); l.item = it ? { code: it.code, unit: it.unit, name: it.name } : null; (rmBy[l.batch_id] ??= []).push(l); });
     }
+    window.__prRmBy = rmBy;
     B.innerHTML = `
       <div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Daily production &amp; raw-material consumption report</h2>
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">One entry does everything: the materials consumed are minused from the MMC raw-material stock, the cases produced go into FG stock (immediately if “QC passed” stays ticked — otherwise after QC passes the batch), and the cases automatically count towards that month's target in the <b>Production</b> section.</p>
@@ -3948,13 +3953,18 @@ async function mfgTab(which){
         <div class="switch" style="margin:10px 0;"><input type="checkbox" id="pr-qc" checked><span>QC passed — put the cases straight into FG stock</span></div>
         <button class="btn gold sm" onclick="prodRepSave()">Record production &amp; consumption</button>
         <div id="pr-msg"></div></div>
-      <h4 class="sec">Recent production report</h4>
-      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Batch</th><th>SKU</th><th class="amount">Cases</th><th>Materials consumed</th><th>QC</th></tr></thead><tbody>
+      <h4 class="sec">Recent production report <span style="font-weight:normal;font-size:12px;color:#777">— last ${(batches||[]).length} entr${(batches||[]).length===1?'y':'ies'}</span></h4>
+      ${bErr ? `<div class="msg err">Could not load the production reports: ${esc(bErr.message)}</div>` : ''}
+      <div id="pr-editbox"></div>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Batch</th><th>SKU</th><th class="amount">Cases</th><th>Materials consumed</th><th>QC</th><th>Entered by</th>${isDir()?'<th></th>':''}</tr></thead><tbody>
       ${(batches||[]).map(b=>`<tr><td>${b.production_date}</td><td><b>${esc(b.batch_no)}</b></td><td>${esc(b.sku?.sku_code)}</td><td class="amount">${b.cases}</td>` +
         `<td style="font-size:12px;">${(rmBy[b.id]||[]).map(l=>esc(l.item?.code||'?')+' × '+Number(l.qty)+' '+(l.item?.unit||'')).join(', ')||'—'}</td>` +
-        `<td><span class="pill ${b.qc_status==='PASSED'?'DELIVERED':(b.qc_status==='FAILED'?'CANCELLED':'RECEIVED')}">${b.qc_status}</span></td></tr>`).join('')
-        || '<tr><td colspan="6" style="color:#777">No production recorded yet.</td></tr>'}
-      </tbody></table></div>`;
+        `<td><span class="pill ${b.qc_status==='PASSED'?'DELIVERED':(b.qc_status==='FAILED'?'CANCELLED':'RECEIVED')}">${b.qc_status}</span></td>` +
+        `<td style="font-size:11.5px;color:#555;">${esc(userNameOf(b.created_by))}<br><span style="color:#999">${String(b.created_at||'').slice(0,10)}</span></td>` +
+        (isDir() ? `<td style="white-space:nowrap"><button class="mini" onclick="prodRepEdit('${b.id}')">✏️ Edit</button> ${dirDelBtn('mfg','batches', b.id, b.batch_no, "mfgTab('report')")}</td>` : '') + `</tr>`).join('')
+        || `<tr><td colspan="${isDir()?8:7}" style="color:#777">No production recorded yet.</td></tr>`}
+      </tbody></table></div>
+      ${isDir() ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">As Director you can edit any report — SKU, cases, date and the materials consumed. MMC’s raw-material custody and FG stock follow the correction automatically; the batch number stays the same.</p>' : ''}`;
     prodRepRender();
     return;
   }
@@ -4341,6 +4351,65 @@ async function delProdTarget(id){
   const { error } = await db.schema('mfg').rpc('delete_prod_target', { p_target: id });
   if (error){ say('pt-msg2', error.message, false); return; }
   prodTab('targets');
+}
+function skuCodeOf(id){ const x = (typeof M !== 'undefined' && M && M.skus ? M.skus : []).find(s=>s.id===id); return x ? x.sku_code : (id ? String(id).slice(0,8) : '—'); }
+function userNameOf(id){ if (!id) return '—'; const u = (window.allUsers||[]).find(x=>x.id===id) || (window.acStaff||[]).find(x=>x.id===id); return u ? (u.full_name||u.email) : (window.__userNames||{})[id] || '—'; }
+async function loadUserNames(){ if (window.__userNames) return; try { const { data } = await db.schema('adm').from('users').select('id, full_name, email'); window.__userNames = {}; (data||[]).forEach(u => { window.__userNames[u.id] = u.full_name || u.email; }); } catch(e){ window.__userNames = window.__userNames || {}; } }
+/* ---- Director: edit a production report (batch) ---- */
+let prEditLines = [];
+function prodRepEdit(id){
+  if (!isDir()){ alert('Only a Director can edit a production report.'); return; }
+  const b = (window.__prBatches||[]).find(x=>x.id===id); if (!b) return;
+  const box = $('pr-editbox'); if (!box) return;
+  prEditLines = ((window.__prRmBy||{})[id]||[]).map(l => ({ rm_item_id: l.rm_item_id, qty: Number(l.qty), label: (l.item ? l.item.code + ' — ' + (l.item.name||'') : '?'), unit: l.item ? l.item.unit : '' }));
+  const skuOpts = M.skus.filter(s=>s.is_active || s.id===b.sku_id).map(s=>`<option value="${s.id}" ${s.id===b.sku_id?'selected':''}>${esc(s.sku_code)}</option>`).join('');
+  // material choices: anything at MMC, plus whatever this report already consumed (its own lines count as available again)
+  const own = {}; prEditLines.forEach(l => { own[l.rm_item_id] = (own[l.rm_item_id]||0) + l.qty; });
+  const stock = (window.__prStock||[]).map(r => ({ ...r, avail: Number(r.balance||0) + (own[r.rm_item_id]||0) })).filter(r => r.avail > 0);
+  rmItems.forEach(it => { if (own[it.id] && !stock.some(r=>r.rm_item_id===it.id)) stock.push({ rm_item_id: it.id, code: it.code, name: it.name, unit: it.unit, avail: own[it.id] }); });
+  const iopts = stock.map(i=>`<option value="${i.rm_item_id}">${esc(i.code)} — ${esc(i.name)} (available: ${Number(i.avail)} ${i.unit||''})</option>`).join('');
+  box.innerHTML = `
+    <div class="card" style="margin:0 0 14px;max-width:720px;border:1px solid #b8860b;"><h3 style="font-size:15px;">✏️ Edit production report ${esc(b.batch_no)}</h3>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Correct the SKU, cases, date or the materials consumed. MMC’s raw-material custody is recalculated from the new lines${b.qc_status==='PASSED'?'; the cases in FG stock are adjusted to the new figure':''}. Entered by ${esc(userNameOf(b.created_by))} on ${String(b.created_at||'').slice(0,10)}.</p>
+      <div class="row2c"><div><label>SKU produced *</label><select id="pe-sku">${skuOpts}</select></div>
+        <div class="row2c"><div><label>Cases *</label><input type="number" id="pe-cases" min="1" value="${Number(b.cases)}"></div>
+        <div><label>Date</label><input type="date" id="pe-date" value="${b.production_date}"></div></div></div>
+      <h4 class="sec" style="margin-top:12px;">Raw material consumed</h4>
+      <div class="row2c"><div><label>Material (at MMC)</label><select id="pe-item">${iopts || '<option value="">— nothing at MMC —</option>'}</select></div>
+        <div class="row2c"><div><label>Qty consumed</label><input type="number" id="pe-qty" min="0.001" step="any"></div>
+        <div><label>&nbsp;</label><button class="btn ghost sm" style="display:block;" onclick="prodRepEditAdd()">+ Add material</button></div></div></div>
+      <div id="pe-lines" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btn gold sm" onclick="prodRepEditSave('${b.id}')">Save changes</button>
+        <button class="btn ghost sm" onclick="$('pr-editbox').innerHTML=''">Cancel</button></div>
+      <div id="pe-msg"></div></div>`;
+  prodRepEditRender();
+  box.scrollIntoView({behavior:'smooth', block:'start'});
+}
+function prodRepEditRender(){
+  const out = $('pe-lines'); if (!out) return;
+  out.innerHTML = prEditLines.length
+    ? prEditLines.map((l,i)=>`🧪 ${esc(l.label)} × <input type="number" min="0.001" step="any" value="${l.qty}" style="width:90px;padding:3px 6px;" onchange="prEditLines[${i}].qty=Number(this.value)||0"> ${esc(l.unit||'')} <a href="#" onclick="prEditLines.splice(${i},1);prodRepEditRender();return false;" style="color:#b3261e;text-decoration:none;font-weight:600;">✖</a>`).join('<br>')
+    : '<span style="color:#999">No materials on this report — add each material consumed, or leave empty.</span>';
+}
+function prodRepEditAdd(){
+  const sel = $('pe-item'); const qty = Number($('pe-qty').value);
+  if (!sel || !sel.value){ say('pe-msg','No material at MMC to consume.',false); return; }
+  if (!(qty > 0)){ say('pe-msg','Enter the quantity consumed.',false); return; }
+  const it = rmItems.find(x=>x.id===sel.value); const ex = prEditLines.find(l=>l.rm_item_id===sel.value);
+  if (ex) ex.qty += qty; else prEditLines.push({ rm_item_id: sel.value, qty, label: it ? it.code + ' — ' + (it.name||'') : sel.options[sel.selectedIndex].text, unit: it ? it.unit : '' });
+  $('pe-qty').value = ''; say('pe-msg',''); prodRepEditRender();
+}
+async function prodRepEditSave(id){
+  const cases = Number($('pe-cases').value);
+  if (!(cases > 0)){ say('pe-msg','Enter the cases produced.',false); return; }
+  if (prEditLines.some(l => !(l.qty > 0))){ say('pe-msg','Every material line needs a quantity above zero (remove the line if nothing was used).',false); return; }
+  const { error } = await db.schema('mfg').rpc('batch_edit', { p_batch: id, p_sku: $('pe-sku').value, p_cases: cases, p_date: $('pe-date').value || null,
+    p_rm: prEditLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty })) });
+  if (error){ say('pe-msg','Could not save: '+error.message,false); return; }
+  prEditLines = [];
+  await mfgTab('report');
+  const m = $('pr-msg'); if (m) say('pr-msg','Production report updated — stock and custody follow the correction.', true);
 }
 let prodRepLines = [];
 function prodRepRender(){
