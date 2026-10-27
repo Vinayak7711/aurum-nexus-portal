@@ -4273,6 +4273,7 @@ async function prodTab(t){
     const { data, error } = await MF.from('v_prod_targets').select('*').order('period', {ascending:false}).order('sku_code');
     if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
     const rows = data || [];
+    window.__ptRows = rows;
     const now = monthLabelJS();
     // the tiles follow the running targets: this month's if any are set, otherwise the latest month that has targets (they stay open until met)
     const statPeriod = rows.some(r=>r.period===now) ? now : (rows[0] ? rows[0].period : now);
@@ -4294,7 +4295,8 @@ async function prodTab(t){
         <div class="row2c" style="margin-top:8px;"><input type="number" id="pt-cases" placeholder="Target cases" min="1">
         <button class="btn gold sm" style="padding:11px;" onclick="setProdTarget()">Set target</button></div>
         <input type="text" id="pt-note" placeholder="Note (optional)" style="margin-top:8px;">
-        <div id="pt-msg"></div></div>`;
+        <div id="pt-msg"></div></div>
+        <div id="pt-editbox"></div>`;
     }
     html += '<div class="table-scroll"><table><thead><tr><th>Month</th><th>SKU</th><th class="amount">Target</th><th class="amount">Completed</th><th class="amount">Produced (batch book)</th><th>Progress</th><th></th></tr></thead><tbody>';
     for (const r of rows){
@@ -4309,7 +4311,7 @@ async function prodTab(t){
         `<td class="amount" style="color:#555">${inr(r.produced_cases)}${Number(r.produced_cases||0) > Number(r.produced_in_month||0) ? '<br><span style="font-size:10.5px;color:#1a5fb4;" title="Counted from the production reports dated after '+r.period+' (no later target set for this SKU)">incl. '+inr(Number(r.produced_cases)-Number(r.produced_in_month||0))+' from later months</span>' : ''}</td>` +
         `<td><div style="background:#eee;border-radius:6px;height:16px;width:120px;overflow:hidden;"><div style="height:16px;width:${Math.min(pct,100)}%;background:${barColor};"></div></div><span style="font-size:11px;color:${barColor};font-weight:600">${pct}%</span></td>` +
         `<td style="white-space:nowrap">${canUpd?`<button class="mini" onclick="updProdCompletion('${r.id}','${esc(r.sku_code)}',${r.reported_cases||0})">Mark completion</button>`:''}` +
-          `${isDir()?` <button class="mini" onclick="delProdTarget('${r.id}')">Delete</button>`:''}</td></tr>`;
+          `${isDir()?` <button class="mini" onclick="prodTargetEdit('${r.id}')">✏️ Edit</button> <button class="mini" onclick="delProdTarget('${r.id}')">Delete</button>`:''}</td></tr>`;
     }
     B.innerHTML = html + (rows.length?'':'<tr><td colspan="7" style="color:#777">No production targets set yet.</td></tr>') + '</tbody></table></div><div id="pt-msg2"></div>';
     return;
@@ -4330,6 +4332,30 @@ async function prodTab(t){
       </tbody></table></div></details>`;
     return;
   }
+}
+/* ---- Director: edit a target in place ---- */
+function prodTargetEdit(id){
+  if (!isDir()){ alert('Only a Director can edit a target.'); return; }
+  const r = (window.__ptRows||[]).find(x=>x.id===id); const box = $('pt-editbox'); if (!r || !box) return;
+  const skuOpts = M.skus.filter(s=>s.is_active || s.id===r.sku_id).map(s=>`<option value="${s.id}" ${s.id===r.sku_id?'selected':''}>${esc(s.sku_code)}</option>`).join('');
+  box.innerHTML = `<div class="card" style="margin-bottom:14px;max-width:620px;border:1px solid #b8860b;"><h2 style="font-size:15px;">✏️ Edit target — ${esc(r.sku_code)} · ${esc(r.period)}</h2>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Change the SKU, month, target cases or note. Production already counted against it (${inr(r.produced_cases||0)} cases) and any completion marked by hand stay attached and the progress is recalculated.</p>
+      <div class="row2c" style="margin-top:8px;"><select id="pe-tsku">${skuOpts}</select>
+      <input type="month" id="pe-tmonth" value="${esc(r.period)}"></div>
+      <div class="row2c" style="margin-top:8px;"><input type="number" id="pe-tcases" min="1" value="${Number(r.target_cases)}" placeholder="Target cases">
+      <div style="display:flex;gap:8px;"><button class="btn gold sm" style="padding:11px;flex:1;" onclick="prodTargetEditSave('${r.id}')">Save changes</button><button class="btn ghost sm" style="padding:11px;" onclick="$('pt-editbox').innerHTML=''">Cancel</button></div></div>
+      <input type="text" id="pe-tnote" placeholder="Note (optional)" value="${esc(r.note||'')}" style="margin-top:8px;">
+      <div id="pe-tmsg"></div></div>`;
+  box.scrollIntoView({behavior:'smooth', block:'center'});
+}
+async function prodTargetEditSave(id){
+  const cases = Number($('pe-tcases').value), month = $('pe-tmonth').value;
+  if (!month){ say('pe-tmsg','Pick a month.',false); return; }
+  if (!(cases>0)){ say('pe-tmsg','Target cases must be above zero.',false); return; }
+  const { error } = await db.schema('mfg').rpc('prod_target_edit', { p_id: id, p_sku: $('pe-tsku').value, p_period: month, p_target_cases: cases, p_note: $('pe-tnote').value.trim()||null });
+  if (error){ say('pe-tmsg','Could not save: '+error.message,false); return; }
+  await prodTab('targets');
+  const m = $('pt-msg'); if (m) say('pt-msg','Target updated.', true);
 }
 async function setProdTarget(){
   const cases = Number($('pt-cases').value), month = $('pt-month').value;
