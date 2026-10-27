@@ -1548,9 +1548,19 @@ function noAddLine(quiet){
   return true;
 }
 function noDelLine(i){ noLines.splice(i,1); noRenderLines(); }
+// Order lines are always shown brand by brand (one brand's packs together, 750 → 180 → 90 ml, glass before PET), never mixed.
+function skuSortKey(skuId){
+  const s = (typeof M !== 'undefined' && M && M.skus ? M.skus : []).find(x=>x.id===skuId) || {};
+  const b = (M && M.brands ? M.brands : []).find(x=>x.id===s.brand_id) || {};
+  return { brand: String(b.name || s.sku_code || '').toUpperCase(), size: -(Number(s.size_ml) || 0), mat: String(s.material || '').toUpperCase() === 'GLASS' ? 0 : 1, code: String(s.sku_code || '') };
+}
+function sortLinesBrandwise(arr, skuIdOf){
+  return arr.map((l,i)=>({ l, i, k: skuSortKey(skuIdOf(l)) })).sort((a,b)=> a.k.brand.localeCompare(b.k.brand) || (a.k.size - b.k.size) || (a.k.mat - b.k.mat) || a.k.code.localeCompare(b.k.code) || (a.i - b.i)).map(x=>x.l);
+}
 function noRenderLines(){
   const box = $('no-lines-list');
   if (!noLines.length){ box.innerHTML = '<p style="font-size:12.5px;color:#999;margin:4px 0;">No items added yet.</p>'; return; }
+  noLines = sortLinesBrandwise(noLines, l => l.sku_id);
   const tot = noLines.reduce((s,l)=>s+l.cases,0);
   box.innerHTML = '<div class="table-scroll"><table><thead><tr><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th></th></tr></thead><tbody>' +
     noLines.map((l,i)=>`<tr><td>${esc(l.brand_name)}</td><td>${esc(l.sku_code)}</td><td class="amount">${l.cases}</td>
@@ -1586,8 +1596,10 @@ async function openOrderDetail(id){
   const { data: o, error } = await S.from('orders')
     .select('*, party:parties(code,name,city,credit_days)').eq('id', id).single();
   if (error){ say('od-msg','Load failed: '+error.message,false); return; }
-  const { data: lines } = await S.from('order_lines')
+  const { data: linesRaw } = await S.from('order_lines')
     .select('*, sku:skus(sku_code, units_per_case, basic_price_case, excise_duty, wine_fee_case, vat_amount)').eq('order_id', id).order('id');
+  if (typeof M === 'undefined' || !M || !M.skus) { try { await loadMasters(); } catch(e){} }
+  const lines = sortLinesBrandwise(linesRaw || [], l => l.sku_id);   // brand by brand, never mixed
   const canApproveSO = isDir() || !!(me?.permissions_json?.sales?.admin);
   const seeMoney = canApproveSO || canFin();
   let vals = {};
