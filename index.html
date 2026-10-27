@@ -1648,6 +1648,14 @@ async function openOrderDetail(id){
   }
   if (seeMoney){
     const exf = T.basic + T.exc + T.wine;
+    // scheme deductions already booked on this bill (last month's scheme settlement, deducted on the first bill of the month)
+    let schemeDed = 0, schemeKnown = true;
+    try { await loadPayTerms(); } catch(e){}
+    try { const { data: sp, error: se } = await S.from('payments').select('amount, mode').eq('order_id', id).in('mode', ['SCHEME','SCHEME_REIMB']);
+          if (se) schemeKnown = false; else schemeDed = (sp||[]).reduce((s,p)=>s+Number(p.amount||0),0); } catch(e){ schemeKnown = false; }
+    const netAfterScheme = Math.max(0, T.total - schemeDed);
+    const tcsRateNow = Number(window.__payTerms?.tcsRate ?? 2), tcsNow = Math.round(netAfterScheme * tcsRateNow) / 100;
+    window.__odScheme = { schemeDed, schemeKnown };
     tb.insertAdjacentHTML('beforeend',
       `<tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td class="amount">${totCases}</td><td></td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td></tr>` +
       `<tr><td colspan="8" style="padding:10px 12px;">
@@ -1658,9 +1666,12 @@ async function openOrderDetail(id){
           <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">Ex-factory (before VAT)</div><div style="font-size:16px;font-weight:700;">₹ ${inr(exf)}</div></div>
           <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">VAT</div><div style="font-size:16px;font-weight:700;color:#1a7f37">₹ ${inr(T.vat)}</div></div>
           <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;border:2px solid #c9a227;"><div style="font-size:11px;color:#777">Order total incl. VAT</div><div style="font-size:16px;font-weight:700;">₹ ${inr(T.total)}</div></div>
+          <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border-left:4px solid #7a5c10;"><div style="font-size:11px;color:#777">Less: scheme deduction</div><div style="font-size:16px;font-weight:700;color:${schemeDed>0.005?'#b3261e':'#555'}">${schemeKnown ? '− ₹ '+inr(schemeDed) : '—'}</div><div style="font-size:10.5px;color:#777">${schemeDed>0.005 ? "last month's scheme settlement, deducted on this bill" : (schemeKnown ? 'no scheme settlement pending on this bill' : 'not visible to your role')}</div></div>
+          <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border:2px solid #7a5c10;background:#fbf7ec;"><div style="font-size:11px;color:#777">Net payable after scheme deduction</div><div style="font-size:16px;font-weight:700;">₹ ${inr(netAfterScheme)}</div></div>
         </div>
         ${anyPreview ? '<p style="font-size:11.5px;color:#777;margin:8px 0 0;">Figures come live from Brands &amp; SKUs (basic price, excise duty × bottles, wine fees, VAT × bottles) and are stamped on the order at approval.</p>' : ''}
-        <p style="font-size:11.5px;color:#555;margin:8px 0 0;">TCS ${(window.__payTerms?.tcsRate ?? 2)}% on the order total incl. VAT (after scheme deductions): about <b>₹ ${inr(Math.round(Math.max(0, T.total) * (window.__payTerms?.tcsRate ?? 2)) / 100)}</b> — payable by the distributor with the month's TCS by the ${(window.__payTerms?.tcsDay ?? 5)}th of the next month (exact figure in the balance below).</p>
+        <p style="font-size:11.5px;color:#555;margin:8px 0 0;">🎁 <b>Scheme deduction:</b> the distributor's scheme claims settled for the previous month are deducted on the first bill of each month, after the order total incl. VAT and before TCS.${schemeDed>0.005 ? ' On this bill: <b>₹ '+inr(schemeDed)+'</b>.' : ' Nothing is deducted on this bill (₹ 0.00).'}</p>
+        <p style="font-size:11.5px;color:#555;margin:6px 0 0;">TCS ${tcsRateNow}% on ₹ ${inr(netAfterScheme)} (order total incl. VAT${schemeDed>0.005?' less the scheme deduction':''}): <b>₹ ${inr(tcsNow)}</b> — payable by the distributor with the month's TCS by the ${(window.__payTerms?.tcsDay ?? 5)}th of the next month. <b>Payable incl. TCS: ₹ ${inr(netAfterScheme + tcsNow)}</b>.</p>
         ${o.excise_paid_amount != null ? `<p style="font-size:12px;margin:8px 0 0;"><b>Excise duty &amp; wine fees paid by distributor:</b> ₹ ${inr(o.excise_paid_amount)} · ref ${esc(o.excise_paid_ref||'—')} · ${o.excise_paid_date||''}${o.excise_paid_note?' · '+esc(o.excise_paid_note):''}</p>` : ''}
         <div id="od-balance" style="font-size:12px;margin:6px 0 0;"></div>
       </td></tr>`);
@@ -1848,9 +1859,10 @@ async function orderReport(id){
       <tr><td><b>Ex-factory (before VAT)</b></td><td class="amount"><b>${inr(exf)}</b></td></tr>
       <tr><td>VAT</td><td class="amount">${inr(T.vat)}</td></tr>
       <tr style="font-weight:700;background:#f3eee0;"><td>Order total incl. VAT</td><td class="amount">${inr(T.total)}</td></tr>
-      ${bd.schemeDed>0.005?`<tr><td>Less: scheme deductions on this bill</td><td class="amount">− ${inr(bd.schemeDed)}</td></tr>`:''}
+      <tr><td>Less: scheme deduction — last month's scheme settlement of this distributor, deducted on the first bill of the month${bd.schemeDed>0.005?'':' (nothing pending on this bill)'}</td><td class="amount">${bd.schemeDed>0.005?'− ':''}${inr(bd.schemeDed)}</td></tr>
+      <tr style="font-weight:700;"><td>Net payable after scheme deduction</td><td class="amount">${inr(Math.max(0, T.total - bd.schemeDed))}</td></tr>
       <tr><td>TCS ${bd.tcsRate}% on ₹ ${inr(bd.tcsBase)} · payable by the distributor by ${bd.tcsDue}</td><td class="amount">${inr(bd.tcs)}</td></tr>
-      <tr style="font-weight:700;"><td>Payable incl. TCS</td><td class="amount">${inr(T.total - bd.schemeDed + bd.tcs)}</td></tr>
+      <tr style="font-weight:700;background:#f3eee0;"><td>Payable incl. TCS</td><td class="amount">${inr(Math.max(0, T.total - bd.schemeDed) + bd.tcs)}</td></tr>
     </tbody></table>
     <h3 style="margin-top:14px;">Excise duty &amp; wine fees paid by the distributor (to MMC excise account)</h3>
     <table style="max-width:720px;"><tbody>
