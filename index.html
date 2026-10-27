@@ -1656,6 +1656,7 @@ async function openOrderDetail(id){
           <div class="card" style="flex:1;min-width:130px;text-align:center;padding:10px;border:2px solid #c9a227;"><div style="font-size:11px;color:#777">Order total incl. VAT</div><div style="font-size:16px;font-weight:700;">₹ ${inr(T.total)}</div></div>
         </div>
         ${anyPreview ? '<p style="font-size:11.5px;color:#777;margin:8px 0 0;">Figures come live from Brands &amp; SKUs (basic price, excise duty × bottles, wine fees, VAT × bottles) and are stamped on the order at approval.</p>' : ''}
+        <p style="font-size:11.5px;color:#555;margin:8px 0 0;">TCS ${(window.__payTerms?.tcsRate ?? 2)}% on the order total incl. VAT (after scheme deductions): about <b>₹ ${inr(Math.round(Math.max(0, T.total) * (window.__payTerms?.tcsRate ?? 2)) / 100)}</b> — payable by the distributor with the month's TCS by the ${(window.__payTerms?.tcsDay ?? 5)}th of the next month (exact figure in the balance below).</p>
         ${o.excise_paid_amount != null ? `<p style="font-size:12px;margin:8px 0 0;"><b>Excise duty &amp; wine fees paid by distributor:</b> ₹ ${inr(o.excise_paid_amount)} · ref ${esc(o.excise_paid_ref||'—')} · ${o.excise_paid_date||''}${o.excise_paid_note?' · '+esc(o.excise_paid_note):''}</p>` : ''}
         <div id="od-balance" style="font-size:12px;margin:6px 0 0;"></div>
       </td></tr>`);
@@ -1709,10 +1710,10 @@ async function openOrderDetail(id){
   // payments (director)
   const P = $('od-pay');
   if (isDir()){
-    const { data: pays } = await S.from('payments').select('*').eq('order_id', id).order('pay_date');
+    const [{ data: pays }, { data: tcsPays }] = await Promise.all([S.from('payments').select('*').eq('order_id', id).order('pay_date'), S.from('tcs_payments').select('*').eq('order_id', id).order('pay_date')]);
     const PT = await loadPayTerms();
     const payable = o.status !== 'RECEIVED' && o.status !== 'CANCELLED';
-    const bd = payable && window.__odData ? orderTerms(o, window.__odData.T, pays||[], PT, o.party?.credit_days) : null;
+    const bd = payable && window.__odData ? orderTerms(o, window.__odData.T, pays||[], PT, o.party?.credit_days, tcsPays||[]) : null;
     if ($('od-balance') && bd){
       $('od-balance').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
         <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #c9a227;"><div style="font-size:11px;color:#777">Basic — distributor pays MMC, MMC pays Aurum · ${bd.credit} days credit</div>
@@ -1723,7 +1724,11 @@ async function openOrderDetail(id){
           <div>VAT ₹ ${inr(bd.vat)}${bd.vatPaid?' − paid ₹ '+inr(bd.vatPaid):''} = <b style="color:${bd.vatLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.vatLeft)}</b></div>
           <div style="font-size:11.5px;color:${bd.vatOver?'#b3261e':'#555'}">Due on <b>${bd.vatDue}</b> (19th of the month after the sale)${bd.vatOver?' · overdue':''}</div></div>
         ${bd.levyLeft>0.005?`<div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #b3261e;"><div style="font-size:11px;color:#777">Excise &amp; wine fees still unpaid (MMC excise a/c)</div><div><b style="color:#b3261e">₹ ${inr(bd.levyLeft)}</b></div></div>`:''}
-      </div>`;
+        <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #0b57d0;"><div style="font-size:11px;color:#777">TCS ${bd.tcsRate}% — payable by the distributor, month-wise</div>
+          <div>${bd.tcsRate}% of ₹ ${inr(bd.tcsBase)}${bd.schemeDed>0.005?' <span style="font-size:11px;color:#777">(total incl. VAT ₹ '+inr(T.total)+' − scheme deductions ₹ '+inr(bd.schemeDed)+')':' <span style="font-size:11px;color:#777">(total incl. VAT)'}</span> = ₹ ${inr(bd.tcs)}${bd.tcsPaid?' − paid ₹ '+inr(bd.tcsPaid):''} = <b style="color:${bd.tcsLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.tcsLeft)}</b></div>
+          <div style="font-size:11.5px;color:${bd.tcsOver?'#b3261e':'#555'}">Due on <b>${bd.tcsDue}</b> (${PT.tcsDay}th of the month after the sale — the whole month's TCS together)${bd.tcsOver?' · overdue':''}</div></div>
+      </div>
+      ${bd.schReimb>0.005 ? `<p style="font-size:11.5px;color:#7a5c10;margin:6px 0 0;">🎁 Scheme claims of earlier months deducted on this bill: ₹ ${inr(bd.schReimb)} (first bill of the month).</p>` : ''}`;
     }
     // Payments are recorded in MMC Accounts & Distributor Outstanding (not on the order) — only a pointer here.
     P.innerHTML = payable ? `<p style="font-size:12px;color:#777;margin:10px 0 0;">Payments from the distributor (basic, VAT, excise balance) are recorded in <a href="#" onclick="event.preventDefault();openRates();" style="color:#1c2455;font-weight:600;">MMC Accounts &amp; Distributor Outstanding</a>.</p>` : '';
@@ -1746,7 +1751,7 @@ async function loadPayTerms(force){
   const S = db.schema('sales');
   const [t, sl] = await Promise.all([S.from('payment_terms').select('*').eq('id', 1).maybeSingle(),
                                      S.from('cash_discount_slabs').select('*').eq('is_active', true).order('paid_within_days')]);
-  window.__payTerms = { credit: t.data?.basic_credit_days ?? 30, vatDay: t.data?.vat_due_day ?? 19, slabs: sl.data || [] };
+  window.__payTerms = { credit: t.data?.basic_credit_days ?? 30, vatDay: t.data?.vat_due_day ?? 19, tcsRate: Number(t.data?.tcs_rate ?? 2), tcsDay: Number(t.data?.tcs_due_day ?? 5), slabs: sl.data || [] };
   return window.__payTerms;
 }
 function ymdStr(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -1766,7 +1771,7 @@ function odPayKind(){
   if (bd) $('pay-amt').value = isB ? (bd.basicLeft>0.005 ? (bd.basicLeft-bd.discNow).toFixed(2) : '') : k==='VAT_MMC' ? (bd.vatLeft>0.005 ? bd.vatLeft.toFixed(2) : '') : (bd.levyLeft>0.005 ? bd.levyLeft.toFixed(2) : '');
 }
 // Everything about one order's money: what went to MMC (excise+wine, VAT), what is Aurum's (basic), due dates, discount.
-function orderTerms(o, T, pays, PT, partyCredit){
+function orderTerms(o, T, pays, PT, partyCredit, tcsPays){
   const sum = f => (pays||[]).filter(f).reduce((s,p)=>s+Number(p.amount),0);
   const levyPaid = sum(p=>p.mode==='EXCISE_MMC'), vatPaid = sum(p=>p.mode==='VAT_MMC'), disc = sum(p=>p.mode==='CASH_DISC');
   const basicMmc = sum(p=>p.mode==='BASIC_MMC');
@@ -1783,9 +1788,15 @@ function orderTerms(o, T, pays, PT, partyCredit){
   const pct = slab ? Number(slab.pct) : 0, discNow = slab ? Math.round(basicLeft * pct) / 100 : 0;
   const discUntil = slab ? addDaysStr(sale, slab.paid_within_days) : '';
   const basicOver = basicLeft > 0.005 && today > basicDue, vatOver = vatLeft > 0.005 && today > vatDue;
+  // TCS: % of the order total incl. VAT, after the scheme deductions on the bill; the month's TCS is payable by day N of the next month
+  const tcsRate = Number(PT.tcsRate ?? 2), total = Number(T.total||0);
+  const tcsBase = Math.max(0, total - scheme - schReimb), tcs = Math.round(tcsBase * tcsRate) / 100;
+  const tcsPaid = (tcsPays||[]).reduce((s,p)=>s+Number(p.amount),0), tcsLeft = tcs - tcsPaid;
+  const tcsDue = vatDueStr(sale, PT.tcsDay ?? 5), tcsOver = tcsLeft > 0.005 && today > tcsDue;
   return { sale, provisional, credit, basicDue, vatDue, basic, vat, exc, wine, levyPaid, vatPaid, disc, otherDisc, scheme, schReimb, basicRecv, basicMmc, basicDirect,
            levyLeft, vatLeft, basicLeft, days, pct, discNow, discUntil, basicOver, vatOver,
-           basicLate: basicOver ? daysBetweenStr(basicDue, today) : 0, balance: basicLeft + vatLeft + levyLeft };
+           tcsRate, tcsBase, tcs, tcsPaid, tcsLeft, tcsDue, tcsOver, schemeDed: scheme + schReimb,
+           basicLate: basicOver ? daysBetweenStr(basicDue, today) : 0, balance: basicLeft + vatLeft + levyLeft + tcsLeft };
 }
 // Printable order report (approved orders): lines with the stamped breakdown, totals, excise paid by the distributor, payments.
 async function orderReport(id){
@@ -1793,6 +1804,7 @@ async function orderReport(id){
   const { o, lines, vals, T, totCases } = window.__odData;
   const S = db.schema('sales');
   const { data: pays } = await S.from('payments').select('*').eq('order_id', id).order('pay_date');
+  const { data: tcsPaysR } = await S.from('tcs_payments').select('*').eq('order_id', id).order('pay_date');
   const { data: party } = await S.from('parties').select('name, code, city, address, pincode, gstin, phone').eq('id', o.party_id).maybeSingle();
   let approver = '';
   if (o.approved_by){ const u = (window.allUsers||[]).find(x=>x.id===o.approved_by) || (acStaff||[]).find(x=>x.id===o.approved_by); if (u) approver = u.full_name; else { try { const { data: au } = await db.schema('adm').from('users').select('full_name').eq('id', o.approved_by).maybeSingle(); if (au) approver = au.full_name; } catch(e){} } }
@@ -1801,7 +1813,7 @@ async function orderReport(id){
     return `<tr><td>${esc(l.sku?.sku_code)}</td><td class="amount">${c}</td><td class="amount">${l.sku?.units_per_case||''}</td><td class="amount">${v.basic_per_case!=null?inr(v.basic_per_case):'—'}</td><td class="amount">${b!=null?inr(b):'—'}</td><td class="amount">${e!=null?inr(e):'—'}</td><td class="amount">${w!=null?inr(w):'—'}</td><td class="amount">${t!=null?inr(t):'—'}</td><td class="amount">${v.rate_per_case!=null?inr(v.rate_per_case):'—'}</td><td class="amount"><b>${a!=null?inr(a):'—'}</b></td></tr>`; }).join('');
   const paid = (pays||[]).reduce((s,p)=>s+Number(p.amount),0);
   const PT = await loadPayTerms();
-  const bd = orderTerms(o, T, pays||[], PT, o.party?.credit_days);
+  const bd = orderTerms(o, T, pays||[], PT, o.party?.credit_days, tcsPaysR||[]);
   const exf = T.basic + T.exc + T.wine;
   const body = `
     <h1>AURUM SPIRITS INDIA LIMITED</h1>
@@ -1823,6 +1835,9 @@ async function orderReport(id){
       <tr><td><b>Ex-factory (before VAT)</b></td><td class="amount"><b>${inr(exf)}</b></td></tr>
       <tr><td>VAT</td><td class="amount">${inr(T.vat)}</td></tr>
       <tr style="font-weight:700;background:#f3eee0;"><td>Order total incl. VAT</td><td class="amount">${inr(T.total)}</td></tr>
+      ${bd.schemeDed>0.005?`<tr><td>Less: scheme deductions on this bill</td><td class="amount">− ${inr(bd.schemeDed)}</td></tr>`:''}
+      <tr><td>TCS ${bd.tcsRate}% on ₹ ${inr(bd.tcsBase)} · payable by the distributor by ${bd.tcsDue}</td><td class="amount">${inr(bd.tcs)}</td></tr>
+      <tr style="font-weight:700;"><td>Payable incl. TCS</td><td class="amount">${inr(T.total - bd.schemeDed + bd.tcs)}</td></tr>
     </tbody></table>
     <h3 style="margin-top:14px;">Excise duty &amp; wine fees paid by the distributor (to MMC excise account)</h3>
     <table style="max-width:720px;"><tbody>
@@ -1831,8 +1846,8 @@ async function orderReport(id){
     </tbody></table>
     <h3 style="margin-top:14px;">Payments against this order</h3>
     <table><thead><tr><th>Date</th><th>Mode</th><th>Reference</th><th class="amount">Amount ₹</th></tr></thead><tbody>
-      ${(pays||[]).map(p=>`<tr><td>${p.pay_date}</td><td>${payModeLabel(p.mode)}</td><td>${esc(p.ref_no||'')}</td><td class="amount">${inr(p.amount)}</td></tr>`).join('') || '<tr><td colspan="4" style="color:#666">No payments recorded.</td></tr>'}
-      <tr style="font-weight:700;"><td colspan="3">Settled so far</td><td class="amount">${inr(paid)}</td></tr>
+      ${(pays||[]).map(p=>`<tr><td>${p.pay_date}</td><td>${payModeLabel(p.mode)}</td><td>${esc(p.ref_no||'')}</td><td class="amount">${inr(p.amount)}</td></tr>`).join('') + (tcsPaysR||[]).map(p=>`<tr><td>${p.pay_date}</td><td>🧾 TCS → paid to MMC</td><td>${esc(p.ref_no||'')}</td><td class="amount">${inr(p.amount)}</td></tr>`).join('') || '<tr><td colspan="4" style="color:#666">No payments recorded.</td></tr>'}
+      <tr style="font-weight:700;"><td colspan="3">Settled so far</td><td class="amount">${inr(paid + bd.tcsPaid)}</td></tr>
     </tbody></table>
     <h3 style="margin-top:14px;">Balance due from distributor</h3>
     <table style="max-width:680px;"><tbody>
@@ -1851,6 +1866,10 @@ async function orderReport(id){
       ${bd.vatPaid ? `<tr><td>Less: VAT paid to MMC</td><td class="amount">− ${inr(bd.vatPaid)}</td></tr>` : ''}
       <tr style="font-weight:700;"><td>VAT balance</td><td class="amount">${inr(bd.vatLeft)}</td></tr>
       ${bd.levyLeft>0.005 ? `<tr><td>Excise duty &amp; wine fees still unpaid (MMC excise a/c)</td><td class="amount">${inr(bd.levyLeft)}</td></tr>` : ''}
+      <tr style="background:#f7f3e8;"><td colspan="2"><b>TCS ${bd.tcsRate}% — payable by the distributor, month-wise</b> · due ${bd.tcsDue} (${PT.tcsDay}th of the month after the sale)</td></tr>
+      <tr><td>TCS ${bd.tcsRate}% on ₹ ${inr(bd.tcsBase)} (order total incl. VAT${bd.schemeDed>0.005?' less scheme deductions':''})</td><td class="amount">${inr(bd.tcs)}</td></tr>
+      ${bd.tcsPaid ? `<tr><td>Less: TCS paid</td><td class="amount">− ${inr(bd.tcsPaid)}</td></tr>` : ''}
+      <tr style="font-weight:700;"><td>TCS balance</td><td class="amount">${inr(bd.tcsLeft)}</td></tr>
       <tr style="font-weight:700;background:#f3eee0;"><td>Balance due (total)</td><td class="amount">${inr(bd.balance)}</td></tr>
     </tbody></table>
     <p style="font-size:10px;color:#666;margin-top:14px;">Generated from Aurum Nexus on ${new Date().toLocaleString('en-IN')}. Rates stamped from Brands &amp; SKUs at approval.</p>`;
@@ -3340,24 +3359,26 @@ async function mmcAccounts(B){
   if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
   const all = ords || [];
   const ids = all.map(o=>o.id);
-  const lines = [], vals = [], pays = [];
+  const lines = [], vals = [], pays = [], tcsAll = [];
   for (let i = 0; i < ids.length; i += 200){
     const chunk = ids.slice(i, i+200);
     const { data: l } = await S.from('order_lines').select('id, order_id, cases').in('order_id', chunk); lines.push(...(l||[]));
     const { data: p } = await S.from('payments').select('order_id, amount, mode, pay_date, ref_no').in('order_id', chunk); pays.push(...(p||[]));
+    const { data: tp } = await S.from('tcs_payments').select('order_id, amount, pay_date, ref_no, pay_via').in('order_id', chunk); tcsAll.push(...(tp||[]));
   }
   for (let i = 0; i < lines.length; i += 200){
     const { data: v } = await S.from('order_values').select('*').in('line_id', lines.slice(i, i+200).map(l=>l.id)); vals.push(...(v||[]));
   }
   const lineOrder = {}; lines.forEach(l=>{ lineOrder[l.id] = l.order_id; });
-  const agg = {}; all.forEach(o=>{ agg[o.id] = { o, cases:0, T:{ basic:0, exc:0, wine:0, vat:0, total:0 }, pays:[] }; });
+  const agg = {}; all.forEach(o=>{ agg[o.id] = { o, cases:0, T:{ basic:0, exc:0, wine:0, vat:0, total:0 }, pays:[], tcsPays:[] }; });
   lines.forEach(l=>{ const a = agg[l.order_id]; if (a) a.cases += Number(l.cases); });
   vals.forEach(v=>{ const a = agg[lineOrder[v.line_id]]; if (!a) return;
     a.T.basic += Number(v.basic_amount ?? v.amount ?? 0); a.T.exc += Number(v.excise_amount||0); a.T.wine += Number(v.wine_fee_amount||0); a.T.vat += Number(v.vat_amount||0); a.T.total += Number(v.amount||0); });
   pays.forEach(p=>{ const a = agg[p.order_id]; if (a) a.pays.push(p); });
+  tcsAll.forEach(p=>{ const a = agg[p.order_id]; if (a) a.tcsPays.push(p); });
   const K = ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','vatPaid','vatLeft','basicRecv','basicMmc','basicDirect','disc','otherDisc','scheme','schReimb','basicLeft','basicOverdue','vatOverdue'];
   let rows = Object.values(agg).map(a=>{
-    const t = orderTerms(a.o, a.T, a.pays, PT, a.o.party?.credit_days);
+    const t = orderTerms(a.o, a.T, a.pays, PT, a.o.party?.credit_days, a.tcsPays);
     return Object.assign(a, t, { total: a.T.total, basicOverdue: t.basicOver ? t.basicLeft : 0, vatOverdue: t.vatOver ? t.vatLeft : 0 });
   });
   const parties = [...new Map(rows.map(a=>[a.o.party_id, a.o.party])).entries()].sort((x,y)=>String(x[1]?.name).localeCompare(String(y[1]?.name)));
@@ -3400,6 +3421,10 @@ async function mmcAccounts(B){
       <div class="row2c">
         <div><label>Credit on basic (days from sale / dispatch)</label><input type="number" id="mt-credit" min="0" value="${PT.credit}" ${canTerms?'':'disabled'}></div>
         <div><label>VAT due to MMC on day … of the next month</label><input type="number" id="mt-vatday" min="1" max="28" value="${PT.vatDay}" ${canTerms?'':'disabled'}></div>
+      </div>
+      <div class="row2c" style="margin-top:8px;">
+        <div><label>TCS % on the order total incl. VAT (after scheme deductions)</label><input type="number" id="mt-tcsrate" min="0" max="100" step="any" value="${PT.tcsRate}" ${canTerms?'':'disabled'}></div>
+        <div><label>The month's TCS payable by day … of the next month</label><input type="number" id="mt-tcsday" min="1" max="28" value="${PT.tcsDay}" ${canTerms?'':'disabled'}></div>
       </div>
       <p style="font-size:11px;color:#777;margin:4px 0 8px;">A distributor with its own credit days set in Parties uses those instead of the default.</p>
       ${canTerms?`<button class="btn gold sm" onclick="mmcTermsSave()">Save terms</button>`:''}
@@ -3456,8 +3481,8 @@ async function mmcAccounts(B){
 /* ---- Distributor paid MMC on a bill: basic (after cash discount / other discount / scheme) and VAT, with payment details ---- */
 function mmcDueOf(a){ return [a.basicLeft > 0.005 ? a.basicDue : null, a.vatLeft > 0.005 ? a.vatDue : null].filter(Boolean).sort()[0] || '9999-12-31'; }
 function mmcRcptOpen(orderId){
-  const all = (window.__mmcAllRows || []).filter(a=>a.basicLeft > 0.005 || a.vatLeft > 0.005);
-  if (!all.length){ alert('No approved bill has basic or VAT still due from a distributor.'); return; }
+  const all = (window.__mmcAllRows || []).filter(a=>a.basicLeft > 0.005 || a.vatLeft > 0.005 || a.tcsLeft > 0.005);
+  if (!all.length){ alert('No approved bill has basic, VAT or TCS still due from a distributor.'); return; }
   const pre = orderId ? all.find(a=>a.o.id===orderId) : null;
   const parties = [...new Map(all.map(a=>[a.o.party_id, a.o.party])).entries()];
   const partySel = pre ? pre.o.party_id : (window.mmcParty && parties.some(p=>p[0]===window.mmcParty) ? window.mmcParty : parties[0][0]);
@@ -3478,6 +3503,7 @@ function mmcRcptOpen(orderId){
     <h4 class="sec" style="margin:8px 0 4px;">Payment received by MMC</h4>
     <div class="row2c"><div><label>Basic received ₹</label><input type="number" id="mr-amt" min="0" step="any" oninput="mmcRcptCalc()"></div>
       <div><label>VAT received ₹ <span id="mr-vat-due" style="font-weight:400;color:#777;font-size:11px;"></span></label><input type="number" id="mr-vat" min="0" step="any" oninput="mmcRcptCalc()"></div></div>
+    <div class="row2c" style="margin-top:6px;"><div><label>TCS received ₹ <span id="mr-tcs-due" style="font-weight:400;color:#777;font-size:11px;"></span></label><input type="number" id="mr-tcs" min="0" step="any" oninput="mmcRcptCalc()"></div><div></div></div>
     <div id="mr-total" style="font-size:12.5px;margin:6px 0;"></div>
     <div class="row2c" style="margin-top:6px;"><div><label>Received on *</label><input type="date" id="mr-date" value="${today}" onchange="mmcRcptCalc(true)"></div><div></div></div>
     <div class="row2c" style="margin-top:6px;"><div><label>Paid by *</label><select id="mr-via" onchange="mmcRcptVia()"><option value="CHEQUE">Cheque</option><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CASH">Cash</option><option value="OTHER">Other</option></select></div>
@@ -3493,7 +3519,7 @@ function mmcRcptOpen(orderId){
 }
 function mmcRcptBills(orderId){
   const pid = $('mr-party').value;
-  const bills = (window.__mmcAllRows || []).filter(a=>a.o.party_id===pid && (a.basicLeft > 0.005 || a.vatLeft > 0.005)).sort((x,y)=>mmcDueOf(x).localeCompare(mmcDueOf(y)));
+  const bills = (window.__mmcAllRows || []).filter(a=>a.o.party_id===pid && (a.basicLeft > 0.005 || a.vatLeft > 0.005 || a.tcsLeft > 0.005)).sort((x,y)=>mmcDueOf(x).localeCompare(mmcDueOf(y)));
   const today = calFmt(new Date());
   $('mr-order').innerHTML = bills.map(a=>`<option value="${a.o.id}"${a.o.id===orderId?' selected':''}>${esc(a.o.so_no)} · next due ${mmcDueOf(a)}${mmcDueOf(a)<today?' (OVERDUE)':''} · basic ₹ ${inr(Math.max(0,a.basicLeft))} · VAT ₹ ${inr(Math.max(0,a.vatLeft))}</option>`).join('');
   mmcRcptCalc(true);
@@ -3521,6 +3547,8 @@ function mmcRcptCalc(reset){
     <b>VAT</b> ₹ ${inr(a.vat)}${a.vatPaid>0.005?' · already paid ₹ '+inr(a.vatPaid):''} · <b>still due ₹ ${inr(Math.max(0,a.vatLeft))}</b> · due on <b style="color:${vLate?'#b3261e':'inherit'}">${a.vatDue}</b>${vLate?' (late by '+daysBetweenStr(a.vatDue, payDate)+' days)':''}<br>
     Paid ${days} day(s) after the sale → ${slab ? `<span style="color:#0b57d0">cash discount slab ${Number(slab.pct)}% (within ${slab.paid_within_days} days)</span>` : '<span style="color:#777">no cash-discount slab applies</span>'}`;
   $('mr-vat-due').textContent = a.vatLeft > 0.005 ? `(due ₹ ${inr(a.vatLeft)} on ${a.vatDue})` : '(no VAT due)';
+  if ($('mr-tcs-due')) $('mr-tcs-due').textContent = a.tcsLeft > 0.005 ? `(${a.tcsRate}% = ₹ ${inr(a.tcs)} · due ₹ ${inr(a.tcsLeft)} on ${a.tcsDue})` : '(no TCS due)';
+  if ($('mr-tcs')){ $('mr-tcs').disabled = a.tcsLeft <= 0.005; if (reset) $('mr-tcs').value = a.tcsLeft > 0.005 ? a.tcsLeft.toFixed(2) : ''; }
   const basicDue = Math.max(0, a.basicLeft);
   ['mr-cdpct','mr-cd','mr-od','mr-odn','mr-sc','mr-scn','mr-amt'].forEach(id=>{ $(id).disabled = basicDue <= 0.005; });
   $('mr-vat').disabled = a.vatLeft <= 0.005;
@@ -3530,37 +3558,48 @@ function mmcRcptCalc(reset){
   $('mr-net').innerHTML = `Basic due ₹ ${inr(basicDue)} − cash discount ₹ ${inr(cd)} − other discount ₹ ${inr(od)} − scheme ₹ ${inr(sc)} = <b>net payable ₹ ${inr(net)}</b>`;
   if (document.activeElement === $('mr-amt') && !reset) $('mr-amt').dataset.auto = '0';
   else if (reset || $('mr-amt').dataset.auto !== '0') { $('mr-amt').value = net > 0 ? net.toFixed(2) : '0'; $('mr-amt').dataset.auto = '1'; }
-  const amt = Number($('mr-amt').value)||0, vat = Number($('mr-vat').value)||0, bal = net - amt, vbal = Math.max(0,a.vatLeft) - vat;
-  $('mr-total').innerHTML = `Total received by MMC in this payment: <b>₹ ${inr(amt + vat)}</b> (basic ₹ ${inr(amt)} + VAT ₹ ${inr(vat)})`;
+  const amt = Number($('mr-amt').value)||0, vat = Number($('mr-vat').value)||0, tcsv = Number($('mr-tcs')?.value)||0, bal = net - amt, vbal = Math.max(0,a.vatLeft) - vat, tbal = Math.max(0,a.tcsLeft) - tcsv;
+  $('mr-total').innerHTML = `Total received by MMC in this payment: <b>₹ ${inr(amt + vat + tcsv)}</b> (basic ₹ ${inr(amt)} + VAT ₹ ${inr(vat)} + TCS ₹ ${inr(tcsv)})`;
   const msg = (v, what) => v < -0.5 ? `<span style="color:#b3261e">${what}: more than due by ₹ ${inr(-v)}</span>` : v > 0.005 ? `<span style="color:#b3261e">${what} still due after this ₹ ${inr(v)}</span>` : `<span style="color:#1a7f37">${what} fully settled</span>`;
-  $('mr-bal').innerHTML = `<b>${msg(bal, 'Basic')} · ${msg(vbal, 'VAT')}</b>`;
+  $('mr-bal').innerHTML = `<b>${msg(bal, 'Basic')} · ${msg(vbal, 'VAT')} · ${msg(tbal, 'TCS')}</b>`;
 }
 async function mmcRcptSave(){
   const a = mmcRcptBill(); if (!a){ say('mr-msg','Choose the bill.',false); return; }
-  const amt = Number($('mr-amt').value)||0, cd = Number($('mr-cd').value)||0, od = Number($('mr-od').value)||0, sc = Number($('mr-sc').value)||0, vat = Number($('mr-vat').value)||0;
-  if (amt + cd + od + sc + vat <= 0){ say('mr-msg','Enter the basic and / or VAT received, or the deductions.',false); return; }
+  const amt = Number($('mr-amt').value)||0, cd = Number($('mr-cd').value)||0, od = Number($('mr-od').value)||0, sc = Number($('mr-sc').value)||0, vat = Number($('mr-vat').value)||0, tcsv = Number($('mr-tcs')?.value)||0;
+  if (amt + cd + od + sc + vat + tcsv <= 0){ say('mr-msg','Enter the basic, VAT or TCS received, or the deductions.',false); return; }
+  if (tcsv > Math.max(0,a.tcsLeft) + 0.5){ say('mr-msg','TCS received is more than the TCS still due (₹ '+inr(Math.max(0,a.tcsLeft))+').',false); return; }
   if (amt + cd + od + sc > Math.max(0,a.basicLeft) + 0.5){ say('mr-msg','Basic received + deductions is more than the basic still due (₹ '+inr(Math.max(0,a.basicLeft))+').',false); return; }
   if (vat > Math.max(0,a.vatLeft) + 0.5){ say('mr-msg','VAT received is more than the VAT still due (₹ '+inr(Math.max(0,a.vatLeft))+').',false); return; }
   const via = $('mr-via').value, ref = $('mr-ref').value.trim();
   if ((amt > 0 || vat > 0) && via !== 'CASH' && !ref){ say('mr-msg', via==='CHEQUE' ? 'Enter the cheque number.' : 'Enter the UTR / reference number.', false); return; }
   if (od > 0 && !$('mr-odn').value.trim()){ say('mr-msg','Say what the other discount is for.',false); return; }
   if (sc > 0 && !$('mr-scn').value.trim()){ say('mr-msg','Enter the scheme name / details.',false); return; }
+  if (tcsv > 0 && via !== 'CASH' && !ref){ say('mr-msg', via==='CHEQUE' ? 'Enter the cheque number.' : 'Enter the UTR / reference number.', false); return; }
   $('mr-save').disabled = true;
-  const { data, error } = await db.schema('sales').rpc('record_mmc_basic_receipt', {
-    p_order: a.o.id, p_received: amt, p_cash_disc: cd, p_other_disc: od, p_scheme: sc,
-    p_other_note: $('mr-odn').value.trim()||null, p_scheme_note: $('mr-scn').value.trim()||null,
-    p_via: via, p_ref: ref||null, p_date: $('mr-date').value||null, p_cheque_date: via==='CHEQUE' ? ($('mr-cdate').value||null) : null,
-    p_bank: $('mr-bank').value.trim()||null, p_note: $('mr-note').value.trim()||null, p_vat: vat });
+  let data = null, error = null;
+  if (amt + cd + od + sc + vat > 0){
+    ({ data, error } = await db.schema('sales').rpc('record_mmc_basic_receipt', {
+      p_order: a.o.id, p_received: amt, p_cash_disc: cd, p_other_disc: od, p_scheme: sc,
+      p_other_note: $('mr-odn').value.trim()||null, p_scheme_note: $('mr-scn').value.trim()||null,
+      p_via: via, p_ref: ref||null, p_date: $('mr-date').value||null, p_cheque_date: via==='CHEQUE' ? ($('mr-cdate').value||null) : null,
+      p_bank: $('mr-bank').value.trim()||null, p_note: $('mr-note').value.trim()||null, p_vat: vat }));
+  }
+  if (!error && tcsv > 0){
+    const r2 = await db.schema('sales').rpc('record_tcs_receipt', { p_order: a.o.id, p_amount: tcsv, p_via: via, p_ref: ref||null, p_date: $('mr-date').value||null,
+      p_cheque_date: via==='CHEQUE' ? ($('mr-cdate').value||null) : null, p_bank: $('mr-bank').value.trim()||null, p_note: $('mr-note').value.trim()||null });
+    if (r2.error) error = { message: 'Basic / VAT saved, but the TCS could not be recorded: ' + r2.error.message };
+  }
   if ($('mr-save')) $('mr-save').disabled = false;
   if (error){ say('mr-msg', error.message, false); return; }
   apprModalClose();
   await (window.__rcptRefresh || (()=>ratesTab('cm')))();
-  alert(`Saved — ${a.o.so_no}: MMC received basic ₹ ${inr(amt)} + VAT ₹ ${inr(vat)}; deductions ₹ ${inr(cd+od+sc)}. Still due on this bill: basic ₹ ${inr(data && data.basic_left != null ? data.basic_left : 0)} · VAT ₹ ${inr(data && data.vat_left != null ? data.vat_left : 0)}.`);
+  alert(`Saved — ${a.o.so_no}: MMC received basic ₹ ${inr(amt)} + VAT ₹ ${inr(vat)} + TCS ₹ ${inr(tcsv)}; deductions ₹ ${inr(cd+od+sc)}. Still due on this bill: basic ₹ ${inr(data && data.basic_left != null ? data.basic_left : 0)} · VAT ₹ ${inr(data && data.vat_left != null ? data.vat_left : 0)}.`);
 }
 async function mmcTermsSave(){
-  const c = Number($('mt-credit').value), d = Number($('mt-vatday').value);
+  const c = Number($('mt-credit').value), d = Number($('mt-vatday').value), tr = Number($('mt-tcsrate')?.value), td = Number($('mt-tcsday')?.value);
   if (!(c >= 0) || !(d >= 1 && d <= 28)){ say('mt-msg','Credit days must be 0 or more, and the VAT day between 1 and 28.',false); return; }
-  const { error } = await db.schema('sales').from('payment_terms').update({ basic_credit_days: c, vat_due_day: d, updated_at: new Date().toISOString(), updated_by: me.id }).eq('id', 1);
+  if (!(tr >= 0 && tr <= 100) || !(td >= 1 && td <= 28)){ say('mt-msg','TCS % must be between 0 and 100, and the TCS day between 1 and 28.',false); return; }
+  const { error } = await db.schema('sales').from('payment_terms').update({ basic_credit_days: c, vat_due_day: d, tcs_rate: tr, tcs_due_day: td, updated_at: new Date().toISOString(), updated_by: me.id }).eq('id', 1);
   if (error){ say('mt-msg', error.message, false); return; }
   await ratesTab('cm'); $('mmc-terms').style.display = ''; say('mt-msg','Payment terms saved.',true);
 }
@@ -3615,32 +3654,35 @@ async function distLoadRows(){
   const { data: ords, error } = await S.from('orders').select('id, so_no, order_date, status, invoice_no, approved_at, dispatched_at, excise_paid_amount, excise_paid_ref, excise_paid_date, party_id, party:parties(code,name,credit_days,city)')
     .in('status', ['APPROVED','DISPATCHED','DELIVERED','CLOSED']).order('order_date',{ascending:false}).limit(2000);
   if (error) throw error;
-  const all = ords || [], ids = all.map(o=>o.id), lines = [], vals = [], pays = [];
+  const all = ords || [], ids = all.map(o=>o.id), lines = [], vals = [], pays = [], tcsAll = [];
   for (let i = 0; i < ids.length; i += 200){
     const chunk = ids.slice(i, i+200);
-    const [{ data: l }, { data: p }] = await Promise.all([S.from('order_lines').select('id, order_id, cases').in('order_id', chunk),
-                                                         S.from('payments').select('id, order_id, amount, mode, pay_date, ref_no, remarks, pay_via, cheque_date, bank_name, scheme_reimb_id').in('order_id', chunk)]);
-    lines.push(...(l||[])); pays.push(...(p||[]));
+    const [{ data: l }, { data: p }, { data: tp }] = await Promise.all([S.from('order_lines').select('id, order_id, cases').in('order_id', chunk),
+                                                         S.from('payments').select('id, order_id, amount, mode, pay_date, ref_no, remarks, pay_via, cheque_date, bank_name, scheme_reimb_id').in('order_id', chunk),
+                                                         S.from('tcs_payments').select('id, order_id, amount, pay_date, ref_no, pay_via, cheque_date, bank_name, remarks').in('order_id', chunk)]);
+    lines.push(...(l||[])); pays.push(...(p||[])); tcsAll.push(...(tp||[]));
   }
   for (let i = 0; i < lines.length; i += 200){
     const { data: v } = await S.from('order_values').select('*').in('line_id', lines.slice(i, i+200).map(l=>l.id)); vals.push(...(v||[]));
   }
   const lineOrder = {}; lines.forEach(l=>{ lineOrder[l.id] = l.order_id; });
-  const agg = {}; all.forEach(o=>{ agg[o.id] = { o, cases:0, T:{ basic:0, exc:0, wine:0, vat:0, total:0 }, pays:[] }; });
+  const agg = {}; all.forEach(o=>{ agg[o.id] = { o, cases:0, T:{ basic:0, exc:0, wine:0, vat:0, total:0 }, pays:[], tcsPays:[] }; });
   lines.forEach(l=>{ const a = agg[l.order_id]; if (a) a.cases += Number(l.cases); });
   vals.forEach(v=>{ const a = agg[lineOrder[v.line_id]]; if (!a) return;
     a.T.basic += Number(v.basic_amount ?? v.amount ?? 0); a.T.exc += Number(v.excise_amount||0); a.T.wine += Number(v.wine_fee_amount||0); a.T.vat += Number(v.vat_amount||0); a.T.total += Number(v.amount||0); });
   pays.forEach(p=>{ const a = agg[p.order_id]; if (a) a.pays.push(p); });
+  tcsAll.forEach(p=>{ const a = agg[p.order_id]; if (a) a.tcsPays.push(p); });
   const today = ymdStr(new Date());
   const rows = Object.values(agg).map(a=>{
-    const t = orderTerms(a.o, a.T, a.pays, PT, a.o.party?.credit_days);
+    const t = orderTerms(a.o, a.T, a.pays, PT, a.o.party?.credit_days, a.tcsPays);
     const levyDue = a.o.approved_at ? String(a.o.approved_at).slice(0,10) : a.o.order_date;
     const r = Object.assign(a, t, { total: a.T.total, levyDue });
     // each amount still owed on the bill, with its due date
     r.dues = [
       { comp:'Basic', amt: Math.max(0, t.basicLeft), due: t.basicDue },
       { comp:'VAT', amt: Math.max(0, t.vatLeft), due: t.vatDue },
-      { comp:'Excise & vend fee', amt: Math.max(0, t.levyLeft), due: levyDue }
+      { comp:'Excise & vend fee', amt: Math.max(0, t.levyLeft), due: levyDue },
+      { comp:'TCS', amt: Math.max(0, t.tcsLeft), due: t.tcsDue }
     ].filter(d=>d.amt > 0.005).map(d=>Object.assign(d, { late: daysBetweenStr(d.due, today) }));
     r.outstanding = r.dues.reduce((s,d)=>s+d.amt,0);
     r.overdue = r.dues.filter(d=>d.late > 0).reduce((s,d)=>s+d.amt,0);
@@ -3679,8 +3721,8 @@ async function distLedger(B){
   const parts = Object.values(P).sort((x,y)=>String(x.party?.name).localeCompare(String(y.party?.name)));
   if (ledParty && !P[ledParty]) ledParty = '';
   const sumL = (list, k) => list.reduce((t,a)=>t+Number(a[k]||0),0);
-  const pSum = g => { const l = g.list; const billed = sumL(l,'basic')+sumL(l,'vat')+sumL(l,'exc')+sumL(l,'wine');
-    const paid = sumL(l,'basicRecv')+sumL(l,'vatPaid')+sumL(l,'levyPaid'); const ded = sumL(l,'disc')+sumL(l,'otherDisc')+sumL(l,'scheme')+sumL(l,'schReimb');
+  const pSum = g => { const l = g.list; const billed = sumL(l,'basic')+sumL(l,'vat')+sumL(l,'exc')+sumL(l,'wine')+sumL(l,'tcs');
+    const paid = sumL(l,'basicRecv')+sumL(l,'vatPaid')+sumL(l,'levyPaid')+sumL(l,'tcsPaid'); const ded = sumL(l,'disc')+sumL(l,'otherDisc')+sumL(l,'scheme')+sumL(l,'schReimb');
     return { billed, paid, ded, schReimb: sumL(l,'schReimb'), basicLeft: sumL(l,'basicLeft'), out: l.reduce((t,a)=>t+a.outstanding,0), over: l.reduce((t,a)=>t+a.overdue,0) }; };
   const tile = (l, v, c, sub) => `<div class="card" style="flex:1;min-width:140px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">${l}</div><div style="font-size:16px;font-weight:700;${c?'color:'+c:''}">₹ ${inr(v||0)}</div>${sub?`<div style="font-size:10.5px;color:#777">${sub}</div>`:''}</div>`;
   const sel = `<div class="card" style="padding:12px;margin-bottom:10px;"><div class="row2c">
@@ -3701,10 +3743,12 @@ async function distLedger(B){
   const E = [];
   const DIRECT = ['NEFT','RTGS','UPI','CHEQUE','CASH','OTHER'];
   g.list.forEach(a=>{
-    E.push({ date:a.sale, ord:0, so:a.o.so_no, oid:a.o.id, type:'Bill', part:`Sale bill ${esc(a.o.so_no)}${a.o.invoice_no?' · Inv '+esc(a.o.invoice_no):''} · ${a.cases} case(s)<br><span style="font-size:10.5px;color:#777">basic ₹ ${inr(a.basic)} · VAT ₹ ${inr(a.vat)} · excise ₹ ${inr(a.exc)} · vend fee ₹ ${inr(a.wine)}${a.provisional?' · approved, not yet dispatched':''}</span>`,
-             dr:{ b:a.basic, v:a.vat, l:a.exc+a.wine }, cr:{ b:0, v:0, l:0 } });
+    E.push({ date:a.sale, ord:0, so:a.o.so_no, oid:a.o.id, type:'Bill', part:`Sale bill ${esc(a.o.so_no)}${a.o.invoice_no?' · Inv '+esc(a.o.invoice_no):''} · ${a.cases} case(s)<br><span style="font-size:10.5px;color:#777">basic ₹ ${inr(a.basic)} · VAT ₹ ${inr(a.vat)} · excise ₹ ${inr(a.exc)} · vend fee ₹ ${inr(a.wine)} · TCS ${a.tcsRate}% ₹ ${inr(a.tcs)} (due ${a.tcsDue})${a.provisional?' · approved, not yet dispatched':''}</span>`,
+             dr:{ b:a.basic, v:a.vat, l:a.exc+a.wine, t:a.tcs }, cr:{ b:0, v:0, l:0, t:0 } });
+    (a.tcsPays||[]).forEach(p=>{ const inst = [p.pay_via, p.ref_no, p.cheque_date?'dt '+p.cheque_date:'', p.bank_name].filter(Boolean).map(esc).join(' · ');
+      E.push({ date:p.pay_date || a.sale, ord:1, so:a.o.so_no, oid:a.o.id, type:'Payment', mode:'TCS_MMC', part:'TCS paid to MMC' + (inst?` <span style="font-size:10.5px;color:#777">· ${inst}</span>`:'') + (p.remarks?`<br><span style="font-size:10.5px;color:#777">${esc(p.remarks)}</span>`:''), dr:{ b:0, v:0, l:0, t:0 }, cr:{ b:0, v:0, l:0, t:Number(p.amount)||0 } }); });
     (a.pays||[]).forEach(p=>{
-      const amt = Number(p.amount)||0, m = p.mode, cr = { b:0, v:0, l:0 };
+      const amt = Number(p.amount)||0, m = p.mode, cr = { b:0, v:0, l:0, t:0 };
       let type = 'Payment', part = '';
       const inst = [p.pay_via, p.ref_no, p.cheque_date?'dt '+p.cheque_date:'', p.bank_name].filter(Boolean).map(esc).join(' · ');
       if (m==='EXCISE_MMC'){ cr.l = amt; part = 'Excise duty &amp; vend fee paid into MMC excise a/c'; }
@@ -3718,15 +3762,15 @@ async function distLedger(B){
         part = `Scheme reimbursement adjusted against basic — <b>${esc(sc.code||'')} ${esc(sc.name||'')}</b>${r.amount?` <span style="font-size:10.5px;color:#777">(reimbursement ₹ ${inr(r.amount)} marked ${r.reimb_date||''}${r.remarks?' · '+esc(r.remarks):''})</span>`:''}`; }
       else { cr.b = amt; part = esc(m); }
       const note = p.remarks && m!=='SCHEME_REIMB' ? `<br><span style="font-size:10.5px;color:#777">${esc(p.remarks)}</span>` : '';
-      E.push({ date:p.pay_date || a.sale, ord:1, so:a.o.so_no, oid:a.o.id, type, mode:m, part: part + (inst && ['BASIC_MMC','VAT_MMC'].concat(DIRECT).includes(m) ? ` <span style="font-size:10.5px;color:#777">· ${inst}</span>` : '') + note, dr:{ b:0, v:0, l:0 }, cr });
+      E.push({ date:p.pay_date || a.sale, ord:1, so:a.o.so_no, oid:a.o.id, type, mode:m, part: part + (inst && ['BASIC_MMC','VAT_MMC'].concat(DIRECT).includes(m) ? ` <span style="font-size:10.5px;color:#777">· ${inst}</span>` : '') + note, dr:{ b:0, v:0, l:0, t:0 }, cr });
     });
   });
   (reimb||[]).filter(r=>r.party_id===ledParty && Number(r.amount) - Number(r.adjusted_amount||0) > 0.004).forEach(r=>{
     const sc = schBy[r.scheme_id] || {}, c = Number(r.amount) - Number(r.adjusted_amount||0);
-    E.push({ date:r.reimb_date, ord:2, so:'', type:'Credit', mode:'SCHEME_CREDIT', part:`Scheme reimbursement — <b>${esc(sc.code||'')} ${esc(sc.name||'')}</b> · credit not yet adjusted (no basic outstanding when marked)<br><span style="font-size:10.5px;color:#777">reimbursement ₹ ${inr(r.amount)}${Number(r.adjusted_amount)>0.004?' · adjusted so far ₹ '+inr(r.adjusted_amount):''} — it is adjusted against the next bills</span>`, dr:{ b:0, v:0, l:0 }, cr:{ b:c, v:0, l:0 } });
+    E.push({ date:r.reimb_date, ord:2, so:'', type:'Credit', mode:'SCHEME_CREDIT', part:`Scheme reimbursement — <b>${esc(sc.code||'')} ${esc(sc.name||'')}</b> · credit not yet adjusted (no basic outstanding when marked)<br><span style="font-size:10.5px;color:#777">reimbursement ₹ ${inr(r.amount)}${Number(r.adjusted_amount)>0.004?' · adjusted so far ₹ '+inr(r.adjusted_amount):''} — it is deducted on the first bill of the next month</span>`, dr:{ b:0, v:0, l:0, t:0 }, cr:{ b:c, v:0, l:0, t:0 } });
   });
   E.sort((x,y)=> x.date===y.date ? (x.ord-y.ord || String(x.so).localeCompare(String(y.so))) : String(x.date).localeCompare(String(y.date)));
-  const pick = o => ledComp==='b' ? o.b : ledComp==='v' ? o.v : ledComp==='l' ? o.l : o.b + o.v + o.l;
+  const pick = o => ledComp==='b' ? o.b : ledComp==='v' ? o.v : ledComp==='l' ? o.l : ledComp==='t' ? (o.t||0) : o.b + o.v + o.l + (o.t||0);
   let bal = 0; const L = [];
   E.forEach(e=>{ const d = pick(e.dr), c = pick(e.cr); if (d <= 0.004 && c <= 0.004) return; bal += d - c; L.push(Object.assign({}, e, { d, c, bal })); });
   window.__ledRows = L; window.__ledName = g.party?.name || '';
@@ -3740,7 +3784,7 @@ async function distLedger(B){
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
       ${tile('Billed (basic + VAT + excise &amp; vend fee)', sm.billed)}${tile('Paid to MMC / Aurum', sm.paid, '#0b57d0')}${tile('Deductions', sm.ded, '#7a5c10', Object.entries(dedBy).filter(([k,v])=>v>0.004).map(([k,v])=>(dLbl[k]||k)+' ₹ '+inr(v)).join(' · '))}${tile('Outstanding', sm.out, sm.out>0.005?'#b3261e':'#1a7f37', 'basic ₹ '+inr(Math.max(0,sm.basicLeft))+(sm.over>0.005?' · overdue ₹ '+inr(sm.over):''))}${g.credit>0.005?tile('Scheme credit not yet adjusted', g.credit, '#7a5c10', 'adjusted against the next bills'):''}
     </div>
-    <div style="margin:0 0 8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${chip('all','All')}${chip('b','Basic')}${chip('v','VAT')}${chip('l','Excise &amp; vend fee')}
+    <div style="margin:0 0 8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${chip('all','All')}${chip('b','Basic')}${chip('v','VAT')}${chip('l','Excise &amp; vend fee')}${chip('t','TCS')}
       <span style="flex:1"></span><button class="btn ghost sm" onclick="ledCsv()">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="ledPrint()">🖨 Print / save PDF</button>
       ${(canMark && g.credit>0.005 && sm.basicLeft>0.005)?`<button class="btn gold sm" onclick="ledApplyCredit('${g.pid}')">Adjust scheme credit against open bills</button>`:''}</div>
     <div class="table-scroll"><table><thead><tr><th>Date</th><th>Bill</th><th>Particulars</th><th>Type</th><th class="amount">Debit ₹</th><th class="amount">Credit ₹</th><th class="amount">Balance ₹</th></tr></thead><tbody>
@@ -3794,8 +3838,11 @@ function recvDraw(){
   const dues = []; open.forEach(r=>r.dues.forEach(d=>dues.push(Object.assign({ r }, d))));
   const sumC = (list, comp, over) => list.filter(d=>(!comp || d.comp===comp) && (over===undefined || (over ? d.late > 0 : d.late <= 0))).reduce((s,d)=>s+d.amt,0);
   const tot = sumC(dues), totOver = sumC(dues, null, true);
-  const bOut = sumC(dues,'Basic'), vOut = sumC(dues,'VAT'), lOut = sumC(dues,'Excise & vend fee');
-  const bOver = sumC(dues,'Basic',true), vOver = sumC(dues,'VAT',true), lOver = sumC(dues,'Excise & vend fee',true);
+  const bOut = sumC(dues,'Basic'), vOut = sumC(dues,'VAT'), lOut = sumC(dues,'Excise & vend fee'), tOut = sumC(dues,'TCS');
+  const bOver = sumC(dues,'Basic',true), vOver = sumC(dues,'VAT',true), lOver = sumC(dues,'Excise & vend fee',true), tOver = sumC(dues,'TCS',true);
+  // TCS month-wise: the whole month's TCS is payable together by the due day of the next month
+  const tcsM = {}; recvRows.forEach(r=>{ const k = String(r.sale).slice(0,7); const m = tcsM[k] = tcsM[k] || { m:k, due:r.tcsDue, bills:0, tcs:0, paid:0, left:0 }; m.bills++; m.tcs += Number(r.tcs||0); m.paid += Number(r.tcsPaid||0); m.left += Math.max(0, Number(r.tcsLeft||0)); });
+  const tcsMonths = Object.values(tcsM).sort((x,y)=>y.m.localeCompare(x.m));
   const upcoming = dues.filter(d=>d.late <= 0).sort((x,y)=>x.due.localeCompare(y.due));
   const nextDate = upcoming.length ? upcoming[0].due : null;
   const nextAmt = nextDate ? upcoming.filter(d=>d.due===nextDate).reduce((s,d)=>s+d.amt,0) : 0;
@@ -3808,22 +3855,26 @@ function recvDraw(){
   const AG = [0,0,0,0,0]; dues.forEach(d=>{ AG[bucket(d)] += d.amt; });
 
   let html = `
-    <p style="font-size:12px;color:#777;margin:0 0 8px;">What every distributor still owes on its approved bills — <b>basic</b> (due ${window.__payTerms?.credit||30} days from the sale), <b>VAT</b> (due on the ${window.__payTerms?.vatDay||19}th of the month after the sale) and any <b>excise duty &amp; vend fee</b> not yet paid (due before approval). All of it is paid by the distributor to MMC.</p>
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">What every distributor still owes on its approved bills — <b>basic</b> (due ${window.__payTerms?.credit||30} days from the sale), <b>VAT</b> (due on the ${window.__payTerms?.vatDay||19}th of the month after the sale), any <b>excise duty &amp; vend fee</b> not yet paid (due before approval) and <b>TCS ${window.__payTerms?.tcsRate ?? 2}%</b> on the order total incl. VAT (the month's TCS together, by the ${window.__payTerms?.tcsDay ?? 5}th of the next month). Scheme claims of earlier months are deducted automatically on the first bill of each month. All of it is paid by the distributor to MMC.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
       ${tile('Total outstanding from distributors', tot, red(tot))}${tile('Overdue (past its due date)', totOver, totOver>0.005?'#b3261e':'#777')}
       ${tile('Distributors with dues', Object.keys(byP).length, '', '', false)}${tile('Next payment due', nextDate ? '₹ '+inr(nextAmt) : '—', '#0b57d0', nextDate ? 'on '+nextDate : 'nothing upcoming', false)}
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      ${tile('Basic outstanding', bOut, red(bOut), 'overdue ₹ '+inr(bOver))}${tile('VAT outstanding', vOut, red(vOut), 'overdue ₹ '+inr(vOver))}${tile('Excise &amp; vend fee unpaid', lOut, red(lOut), 'overdue ₹ '+inr(lOver))}
+      ${tile('Basic outstanding', bOut, red(bOut), 'overdue ₹ '+inr(bOver))}${tile('VAT outstanding', vOut, red(vOut), 'overdue ₹ '+inr(vOver))}${tile('Excise &amp; vend fee unpaid', lOut, red(lOut), 'overdue ₹ '+inr(lOver))}${tile('TCS '+(window.__payTerms?.tcsRate ?? 2)+'% outstanding', tOut, red(tOut), 'overdue ₹ '+inr(tOver)+' · due by the '+(window.__payTerms?.tcsDay ?? 5)+'th of the next month')}
     </div>
+    ${tcsMonths.length ? `<h4 class="sec">TCS ${(window.__payTerms?.tcsRate ?? 2)}% — month-wise <span style="font-weight:400;font-size:11.5px;color:#777">(on the order total incl. VAT after scheme deductions; each month's TCS is payable together by the ${(window.__payTerms?.tcsDay ?? 5)}th of the next month)</span></h4>
+    <div class="table-scroll"><table><thead><tr><th>Sale month</th><th class="amount">Bills</th><th class="amount">TCS ₹</th><th class="amount">Paid ₹</th><th class="amount">Still due ₹</th><th>Due on</th></tr></thead><tbody>
+      ${tcsMonths.map(m=>`<tr><td><b>${m.m}</b></td><td class="amount">${m.bills}</td><td class="amount">${inr(m.tcs)}</td><td class="amount" style="color:#0b57d0">${inr(m.paid)}</td><td class="amount" style="font-weight:700;color:${m.left>0.005?'#b3261e':'#1a7f37'}">${inr(m.left)}</td><td style="font-size:12px;color:${m.left>0.005 && m.due<today?'#b3261e':'#555'}">${m.due}${m.left>0.005 && m.due<today?' · overdue':''}</td></tr>`).join('')}
+    </tbody></table></div>` : ''}
     <h4 class="sec">How old the money is <span style="font-weight:400;font-size:11.5px;color:#777">(days past each amount's own due date — basic, VAT and excise together)</span></h4>
     <div class="table-scroll"><table><thead><tr><th class="amount">Not due yet ₹</th><th class="amount">1–30 days ₹</th><th class="amount">31–60 days ₹</th><th class="amount">61–90 days ₹</th><th class="amount">Over 90 days ₹</th></tr></thead><tbody>
       <tr><td class="amount">${inr(AG[0])}</td><td class="amount">${inr(AG[1])}</td><td class="amount">${inr(AG[2])}</td><td class="amount" style="color:#7a5c10">${inr(AG[3])}</td><td class="amount" style="color:#b3261e;font-weight:700">${inr(AG[4])}</td></tr>
     </tbody></table></div>
     <h4 class="sec" style="margin-top:14px;">Distributor-wise outstanding</h4>
-    <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Open bills</th><th class="amount">Basic ₹</th><th class="amount">VAT ₹</th><th class="amount">Excise &amp; vend fee ₹</th><th class="amount">Total outstanding ₹</th><th class="amount">Overdue ₹</th><th>Next due</th><th>Oldest overdue</th><th></th></tr></thead><tbody>`;
+    <div class="table-scroll"><table><thead><tr><th>Distributor</th><th class="amount">Open bills</th><th class="amount">Basic ₹</th><th class="amount">VAT ₹</th><th class="amount">Excise &amp; vend fee ₹</th><th class="amount">TCS ₹</th><th class="amount">Total outstanding ₹</th><th class="amount">Overdue ₹</th><th>Next due</th><th>Oldest overdue</th><th></th></tr></thead><tbody>`;
   const pKeys = Object.keys(byP).sort((x,y)=>{ const ox = byP[x].list.reduce((s,r)=>s+r.overdue,0), oy = byP[y].list.reduce((s,r)=>s+r.overdue,0); return oy-ox || String(byP[x].party?.name).localeCompare(String(byP[y].party?.name)); });
-  if (!pKeys.length) html += `<tr><td colspan="10" style="color:#777">Nothing is outstanding. Every approved bill is fully paid.</td></tr>`;
+  if (!pKeys.length) html += `<tr><td colspan="11" style="color:#777">Nothing is outstanding. Every approved bill is fully paid.</td></tr>`;
   for (const k of pKeys){
     const g = byP[k], L = []; g.list.forEach(r=>r.dues.forEach(d=>L.push(Object.assign({ r }, d))));
     const s = c => L.filter(d=>d.comp===c).reduce((t,d)=>t+d.amt,0);
@@ -3834,7 +3885,7 @@ function recvDraw(){
     const isOpen = recvOpen === k;
     html += `<tr${over > 0.005 ? ' style="background:#fdf6ee;"' : ''}>
       <td><b>${esc(g.party?.name||'')}</b> <span style="color:#999;font-size:11px;">${esc(g.party?.code||'')}</span><br><span style="font-size:10.5px;color:#777">${cd} days credit</span></td>
-      <td class="amount">${g.list.length}</td><td class="amount">${inr(s('Basic'))}</td><td class="amount">${inr(s('VAT'))}</td><td class="amount">${inr(s('Excise & vend fee'))}</td>
+      <td class="amount">${g.list.length}</td><td class="amount">${inr(s('Basic'))}</td><td class="amount">${inr(s('VAT'))}</td><td class="amount">${inr(s('Excise & vend fee'))}</td><td class="amount">${inr(s('TCS'))}</td>
       <td class="amount"><b>${inr(out)}</b></td>
       <td class="amount" style="color:${over>0.005?'#b3261e':'#777'};font-weight:${over>0.005?'700':'400'}">${inr(over)}</td>
       <td style="font-size:12px;">${nd ? `${nd.due}<br><span style="color:#777">${esc(nd.comp)} ₹ ${inr(nd.amt)}</span>` : '—'}</td>
@@ -3842,15 +3893,16 @@ function recvDraw(){
       <td><button class="mini" onclick="recvToggle('${k}')">${isOpen ? 'Hide bills' : 'Bills…'}</button></td></tr>`;
     if (isOpen){
       const st = d => !d ? '' : d.late > 0 ? `<br><span style="color:#b3261e;font-size:11px;">${d.late} days late</span>` : `<br><span style="color:#777;font-size:11px;">due ${d.late===0?'today':'in '+(-d.late)+' days'}</span>`;
-      html += `<tr><td colspan="10" style="background:#fbf9f4;padding:10px 12px;">
-        <div class="table-scroll"><table><thead><tr><th>Bill</th><th>Sale date</th><th class="amount">Basic ₹</th><th>Basic due on</th><th class="amount">VAT ₹</th><th>VAT due on</th><th class="amount">Excise &amp; vend fee ₹</th><th class="amount">Total ₹</th><th></th></tr></thead><tbody>` +
+      html += `<tr><td colspan="11" style="background:#fbf9f4;padding:10px 12px;">
+        <div class="table-scroll"><table><thead><tr><th>Bill</th><th>Sale date</th><th class="amount">Basic ₹</th><th>Basic due on</th><th class="amount">VAT ₹</th><th>VAT due on</th><th class="amount">Excise &amp; vend fee ₹</th><th class="amount">TCS ₹</th><th>TCS due on</th><th class="amount">Total ₹</th><th></th></tr></thead><tbody>` +
         g.list.sort((x,y)=>(x.dues.map(d=>d.due).sort()[0]||'').localeCompare(y.dues.map(d=>d.due).sort()[0]||'')).map(r=>{
-          const dB = r.dues.find(d=>d.comp==='Basic'), dV = r.dues.find(d=>d.comp==='VAT'), dL = r.dues.find(d=>d.comp==='Excise & vend fee');
+          const dB = r.dues.find(d=>d.comp==='Basic'), dV = r.dues.find(d=>d.comp==='VAT'), dL = r.dues.find(d=>d.comp==='Excise & vend fee'), dT = r.dues.find(d=>d.comp==='TCS');
           return `<tr><td><b>${esc(r.o.so_no)}</b>${r.o.invoice_no?'<br><span style="font-size:11px;color:#777">Inv '+esc(r.o.invoice_no)+'</span>':''}</td><td>${r.sale}${r.provisional?'<br><span style="font-size:10.5px;color:#777">not dispatched</span>':''}</td>
             <td class="amount">${dB?inr(dB.amt):'—'}</td><td style="font-size:12px;">${dB?dB.due+st(dB):'<span style="color:#1a7f37">settled</span>'}</td>
             <td class="amount">${dV?inr(dV.amt):'—'}</td><td style="font-size:12px;">${dV?dV.due+st(dV):'<span style="color:#1a7f37">paid</span>'}</td>
-            <td class="amount">${dL?inr(dL.amt)+st(dL):'—'}</td><td class="amount"><b>${inr(r.outstanding)}</b></td>
-            <td style="white-space:nowrap;">${canRcv && (dB||dV) ? `<button class="mini" onclick="mmcRcptOpen('${r.o.id}')">➕ Receive</button> ` : ''}<button class="mini" onclick="openOrders();show('order-detail');openOrderDetail('${r.o.id}')">Open</button></td></tr>`;
+            <td class="amount">${dL?inr(dL.amt)+st(dL):'—'}</td>
+            <td class="amount">${dT?inr(dT.amt):'—'}</td><td style="font-size:12px;">${dT?dT.due+st(dT):'<span style="color:#1a7f37">paid</span>'}</td><td class="amount"><b>${inr(r.outstanding)}</b></td>
+            <td style="white-space:nowrap;">${canRcv && (dB||dV||dT) ? `<button class="mini" onclick="mmcRcptOpen('${r.o.id}')">➕ Receive</button> ` : ''}<button class="mini" onclick="openOrders();show('order-detail');openOrderDetail('${r.o.id}')">Open</button></td></tr>`;
         }).join('') + '</tbody></table></div></td></tr>';
     }
   }
