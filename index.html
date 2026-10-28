@@ -4510,8 +4510,12 @@ async function mfgTab(which){
     // (very long "CODE — description (at MMC …)" lines were being cut off on narrow screens); the full name
     // shows under the box once an item is chosen, and on hover.
     window.rmFullLabel = i => { const code = String(i.code||'').trim(), name = String(i.name||'').trim();
-      return (!name || name.toUpperCase() === code.toUpperCase()) ? code : (!code || name.toUpperCase().includes(code.toUpperCase()) ? name : code + ' — ' + name); };
-    window.rmShortLabel = (i, tail) => { let s = rmFullLabel(i); if (s.length > 58) s = s.slice(0, 56).trim() + '…'; return s + (tail ? ' (' + tail + ')' : ''); };
+      const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const c = norm(code), n = norm(name);
+      if (!name) return code; if (!code) return name;
+      if (c === n || c.includes(n) || n.includes(c)) return name.length >= code.length ? name : code;   // same thing written twice — keep the fuller one
+      return code + ' — ' + name; };
+    window.rmShortLabel = (i, tail) => { let s = rmFullLabel(i); if (s.length > 64) s = s.slice(0, 62).trim() + '…'; return s + (tail ? ' (' + tail + ')' : ''); };
     window.rmShowFull = (selId, boxId) => { const sel = $(selId), box = $(boxId); if (!sel || !box) return; const o = sel.options[sel.selectedIndex]; box.textContent = o && o.value ? o.title : ''; };
     const [{ data: stock }, { data: batches, error: bErr }, { data: skusFG }] = await Promise.all([
       MF.from('v_rm_stock').select('*').order('code'),
