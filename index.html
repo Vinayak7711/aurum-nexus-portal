@@ -1715,7 +1715,7 @@ function noRenderLines(){
 }
 // An order can be edited only while it is still RECEIVED (before approval): Director, sales admin, or the salesperson who entered it.
 function canEditOrder(o){
-  if (!o || o.status !== 'RECEIVED') return false;
+  if (!o || o.status !== 'RECEIVED' || o.allocated_at) return false;   // once stock is allocated, undo the allocation first
   const sp = me?.permissions_json?.sales || {};
   return isDir() || !!sp.admin || (!!sp.add && o.created_by === me?.id);
 }
