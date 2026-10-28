@@ -599,6 +599,27 @@
   </div>
 </div>
 
+<!-- ============ DISTRIBUTOR DASHBOARD ============ -->
+<section id="view-distdash" class="hidden">
+  <div class="crumb" onclick="show('home')">&larr; Back to Home</div>
+  <div class="welcome"><h2>Distributor Dashboard</h2>
+    <p>What a distributor sees of its own account — order status, outstanding &amp; due dates, scheme reimbursement status and retailer-wise scheme given. Nothing else.</p></div>
+  <div class="card" id="dd-pick" style="padding:12px;margin-bottom:12px;">
+    <div class="row2c"><div><label>Distributor</label><select id="dd-party" onchange="ddLoad(this.value)"></select></div>
+      <div style="align-self:end;font-size:12px;color:#777;">Internal view — pick a distributor to see its dashboard exactly as that distributor will see it once its login is created.</div></div>
+  </div>
+  <div class="toolbar" id="dd-tabs" style="flex-wrap:wrap;">
+    <button class="chip on" id="dd-ov" onclick="ddTab('ov')">Overview</button>
+    <button class="chip" id="dd-ord" onclick="ddTab('ord')">Orders &amp; status</button>
+    <button class="chip" id="dd-out" onclick="ddTab('out')">Outstanding &amp; payments</button>
+    <button class="chip" id="dd-sch" onclick="ddTab('sch')">Scheme reimbursement</button>
+    <button class="chip" id="dd-ret" onclick="ddTab('ret')">Retailer-wise scheme given</button>
+    <button class="chip" id="dd-run" onclick="ddTab('run')">Schemes running</button>
+    <button class="btn ghost sm" style="margin-left:auto;" onclick="ddPrint()">🖨 Print / PDF</button>
+  </div>
+  <div id="dd-body"></div>
+</section>
+
 <!-- MODAL: PARTY -->
 <div class="overlay hidden" id="party-overlay">
   <div class="sheet">
@@ -697,6 +718,7 @@ const MODULES = [
   {key:'party',   ico:'🤝', name:'Party Master & Onboarding', desc:'Distributors, vendors, retailers + applications', live:true,  open:()=>openParties()},
   {key:'brand',   ico:'🥃', name:'Brands & SKUs',    desc:'Deccan Crest, Frost 91 family, packs',   live:true,  open:()=>openBrands()},
   {key:'rates',   ico:'💰', name:'MMC Accounts & Distributor Outstanding', desc:'Distributor outstanding, MMC accounts, payment terms',      live:true,  dirOnly:true, open:()=>openRates()},
+  {key:'distdash',ico:'🧑‍💼', name:'Distributor Dashboard', desc:'What each distributor sees: order status, outstanding & due dates, scheme reimbursement, retailer-wise scheme given', live:true, dirOnly:true, open:()=>openDistDash()},
   {key:'mfg',     ico:'🏭', name:'Manufacturing & Production', desc:'Targets, batches, QC, RM custody, FG stock', live:true, open:()=>openMfg()},
   {key:'reports', ico:'📈', name:'Sales Team — Reports & Targets', desc:'Daily activity, targets & field visits', live:true, open:()=>openReports()},
   {key:'salesrep', ico:'📊', name:'Sales Reports & Schemes', desc:'Distributor & retailer wise, brand-wise cases, schemes', live:true, open:()=>openSalesRep()},
@@ -807,7 +829,7 @@ const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
 function show(view){
-  for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts','findash'])
+  for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','distdash','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts','findash'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
   if (view === 'home' && me && me.id) refreshMe();   // pick up permission changes the Director made since sign-in
@@ -3225,6 +3247,195 @@ $('btn-save-party').onclick = async () => {
   if (error){ say('pe-msg','Save failed: '+error.message,false); return; }
   closeSheet('party-overlay'); openParties();   // reloads the masters, so a new territory shows at once
 };
+
+/* ================= DISTRIBUTOR DASHBOARD =================
+   One read-only screen per distributor, fed by sales.distributor_dashboard(party): its orders and their status,
+   what it still owes and by when (basic to MMC, VAT, excise & vend fee, TCS), scheme reimbursement status and the
+   scheme benefits it passed on to its retailers. Internal users pick the distributor; a distributor login
+   (adm.users.party_id) will be locked to its own party by the same function. */
+window.ddParty = window.ddParty || '';
+window.ddTabKey = 'ov';
+async function openDistDash(){
+  await loadMasters();
+  const dists = (M.parties||[]).filter(p => (p.party_type||'DISTRIBUTOR') === 'DISTRIBUTOR').sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  const sel = $('dd-party');
+  sel.innerHTML = dists.map(p=>`<option value="${p.id}">${esc(p.code)} — ${esc(p.name)}${p.is_active?'':' (inactive)'}</option>`).join('');
+  if (!dists.length){ $('dd-body').innerHTML = '<p style="color:#777">No distributors in Party Master yet.</p>'; show('distdash'); return; }
+  if (!window.ddParty || !dists.some(p=>p.id===window.ddParty)) window.ddParty = dists[0].id;
+  sel.value = window.ddParty;
+  show('distdash');
+  await ddLoad(window.ddParty);
+}
+async function ddLoad(pid){
+  window.ddParty = pid;
+  const B = $('dd-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading the distributor’s account…</p>';
+  const { data: D, error } = await db.schema('sales').rpc('distributor_dashboard', { p_party: pid });
+  if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  const PT = { credit: Number(D.terms?.credit ?? 30), vatDay: Number(D.terms?.vatDay ?? 19), tcsRate: Number(D.terms?.tcsRate ?? 2), tcsDay: Number(D.terms?.tcsDay ?? 5), slabs: D.slabs || [] };
+  const payBy = {}, tcsBy = {};
+  (D.payments||[]).forEach(p => (payBy[p.order_id] = payBy[p.order_id] || []).push(p));
+  (D.tcs_payments||[]).forEach(p => (tcsBy[p.order_id] = tcsBy[p.order_id] || []).push(p));
+  D.bills = [];
+  for (const o of (D.orders||[])){
+    o.T = o.T || { basic:0, exc:0, wine:0, vat:0, total:0 };
+    o.open = o.priced && !['RECEIVED','CANCELLED'].includes(o.status);
+    if (o.open){ o.bd = orderTerms(o, o.T, payBy[o.id]||[], PT, D.party?.credit_days, tcsBy[o.id]||[]); if (o.bd.balance > 0.005) D.bills.push(o); }
+  }
+  D.PT = PT;
+  // scheme figures
+  D.claimTotal = (D.claims||[]).reduce((s,c)=>s+Number(c.value||0),0);
+  D.reimbPaid = (D.reimbursements||[]).reduce((s,r)=>s+Number(r.amount||0),0);
+  D.reimbAdj = (D.reimbursements||[]).reduce((s,r)=>s+Number(r.adjusted_amount||0),0);
+  D.reimbPending = Math.max(0, Math.round((D.claimTotal - D.reimbPaid)*100)/100);
+  window.__dd = D;
+  ddTab(window.ddTabKey || 'ov');
+}
+function ddStatusText(o){
+  if (o.status === 'RECEIVED') return o.allocated_at ? 'Received · stock allocated, awaiting approval' : (o.parent_order_id ? 'Pending — balance of an earlier order, awaiting stock' : 'Received · awaiting stock allocation');
+  if (o.status === 'APPROVED') return 'Approved · ready for dispatch' + (o.approved_at ? ' (approved ' + String(o.approved_at).slice(0,10) + ')' : '');
+  if (o.status === 'DISPATCHED') return 'Dispatched' + (o.dispatched_at ? ' on ' + String(o.dispatched_at).slice(0,10) : '') + (o.invoice_no ? ' · Invoice ' + o.invoice_no : '');
+  if (o.status === 'DELIVERED') return 'Delivered' + (o.delivered_at ? ' on ' + String(o.delivered_at).slice(0,10) : '');
+  if (o.status === 'CLOSED') return 'Closed';
+  if (o.status === 'CANCELLED') return 'Cancelled';
+  return o.status;
+}
+function ddSchedule(D){
+  const S = [];
+  for (const o of D.bills){ const b = o.bd;
+    if (b.basicLeft > 0.005) S.push({ due:b.basicDue, what:'Basic (to MMC)', so:o.so_no, amt:b.basicLeft, over:b.basicOver });
+    if (b.vatLeft > 0.005) S.push({ due:b.vatDue, what:'VAT (to MMC)', so:o.so_no, amt:b.vatLeft, over:b.vatOver });
+    if (b.tcsLeft > 0.005) S.push({ due:b.tcsDue, what:'TCS ' + b.tcsRate + '%', so:o.so_no, amt:b.tcsLeft, over:b.tcsOver });
+    if (b.levyLeft > 0.005) S.push({ due:b.sale, what:'Excise duty & vend fee (MMC excise a/c)', so:o.so_no, amt:b.levyLeft, over:true });
+  }
+  return S.sort((a,b)=>a.due.localeCompare(b.due));
+}
+function ddTab(which){
+  window.ddTabKey = which;
+  ['ov','ord','out','sch','ret','run'].forEach(k => { const c = $('dd-'+k); if (c) c.classList.toggle('on', k===which); });
+  const D = window.__dd, B = $('dd-body'); if (!D){ B.innerHTML = ''; return; }
+  const P = D.party || {};
+  const tile = (l, v, c, sub) => `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">${l}</div><div style="font-size:17px;font-weight:700;${c?'color:'+c:''}">${v}</div>${sub?`<div style="font-size:10.5px;color:#777">${sub}</div>`:''}</div>`;
+  const head = `<div class="card" style="padding:12px 14px;margin-bottom:12px;border-left:4px solid #c9a227;">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;"><div><b style="font-size:15px;">${esc(P.name||'')}</b> <span style="color:#777">${esc(P.code||'')}${P.city?' · '+esc(P.city):''}${P.territory?' · '+esc(P.territory):''}</span>${P.is_active?'':' <span class="pill CANCELLED">INACTIVE</span>'}</div>
+        <div style="font-size:12px;color:#555;">Credit ${Number(P.credit_days)>0?P.credit_days:D.PT.credit} days on basic · VAT by the ${D.PT.vatDay}th of next month · TCS ${D.PT.tcsRate}% by the ${D.PT.tcsDay}th of next month</div></div>
+      <div style="font-size:11.5px;color:#555;margin-top:4px;">${[P.license_no?'License '+esc(P.license_no):'', P.gstin?'GSTIN '+esc(P.gstin):'', P.vat_no?'VAT '+esc(P.vat_no):'', P.fssai_no?'FSSAI '+esc(P.fssai_no):''].filter(Boolean).join(' · ') || 'No registration numbers on record'}
+        ${P.contact_person||P.phone?'<br>'+[P.contact_person?esc(P.contact_person):'', P.phone?esc(P.phone):'', P.email?esc(P.email):''].filter(Boolean).join(' · '):''}
+        ${P.salesperson?'<br>Your Aurum contact: <b>'+esc(P.salesperson)+'</b>'+(P.salesperson_phone?' · '+esc(P.salesperson_phone):''):''}</div></div>`;
+  const totOut = D.bills.reduce((s,o)=>s+o.bd.balance,0), totOver = D.bills.reduce((s,o)=>s+(o.bd.basicOver?o.bd.basicLeft:0)+(o.bd.vatOver?o.bd.vatLeft:0)+(o.bd.tcsOver?o.bd.tcsLeft:0)+o.bd.levyLeft,0);
+  const sched = ddSchedule(D), next = sched.find(x=>!x.over) || sched[0];
+  const byStatus = {}; (D.orders||[]).forEach(o=>{ byStatus[o.status] = (byStatus[o.status]||0)+1; });
+  const pill = o => `<span class="pill ${o.status}">${o.status}</span>`;
+  if (which === 'ov'){
+    B.innerHTML = head + `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      ${tile('Orders', (D.orders||[]).length, '', Object.keys(byStatus).map(k=>byStatus[k]+' '+k.toLowerCase()).join(' · ') || 'none yet')}
+      ${tile('Total outstanding', '₹ '+inr(totOut), totOut>0.005?'#b3261e':'#1a7f37', D.bills.length+' open bill(s)')}
+      ${tile('Overdue', '₹ '+inr(totOver), totOver>0.005?'#b3261e':'#1a7f37', 'past its due date')}
+      ${tile('Next payment due', next?'₹ '+inr(next.amt):'—', '', next?next.what+' · '+next.so+' · by '+next.due:'nothing due')}
+      ${tile('Scheme reimbursement pending', '₹ '+inr(D.reimbPending), D.reimbPending>0.005?'#b26a00':'#1a7f37', 'claimed ₹ '+inr(D.claimTotal)+' · reimbursed ₹ '+inr(D.reimbPaid))}
+      ${tile('Scheme given to retailers', '₹ '+inr(D.claimTotal), '', (D.claims||[]).length+' bill(s) with scheme benefit')}
+    </div>
+    <h4 class="sec">Payments due</h4>
+    <div class="table-scroll"><table><thead><tr><th>Due on</th><th>What</th><th>Bill</th><th class="amount">Amount ₹</th><th></th></tr></thead><tbody>
+      ${sched.map(x=>`<tr${x.over?' style="background:#fdf6ee;"':''}><td>${x.due}</td><td>${esc(x.what)}</td><td>${esc(x.so)}</td><td class="amount"><b>${inr(x.amt)}</b></td><td>${x.over?'<span class="pill CANCELLED">OVERDUE</span>':''}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#1a7f37">Nothing outstanding.</td></tr>'}
+      ${sched.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="3">Total</td><td class="amount">${inr(sched.reduce((s,x)=>s+x.amt,0))}</td><td></td></tr>`:''}
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:14px;">Recent orders</h4>
+    <div class="table-scroll"><table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th class="amount">Cases</th><th class="amount">Total incl. VAT ₹</th><th class="amount">Balance ₹</th></tr></thead><tbody>
+      ${(D.orders||[]).slice(0,8).map(o=>`<tr><td><b>${esc(o.so_no)}</b></td><td>${o.order_date}</td><td>${pill(o)} <span style="font-size:11.5px;color:#555">${esc(ddStatusText(o))}</span></td><td class="amount">${Number(o.cases)}</td><td class="amount">${o.priced?inr(o.T.total):'<span style="color:#999">on approval</span>'}</td><td class="amount">${o.bd?inr(o.bd.balance):'—'}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">No orders yet.</td></tr>'}
+    </tbody></table></div>`;
+  }
+  if (which === 'ord'){
+    B.innerHTML = head + `<p style="font-size:12px;color:#777;margin:0 0 8px;">Every order placed for this distributor and where it stands. Rates and values appear once an order is approved. Click an order to see its items.</p>
+    <div class="table-scroll"><table><thead><tr><th>Order</th><th>Date</th><th>Status</th><th class="amount">Cases</th><th class="amount">Basic ₹</th><th class="amount">Excise + vend fee ₹</th><th class="amount">VAT ₹</th><th class="amount">Total incl. VAT ₹</th><th>Invoice</th></tr></thead><tbody>
+      ${(D.orders||[]).map((o,i)=>`<tr class="rowlink" onclick="const r=$('dd-ol-${i}');r.classList.toggle('hidden')"><td><b>${esc(o.so_no)}</b></td><td>${o.order_date}</td><td>${pill(o)}<br><span style="font-size:11.5px;color:#555">${esc(ddStatusText(o))}</span></td><td class="amount">${Number(o.cases)}</td>
+          <td class="amount">${o.priced?inr(o.T.basic):'—'}</td><td class="amount">${o.priced?inr(o.T.exc+o.T.wine):'—'}</td><td class="amount">${o.priced?inr(o.T.vat):'—'}</td><td class="amount"><b>${o.priced?inr(o.T.total):'—'}</b></td><td>${esc(o.invoice_no||'—')}</td></tr>
+        <tr id="dd-ol-${i}" class="hidden"><td colspan="9" style="background:#fbf9f3;padding:8px 14px;">
+          <table style="max-width:720px;"><thead><tr><th>SKU</th><th class="amount">Cases</th><th class="amount">Rate/case ₹</th><th class="amount">Amount ₹</th></tr></thead><tbody>
+          ${(o.lines||[]).map(l=>`<tr><td>${esc(l.sku_code)}</td><td class="amount">${Number(l.cases)}${l.requested_cases!=null&&Number(l.requested_cases)!==Number(l.cases)?` <span style="font-size:10.5px;color:#777">(of ${Number(l.requested_cases)} asked)</span>`:''}</td><td class="amount">${l.rate_per_case!=null?inr(l.rate_per_case):'—'}</td><td class="amount">${l.amount!=null?inr(l.amount):'—'}</td></tr>`).join('')}
+          </tbody></table>${o.remarks?'<div style="font-size:11.5px;color:#777;margin-top:4px;">Remarks: '+esc(o.remarks)+'</div>':''}</td></tr>`).join('') || '<tr><td colspan="9" style="color:#777">No orders yet.</td></tr>'}
+    </tbody></table></div>`;
+  }
+  if (which === 'out'){
+    const pays = (D.payments||[]).filter(p=>!['SCHEME','SCHEME_REIMB','CASH_DISC','OTHER_DISC'].includes(p.mode)), ded = (D.payments||[]).filter(p=>['SCHEME','SCHEME_REIMB','CASH_DISC','OTHER_DISC'].includes(p.mode));
+    const soOf = id => ((D.orders||[]).find(o=>o.id===id)||{}).so_no || '';
+    B.innerHTML = head + `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      ${tile('Basic outstanding (to MMC)', '₹ '+inr(D.bills.reduce((s,o)=>s+Math.max(0,o.bd.basicLeft),0)), '', 'credit from the sale date')}
+      ${tile('VAT outstanding', '₹ '+inr(D.bills.reduce((s,o)=>s+Math.max(0,o.bd.vatLeft),0)), '', 'by the '+D.PT.vatDay+'th of the next month')}
+      ${tile('Excise & vend fee unpaid', '₹ '+inr(D.bills.reduce((s,o)=>s+o.bd.levyLeft,0)), '', 'MMC excise account')}
+      ${tile('TCS '+D.PT.tcsRate+'% outstanding', '₹ '+inr(D.bills.reduce((s,o)=>s+Math.max(0,o.bd.tcsLeft),0)), '', 'by the '+D.PT.tcsDay+'th of the next month')}
+      ${tile('Total outstanding', '₹ '+inr(totOut), totOut>0.005?'#b3261e':'#1a7f37', 'overdue ₹ '+inr(totOver))}
+    </div>
+    <h4 class="sec">Open bills</h4>
+    <div class="table-scroll"><table><thead><tr><th>Bill</th><th>Sale date</th><th class="amount">Total incl. VAT ₹</th><th class="amount">Basic due ₹</th><th>By</th><th class="amount">VAT due ₹</th><th>By</th><th class="amount">Excise & vend fee ₹</th><th class="amount">TCS due ₹</th><th>By</th><th class="amount">Balance ₹</th></tr></thead><tbody>
+      ${D.bills.map(o=>{ const b=o.bd; return `<tr><td><b>${esc(o.so_no)}</b>${o.invoice_no?'<br><span style="font-size:11px;color:#777">Inv '+esc(o.invoice_no)+'</span>':''}</td><td>${b.sale}${b.provisional?'<br><span style="font-size:10.5px;color:#777">approval date</span>':''}</td><td class="amount">${inr(o.T.total)}</td>
+          <td class="amount" style="color:${b.basicOver?'#b3261e':''}">${inr(Math.max(0,b.basicLeft))}</td><td style="font-size:11.5px;">${b.basicDue}${b.basicOver?' <span class="pill CANCELLED">OVERDUE</span>':''}${b.discNow>0.005?'<br><span style="color:#0b57d0">'+b.pct+'% cash discount if paid by '+b.discUntil+'</span>':''}</td>
+          <td class="amount" style="color:${b.vatOver?'#b3261e':''}">${inr(Math.max(0,b.vatLeft))}</td><td style="font-size:11.5px;">${b.vatDue}${b.vatOver?' <span class="pill CANCELLED">OVERDUE</span>':''}</td>
+          <td class="amount">${inr(b.levyLeft)}</td><td class="amount" style="color:${b.tcsOver?'#b3261e':''}">${inr(Math.max(0,b.tcsLeft))}</td><td style="font-size:11.5px;">${b.tcsDue}${b.tcsOver?' <span class="pill CANCELLED">OVERDUE</span>':''}</td>
+          <td class="amount"><b>${inr(b.balance)}</b></td></tr>`; }).join('') || '<tr><td colspan="11" style="color:#1a7f37">No open bills — nothing outstanding.</td></tr>'}
+      ${D.bills.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="2">Total</td><td class="amount">${inr(D.bills.reduce((s,o)=>s+o.T.total,0))}</td><td class="amount">${inr(D.bills.reduce((s,o)=>s+Math.max(0,o.bd.basicLeft),0))}</td><td></td><td class="amount">${inr(D.bills.reduce((s,o)=>s+Math.max(0,o.bd.vatLeft),0))}</td><td></td><td class="amount">${inr(D.bills.reduce((s,o)=>s+o.bd.levyLeft,0))}</td><td class="amount">${inr(D.bills.reduce((s,o)=>s+Math.max(0,o.bd.tcsLeft),0))}</td><td></td><td class="amount">${inr(totOut)}</td></tr>`:''}
+    </tbody></table></div>
+    <p style="font-size:11.5px;color:#777;margin:6px 0 0;">Basic and VAT are paid to MMC; excise duty and vend fee go to MMC's excise account before approval; TCS ${D.PT.tcsRate}% on the order total incl. VAT (after scheme deductions) is paid month-wise by the ${D.PT.tcsDay}th of the next month. Scheme claims of earlier months are deducted on the first bill of each month.</p>
+    <h4 class="sec" style="margin-top:14px;">Payments received</h4>
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Bill</th><th>Paid as</th><th>Via</th><th>Reference</th><th class="amount">Amount ₹</th></tr></thead><tbody>
+      ${pays.map(p=>`<tr><td>${p.pay_date}</td><td>${esc(soOf(p.order_id))}</td><td>${payModeLabel(p.mode)}</td><td>${esc(p.pay_via||'')}${p.bank_name?' · '+esc(p.bank_name):''}</td><td>${esc(p.ref_no||'')}</td><td class="amount">${inr(p.amount)}</td></tr>`).join('') +
+        (D.tcs_payments||[]).map(p=>`<tr><td>${p.pay_date}</td><td>${esc(soOf(p.order_id))}</td><td>🧾 TCS → paid to MMC</td><td>${esc(p.pay_via||'')}</td><td>${esc(p.ref_no||'')}</td><td class="amount">${inr(p.amount)}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">No payments recorded yet.</td></tr>'}
+    </tbody></table></div>
+    ${ded.length?`<h4 class="sec" style="margin-top:14px;">Discounts &amp; scheme amounts adjusted on bills</h4>
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Bill</th><th>Adjustment</th><th>Remarks</th><th class="amount">Amount ₹</th></tr></thead><tbody>
+      ${ded.map(p=>`<tr><td>${p.pay_date}</td><td>${esc(soOf(p.order_id))}</td><td>${payModeLabel(p.mode)}</td><td style="font-size:11.5px;color:#777">${esc(p.remarks||'')}</td><td class="amount">${inr(p.amount)}</td></tr>`).join('')}
+    </tbody></table></div>`:''}`;
+  }
+  if (which === 'sch'){
+    const st = r => { const adj = Number(r.adjusted_amount||0), amt = Number(r.amount||0);
+      if (adj >= amt - 0.005 && amt > 0) return '<span class="pill DELIVERED">ADJUSTED ON BILL</span>';
+      if (adj > 0.005) return `<span class="pill DISPATCHED">PART ADJUSTED ₹ ${inr(adj)}</span>`;
+      if (r.settled_at) return '<span class="pill APPROVED">APPROVED · TO BE ADJUSTED ON NEXT BILL</span>';
+      return '<span class="pill RECEIVED">PENDING</span>'; };
+    B.innerHTML = head + `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      ${tile('Scheme benefit given to retailers', '₹ '+inr(D.claimTotal), '', (D.claims||[]).length+' bill(s) · ₹ amount + free issue at landed cost')}
+      ${tile('Reimbursement approved by Aurum', '₹ '+inr(D.reimbPaid), '#1a7f37', (D.reimbursements||[]).length+' settlement(s)')}
+      ${tile('Adjusted on your bills', '₹ '+inr(D.reimbAdj), '', 'deducted from basic payable, oldest bill first')}
+      ${tile('Still to be reimbursed', '₹ '+inr(D.reimbPending), D.reimbPending>0.005?'#b26a00':'#1a7f37', 'given − approved so far')}
+    </div>
+    <p style="font-size:12px;color:#555;margin:0 0 8px;">How it works: the scheme benefit you give a retailer on its bill (₹ amount or free issue) is recorded on that secondary-sale entry; Aurum reimburses it by <b>deducting it from your basic payable on the first bill of the following month</b>. Free issue is valued at the SKU's landed cost (basic + excise duty + vend fee + VAT).</p>
+    <h4 class="sec">Reimbursement settlements</h4>
+    <div class="table-scroll"><table><thead><tr><th>Scheme</th><th>Date</th><th class="amount">Approved ₹</th><th class="amount">Adjusted ₹</th><th>Adjusted on</th><th>Status</th><th>Remarks</th></tr></thead><tbody>
+      ${(D.reimbursements||[]).map(r=>`<tr><td><b>${esc(r.scheme_code||'')}</b>${r.scheme_name?'<br><span style="font-size:11px;color:#777">'+esc(r.scheme_name)+'</span>':''}</td><td>${r.reimb_date||(r.settled_at?String(r.settled_at).slice(0,10):'—')}</td><td class="amount">${inr(r.amount)}</td><td class="amount">${inr(r.adjusted_amount||0)}</td><td style="font-size:11.5px;">${(r.adjusted_on||[]).map(a=>esc(a.so_no)+' ₹ '+inr(a.amount)+' ('+a.date+')').join('<br>')||'—'}</td><td>${st(r)}</td><td style="font-size:11.5px;color:#777">${esc(r.remarks||'')}</td></tr>`).join('') || '<tr><td colspan="7" style="color:#777">No reimbursement settled yet.</td></tr>'}
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:14px;">Scheme-wise: given vs reimbursed</h4>
+    ${(()=>{ const by = {}; (D.claims||[]).forEach(c=>{ const k=c.scheme_code||'(no scheme)'; (by[k]=by[k]||{name:c.scheme_name||'',given:0,n:0,paid:0}); by[k].given+=Number(c.value||0); by[k].n++; });
+        (D.reimbursements||[]).forEach(r=>{ const k=r.scheme_code||'(no scheme)'; (by[k]=by[k]||{name:r.scheme_name||'',given:0,n:0,paid:0}); by[k].paid+=Number(r.amount||0); });
+        const rows = Object.keys(by).sort();
+        return `<div class="table-scroll"><table><thead><tr><th>Scheme</th><th class="amount">Bills</th><th class="amount">Given ₹</th><th class="amount">Reimbursed ₹</th><th class="amount">Pending ₹</th></tr></thead><tbody>${rows.map(k=>{ const g=by[k]; const pend=Math.max(0,g.given-g.paid); return `<tr><td><b>${esc(k)}</b>${g.name?' <span style="font-size:11px;color:#777">'+esc(g.name)+'</span>':''}</td><td class="amount">${g.n}</td><td class="amount">${inr(g.given)}</td><td class="amount" style="color:#1a7f37">${inr(g.paid)}</td><td class="amount" style="color:${pend>0.005?'#b26a00':'#1a7f37'}">${inr(pend)}</td></tr>`; }).join('')||'<tr><td colspan="5" style="color:#777">No scheme activity yet.</td></tr>'}</tbody></table></div>`; })()}`;
+  }
+  if (which === 'ret'){
+    const by = {};
+    (D.claims||[]).forEach(c=>{ const k = c.retailer_code || c.retailer || '?'; const g = (by[k] = by[k] || { name:c.retailer||'?', code:c.retailer_code||'', cat:c.retailer_category||'', n:0, cases:0, cash:0, free:0, total:0, schemes:new Set() });
+      g.n++; g.cases += Number(c.cases||0); if (c.scheme_type==='FREE') g.free += Number(c.value||0); else g.cash += Number(c.value||0); g.total += Number(c.value||0); if (c.scheme_code) g.schemes.add(c.scheme_code); });
+    const groups = Object.values(by).sort((a,b)=>b.total-a.total);
+    B.innerHTML = head + `<p style="font-size:12px;color:#555;margin:0 0 8px;">Scheme benefits this distributor passed on to each retailer (from its secondary-sale bills). This is what Aurum reimburses.</p>
+    <div class="table-scroll"><table><thead><tr><th>Retailer</th><th>Category</th><th>Schemes</th><th class="amount">Bills</th><th class="amount">Cases</th><th class="amount">₹ given</th><th class="amount">Free issue value ₹</th><th class="amount">Total ₹</th></tr></thead><tbody>
+      ${groups.map(g=>`<tr><td><b>${esc(g.name)}</b>${g.code?'<br><span style="font-size:11px;color:#777">'+esc(g.code)+'</span>':''}</td><td>${esc(g.cat||'—')}</td><td style="font-size:11.5px;">${[...g.schemes].map(esc).join(', ')||'—'}</td><td class="amount">${g.n}</td><td class="amount">${g.cases}</td><td class="amount">${inr(g.cash)}</td><td class="amount">${inr(g.free)}</td><td class="amount"><b>${inr(g.total)}</b></td></tr>`).join('') || '<tr><td colspan="8" style="color:#777">No scheme benefit recorded on any retailer bill yet.</td></tr>'}
+      ${groups.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="3">Total</td><td class="amount">${groups.reduce((s,g)=>s+g.n,0)}</td><td class="amount">${groups.reduce((s,g)=>s+g.cases,0)}</td><td class="amount">${inr(groups.reduce((s,g)=>s+g.cash,0))}</td><td class="amount">${inr(groups.reduce((s,g)=>s+g.free,0))}</td><td class="amount">${inr(D.claimTotal)}</td></tr>`:''}
+    </tbody></table></div>
+    <h4 class="sec" style="margin-top:14px;">Bill by bill</h4>
+    <div class="table-scroll"><table><thead><tr><th>Bill date</th><th>Retailer</th><th>SKU · cases</th><th>Scheme</th><th>Given</th><th class="amount">Value ₹</th></tr></thead><tbody>
+      ${(D.claims||[]).map(c=>`<tr><td>${c.sale_date}</td><td>${esc(c.retailer||'?')}</td><td>${esc(c.sku_code||'?')} · ${Number(c.cases)}</td><td>${esc(c.scheme_code||'—')}</td><td style="font-size:12px;">${c.scheme_type==='FREE'?Number(c.free_qty||0)+' '+(c.free_unit==='BOTTLES'?'bottle(s)':'case(s)')+' free'+(Number(c.landed_case)?'':' <span style="color:#b3261e">(no price set)</span>'):'₹ amount'}${c.scheme_note?'<br><span style="color:#777">'+esc(c.scheme_note)+'</span>':''}</td><td class="amount"><b>${inr(c.value||0)}</b></td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">Nothing yet.</td></tr>'}
+    </tbody></table></div>`;
+  }
+  if (which === 'run'){
+    B.innerHTML = head + `<p style="font-size:12px;color:#555;margin:0 0 8px;">Schemes currently running or recently ended, as announced by Aurum.</p>
+    <div class="table-scroll"><table><thead><tr><th>Scheme</th><th>Period</th><th>Status</th><th>Slabs / benefit</th><th>Notes</th></tr></thead><tbody>
+      ${(D.schemes||[]).map(s=>`<tr><td><b>${esc(s.code)}</b><br><span style="font-size:11.5px;color:#555">${esc(s.name||'')}</span></td><td>${s.date_from} → ${s.date_to}</td><td><span class="pill ${s.status==='ACTIVE'?'DELIVERED':'RECEIVED'}">${esc(s.status||'')}</span></td>
+          <td style="font-size:11.5px;">${Array.isArray(s.slabs)?s.slabs.map(x=>esc(typeof x==='string'?x:[x.label,x.min_cases!=null?x.min_cases+'+ cases':'',x.benefit||x.free||(x.amount!=null?'₹ '+inr(x.amount):'')].filter(Boolean).join(' · '))).join('<br>'):(s.slabs?esc(JSON.stringify(s.slabs)):'—')}</td><td style="font-size:11.5px;color:#777">${esc(s.notes||'')}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#777">No scheme running at the moment.</td></tr>'}
+    </tbody></table></div>`;
+  }
+}
+function ddPrint(){
+  const D = window.__dd; if (!D) return;
+  const names = { ov:'Overview', ord:'Orders & status', out:'Outstanding & payments', sch:'Scheme reimbursement', ret:'Retailer-wise scheme given', run:'Schemes running' };
+  printHtml(`Distributor dashboard — ${D.party?.name||''}`, `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Distributor dashboard · ${esc(D.party?.name||'')} (${esc(D.party?.code||'')}) · ${names[window.ddTabKey]||''}</h2>` + $('dd-body').innerHTML);
+}
 
 /* ================= BRANDS & SKUs ================= */
 async function openBrands(){
