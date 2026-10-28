@@ -85,7 +85,7 @@
   tr.rowlink:hover td{background:#faf6ec;}
   .pill{display:inline-block; padding:2px 9px; border-radius:20px; font-size:11px; font-weight:700;}
   .pill.DIRECTOR{background:#efe3c2; color:#7a5c10;} .pill.ADMIN{background:#dbe7f6; color:#274b77;}
-  .pill.STAFF{background:#e4e4ea; color:#44445e;}   .pill.PUBLIC{background:#f0dede; color:#7a3030;}
+  .pill.STAFF{background:#e4e4ea; color:#44445e;}   .pill.PUBLIC{background:#f0dede; color:#7a3030;}   .pill.DISTRIBUTOR{background:#e3edf7; color:#1a4d7a;}
   .pill.RECEIVED{background:#e4e4ea; color:#44445e;} .pill.APPROVED{background:#dbe7f6; color:#274b77;}
   .pill.DISPATCHED{background:#efe3c2; color:#7a5c10;} .pill.DELIVERED{background:#e8f4ec; color:#1f7a4d;}
   .pill.CLOSED{background:#d8d8e0; color:#333;} .pill.CANCELLED{background:#f0dede; color:#7a3030;}
@@ -552,7 +552,10 @@
       <option value="ADMIN">ADMIN — runs a domain day-to-day</option>
       <option value="STAFF">STAFF — own world only</option>
       <option value="PUBLIC">PUBLIC — outside surfaces only</option>
+      <option value="DISTRIBUTOR">DISTRIBUTOR — a distributor's own login: its dashboard only</option>
     </select>
+    <div id="edit-dist-wrap" class="hidden"><label>Distributor (Party Master) *</label><select id="edit-party"></select>
+      <p style="font-size:11.5px;color:#666;margin:4px 0 0;">A distributor login sees only this distributor's dashboard. Module permissions, sections and mailboxes below do not apply to it.</p></div>
     <label style="margin-top:14px;">Module permissions (ignored for Directors, who get all)</label>
     <div class="permgrid" id="permgrid"></div>
     <label style="margin-top:16px;">Sections visible inside each module (ignored for Directors)</label>
@@ -581,16 +584,24 @@
     <label>First password * <span style="font-weight:normal;color:#888;font-size:11px;">(min 8 — you tell it to them in person)</span></label>
     <input type="text" id="iv-pass" placeholder="e.g. Aurum@2026" autocomplete="off">
     <label>Role (tier)</label>
-    <select id="iv-role">
+    <select id="iv-role" onchange="ivRoleChange()">
       <option value="STAFF">STAFF — own world only</option>
       <option value="ADMIN">ADMIN — runs a domain day-to-day</option>
       <option value="DIRECTOR">DIRECTOR — sees &amp; approves everything</option>
       <option value="PUBLIC">PUBLIC — outside surfaces only</option>
+      <option value="DISTRIBUTOR">DISTRIBUTOR — a distributor's own login: its dashboard only</option>
     </select>
+    <div id="iv-dist-wrap" class="hidden">
+      <label>Distributor (Party Master) *</label>
+      <select id="iv-party" onchange="ivPartyPick()"></select>
+      <p style="font-size:11.5px;color:#666;margin:4px 0 0;">This login sees the <b>Distributor Dashboard</b> of this one distributor — its orders and status, outstanding and due dates, scheme reimbursement and retailer-wise scheme given — and nothing else in the ERP. Use the distributor's own email address from Party Master (filled in for you if it is on record).</p>
+    </div>
+    <div id="iv-staff-wrap">
     <label style="margin-top:14px;">Company mailboxes this person may send from</label>
     <p style="font-size:11.5px;color:#666;margin:2px 0 6px;">Their own name and designation appear in the signature of every mail they send from these addresses.</p>
     <div id="iv-mbx"></div>
     <p style="font-size:11.5px;color:#666;margin:10px 0 0;">Module and section permissions can be set from <b>Edit</b> once they have signed in — or leave them and this person starts with the plain access their role gives.</p>
+    </div>
     <div class="row2" style="margin-top:16px;">
       <button class="btn ghost" onclick="closeSheet('invite-overlay')">Cancel</button>
       <button class="btn gold" id="btn-save-invite">Add person</button>
@@ -828,7 +839,10 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const inr = n => n==null ? '—' : Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 function say(id, text, ok){ $(id).innerHTML = text ? `<div class="msg ${ok?'ok':'err'}">${esc(text)}</div>` : ''; }
+function isDistUser(){ return !!(me && me.role === 'DISTRIBUTOR'); }
 function show(view){
+  // a distributor login has exactly one screen — its own dashboard
+  if (isDistUser() && !['login','welcome','recover','distdash'].includes(view)) view = 'distdash';
   for (const v of ['login','welcome','recover','home','admin','orders','order-new','order-detail','parties','brands','rates','distdash','mfg','tasks','calendar','meetings','mkt','notif','comp','reports','salesrep','purchase','mail','acct','docs','contacts','findash'])
     $('view-'+v).classList.toggle('hidden', v!==view);
   if (VIEW_MOD[view]) applySections(VIEW_MOD[view]);
@@ -915,6 +929,13 @@ async function init(){
   $('who').classList.remove('hidden');
   $('who-name').textContent = me.full_name;
   $('who-role').textContent = me.role + (me.designation ? ' · ' + me.designation : '');
+  if (isDistUser()){
+    // Distributor login: no home, no modules, no notifications or mail — straight to its own dashboard.
+    $('notif-bell').classList.add('hidden');
+    if (!me.party_id){ show('login'); say('login-msg','Your distributor login is not linked to a distributor yet. Please contact Aurum Spirits.',false); return; }
+    await openDistDash();
+    return;
+  }
   $('home-hello').textContent = 'Welcome, ' + me.full_name.split(' ')[0];
   // Am I a team leader? (does anyone report to me) — gates the Salesman Reports tile.
   window.__hasReports = false;
@@ -1093,9 +1114,15 @@ function mbxNamesFor(u){
     .map(b => (b.address || b.key) + (explicit.has(b.id) || !auto.has(b.id) ? '' : ' (by role)'));
   return names.length ? names.join(', ') : '—';
 }
+function partyLabel(pid){
+  if (!pid) return 'no distributor linked';
+  const p = (M.parties||[]).find(x => x.id === pid);
+  return p ? (p.code + ' — ' + p.name) : 'distributor ' + String(pid).slice(0,8);
+}
 async function openAdmin(){
   const { data, error } = await db.schema('adm').from('users').select('*').order('full_name');
   if (error){ say('od-msg','Could not load users: '+error.message,false); return; }
+  try { if (!M.parties || !M.parties.length) await loadMasters(); } catch(e){}
   // Deleted people never appear in the list — only current (and deactivated-but-kept) staff show.
   allUsers = (data || []).filter(u => !u.deleted_at);
   await loadMailboxMap();
@@ -1105,9 +1132,9 @@ async function openAdmin(){
     if (!u.is_active) tr.className = 'inactive';
     tr.innerHTML =
       `<td><b>${esc(u.full_name)}</b><br><span style="font-size:11px;color:#777">${esc(u.email)}</span></td>` +
-      `<td><span class="pill ${u.role}">${u.role}</span>${u.is_superadmin?' <span class="lock" title="Founder lock">🔒</span>':''}</td>` +
+      `<td><span class="pill ${u.role}">${u.role}</span>${u.is_superadmin?' <span class="lock" title="Founder lock">🔒</span>':''}${u.role==='DISTRIBUTOR'?'<br><span style="font-size:11px;color:#555">'+esc(partyLabel(u.party_id))+'</span>':''}</td>` +
       `<td>${esc(u.designation||'—')}</td>` +
-      `<td style="font-size:11.5px;color:#555">${esc(mbxNamesFor(u))}</td>` +
+      `<td style="font-size:11.5px;color:#555">${u.role==='DISTRIBUTOR'?'<span style="color:#999">— dashboard only, no mail</span>':esc(mbxNamesFor(u))}</td>` +
       `<td>${u.is_active?'✔':'✖'}</td>` +
       `<td style="white-space:nowrap"><button class="mini" data-act="edit">Edit</button>` +
       `${isDir() && !u.is_superadmin ? ' <button class="mini" data-act="pass">Password</button>' : ''}` +
@@ -1211,7 +1238,7 @@ async function renderInvites(){
       `<td style="white-space:nowrap"><button class="mini" data-act="send" style="color:#1a7f37;border-color:#1a7f37;">📧 Send invite email</button> ` +
       `<button class="mini" data-act="pass">Password</button> ` +
       `<button class="mini" data-act="del" style="color:#c0392b;border-color:#c0392b;">Cancel</button></td>`;
-    tr.querySelector('[data-act="send"]').onclick = () => sendInviteMail(iv.email, iv.full_name || 'They');
+    tr.querySelector('[data-act="send"]').onclick = () => sendInviteMail(iv.email, iv.full_name || 'They', false, iv.role === 'DISTRIBUTOR');
     tr.querySelector('[data-act="pass"]').onclick = () => userSetPass({ full_name: iv.full_name || iv.email, email: iv.email });
     tr.querySelector('[data-act="del"]').onclick = () => delInvite(iv);
     tb.appendChild(tr);
@@ -1309,20 +1336,41 @@ async function openInvite(){
   if (!allMailboxes.length) await loadMailboxMap();
   $('iv-name').value = ''; $('iv-email').value = ''; $('iv-desig').value = ''; $('iv-pass').value = ''; $('iv-role').value = 'STAFF';
   mbxBoxes('iv-mbx', []);
+  // distributor logins pick the party from Party Master
+  try { if (!M.parties || !M.parties.length) await loadMasters(); } catch(e){}
+  const dists = (M.parties||[]).filter(p => (p.party_type||'DISTRIBUTOR') === 'DISTRIBUTOR' && p.is_active).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  $('iv-party').innerHTML = '<option value="">— choose the distributor —</option>' + dists.map(p=>`<option value="${p.id}">${esc(p.code)} — ${esc(p.name)}${p.email?' · '+esc(p.email):''}</option>`).join('');
+  ivRoleChange();
   say('iv-msg','');
   $('invite-overlay').classList.remove('hidden');
+}
+function ivRoleChange(){
+  const dist = $('iv-role').value === 'DISTRIBUTOR';
+  $('iv-dist-wrap').classList.toggle('hidden', !dist);
+  $('iv-staff-wrap').classList.toggle('hidden', dist);
+  $('iv-desig').placeholder = dist ? 'e.g. Proprietor' : 'e.g. Area Sales Manager';
+  if (dist) ivPartyPick();
+}
+function ivPartyPick(){
+  const p = (M.parties||[]).find(x => x.id === $('iv-party').value); if (!p) return;
+  if (!$('iv-name').value.trim()) $('iv-name').value = p.contact_person || p.name || '';
+  if (!$('iv-email').value.trim() && p.email) $('iv-email').value = String(p.email).trim().toLowerCase();
+  if (!$('iv-desig').value.trim()) $('iv-desig').value = 'Distributor · ' + (p.name || '');
 }
 $('btn-save-invite').onclick = async () => {
   const name  = $('iv-name').value.trim();
   const email = $('iv-email').value.trim().toLowerCase();
   const pass  = $('iv-pass').value;
+  const isDist = $('iv-role').value === 'DISTRIBUTOR';
+  const partyId = isDist ? $('iv-party').value : null;
   if (!name)  { say('iv-msg','Please put in the person\'s full name.', false); return; }
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ say('iv-msg','That email address does not look right.', false); return; }
   if (pass.length < 8){ say('iv-msg','Choose a first password of at least 8 characters — you will tell it to them in person.', false); return; }
+  if (isDist && !partyId){ say('iv-msg','Choose which distributor this login belongs to.', false); return; }
   if (allUsers.some(u => (u.email||'').toLowerCase() === email)){
     say('iv-msg','Somebody with that email is already in the ERP — use Edit on their row instead.', false); return;
   }
-  const boxes = [...document.querySelectorAll('.iv-mbx-box')].filter(c=>c.checked).map(c=>c.dataset.mbx);
+  const boxes = isDist ? [] : [...document.querySelectorAll('.iv-mbx-box')].filter(c=>c.checked).map(c=>c.dataset.mbx);
   const btn = $('btn-save-invite'); btn.disabled = true;
   // 1) allow the address in, and save what gets applied to the account
   const a = await db.schema('adm').from('auth_allowlist')
@@ -1332,6 +1380,7 @@ $('btn-save-invite').onclick = async () => {
     email, full_name: name,
     designation: $('iv-desig').value.trim() || null,
     role: $('iv-role').value,
+    party_id: partyId,
     permissions_json: {},
     mailbox_ids: boxes,
     created_by: (me && me.id) || null,
@@ -1347,21 +1396,32 @@ $('btn-save-invite').onclick = async () => {
   }
   // 3) invitation email: a link to the ERP's first-sign-in screen. No password in
   //    the email — they ask you for it, exactly as you wanted.
-  const sent = await sendInviteMail(email, name, true);
+  const sent = await sendInviteMail(email, name, true, isDist);
   btn.disabled = false;
   closeSheet('invite-overlay');
   alert(name + ' has been added and their login is ready.' +
     (sent ? '\n\nAn invitation email is on its way to ' + email + '. When they open the link, the ERP asks for the password — give it to them in person and they are in.'
           : '\n\nThe invitation email could not be sent right now — use "Send invite email" on their row to try again.') +
-    '\n\nAfter the first sign-in they can also log in any time from the company website (Employee Login) with the same email and password.');
+    (isDist ? '\n\nThis is a distributor login: it opens straight on that distributor\'s dashboard and can see nothing else in the ERP.'
+            : '\n\nAfter the first sign-in they can also log in any time from the company website (Employee Login) with the same email and password.'));
   openAdmin();
 };
 
 // The invitation email itself — sent from a company mailbox through the ERP's
 // own mail engine, with a link to the first-sign-in screen. Returns true if sent.
-async function sendInviteMail(email, name, quiet){
+async function sendInviteMail(email, name, quiet, isDist){
   const link = location.origin + location.pathname + '?welcome=' + encodeURIComponent(email);
-  const body =
+  const body = isDist ?
+`Hello ${name},
+
+Aurum Spirits India Limited has opened a distributor account for you on Aurum Nexus. It shows your orders and their status, what is outstanding and by when, your scheme reimbursement status and the scheme benefits you have given to retailers.
+
+Open this link to sign in for the first time:
+${link}
+
+It will ask for your email (already filled in) and your password. Your password is with the Director of Aurum Spirits — ask him and he will give it to you personally. It is not written in this email on purpose.
+
+From then on, sign in any time with the same link, email address and password.` :
 `Hello ${name},
 
 You have been added to Aurum Nexus, the internal portal of Aurum Spirits India Limited.
@@ -1407,6 +1467,11 @@ function openEdit(u){
   $('edit-designation').value = u.designation || '';
   $('edit-role').value        = u.role;
   $('edit-active').checked    = u.is_active;
+  // distributor login → which party it belongs to
+  { const dists = (M.parties||[]).filter(p => (p.party_type||'DISTRIBUTOR') === 'DISTRIBUTOR' && (p.is_active || p.id === u.party_id)).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+    $('edit-party').innerHTML = '<option value="">— choose the distributor —</option>' + dists.map(p=>`<option value="${p.id}" ${u.party_id===p.id?'selected':''}>${esc(p.code)} — ${esc(p.name)}</option>`).join('');
+    const sync = () => $('edit-dist-wrap').classList.toggle('hidden', $('edit-role').value !== 'DISTRIBUTOR');
+    $('edit-role').onchange = sync; sync(); }
   $('edit-reports-to').innerHTML = '<option value="">— none —</option>' +
     allUsers.filter(x => x.id !== u.id && x.is_active)
             .map(x => `<option value="${x.id}" ${u.reports_to === x.id ? 'selected' : ''}>${esc(x.full_name)}${x.designation ? ' — ' + esc(x.designation) : ''}</option>`).join('');
@@ -1489,8 +1554,16 @@ $('btn-save-user').onclick = async () => {
     permissions_json: perms,
     reports_to: $('edit-reports-to').value || null
   };
+  if (patch.role === 'DISTRIBUTOR'){
+    if (!$('edit-party').value){ say('edit-msg','Choose which distributor this login belongs to.', false); return; }
+    patch.permissions_json = {}; patch.reports_to = null;   // a distributor has no module rights at all
+  }
   const { error } = await db.schema('adm').from('users').update(patch).eq('id', editing.id);
   if (error){ say('edit-msg','Save failed: '+error.message,false); return; }
+  if (patch.role === 'DISTRIBUTOR'){
+    const { error: pe } = await db.schema('adm').rpc('set_user_party', { p_user: editing.id, p_party: $('edit-party').value });
+    if (pe){ say('edit-msg','Saved, but the distributor link failed: '+pe.message,false); return; }
+  }
   // Mailboxes. For each box on screen we work out what row (if any) the database
   // should hold: a plain grant where the tick is not covered by their role, a
   // switch-off where the tick was removed from something their role would open,
@@ -3256,6 +3329,16 @@ $('btn-save-party').onclick = async () => {
 window.ddParty = window.ddParty || '';
 window.ddTabKey = 'ov';
 async function openDistDash(){
+  if (isDistUser()){
+    // a distributor sees its own account only — no picker, no way back to a home screen
+    $('dd-pick').classList.add('hidden');
+    document.querySelector('#view-distdash .crumb').classList.add('hidden');
+    document.querySelector('#view-distdash .welcome p').textContent = 'Your account with Aurum Spirits India Limited — orders and their status, outstanding and due dates, scheme reimbursement and the scheme benefits you have given to retailers.';
+    window.ddParty = me.party_id;
+    show('distdash');
+    await ddLoad(me.party_id);
+    return;
+  }
   await loadMasters();
   const dists = (M.parties||[]).filter(p => (p.party_type||'DISTRIBUTOR') === 'DISTRIBUTOR').sort((a,b)=>String(a.name).localeCompare(String(b.name)));
   const sel = $('dd-party');
@@ -3267,6 +3350,7 @@ async function openDistDash(){
   await ddLoad(window.ddParty);
 }
 async function ddLoad(pid){
+  if (isDistUser()) pid = me.party_id;   // a distributor login is pinned to its own party; the database refuses any other party anyway
   window.ddParty = pid;
   const B = $('dd-body'); B.innerHTML = '<p style="font-size:13px;color:#777">Loading the distributor’s account…</p>';
   const { data: D, error } = await db.schema('sales').rpc('distributor_dashboard', { p_party: pid });
