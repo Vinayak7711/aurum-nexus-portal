@@ -230,6 +230,8 @@
       <thead><tr><th>Order No</th><th>Date</th><th>Party</th><th>Status</th><th class="amount">Cases</th><th class="amount dir-only">Amount ₹</th></tr></thead>
       <tbody id="order-rows"></tbody>
     </table></div>
+    <div id="alloc-panel"></div>
+    <div id="pending-summary"></div>
   </section>
 
   <section id="view-order-new" class="hidden">
@@ -1520,13 +1522,151 @@ async function openOrders(){
     tr.innerHTML =
       `<td><b>${esc(o.so_no)}</b></td><td>${o.order_date}</td>` +
       `<td>${esc(o.party?.name||'')}<br><span style="font-size:11px;color:#777">${esc(o.party?.code||'')}</span></td>` +
-      `<td><span class="pill ${o.status}">${o.status}</span>${canEditOrder(o)?` <button class="mini" onclick="event.stopPropagation();openEditOrder('${o.id}')" title="Change items, cases, distributor, date or remarks before approval">✎ Edit</button>`:''}</td>` +
+      `<td><span class="pill ${o.status}">${o.status}</span>${allocTag(o)}${canEditOrder(o)?` <button class="mini" onclick="event.stopPropagation();openEditOrder('${o.id}')" title="Change items, cases, distributor, date or remarks before approval">✎ Edit</button>`:''}` +
+      `${o.status==='RECEIVED' && canAllocate() ? ` <button class="mini" style="${o.allocated_at?'':'border-color:#c9a227;color:#7a5c10;font-weight:600;'}" onclick="event.stopPropagation();allocOpen('${o.id}')">${o.allocated_at?'📦 View allocation':'📦 Allocate stock'}</button>`:''}</td>` +
       `<td class="amount">${caseTotals[o.id]||0}</td>` +
       (isDir()?`<td class="amount">${amtTotals[o.id]!=null?inr(amtTotals[o.id]):'—'} ${dirDelBtn('sales','orders', o.id, 'SO '+(o.so_no||''), "openOrders()")}</td>`:'');
     tr.onclick = () => openOrderDetail(o.id);
     tb.appendChild(tr);
   }
+  $('alloc-panel').innerHTML = '';
   applyDirOnly(); show('orders');
+  // distributor-wise pending orders (RECEIVED, not yet allocated) against the finished stock — under the list
+  if (orderFilter === 'RECEIVED' || orderFilter === 'ALL') pendingSummary((orders||[]).filter(o=>o.status==='RECEIVED')); else $('pending-summary').innerHTML = '';
+}
+
+/* ---- Stock allocation on received orders ----
+   The Director (or sales approving authority) allocates finished stock to a received order SKU by SKU.
+   The allocated cases stay on the order and go forward for approval; the balance becomes a pending order
+   of its own (SO/…-P1) that stays in the RECEIVED tab until stock is available and it is allocated in turn. */
+function canAllocate(){ return isDir() || !!(me?.permissions_json?.sales?.admin); }
+function allocTag(o){
+  if (o.status !== 'RECEIVED') return '';
+  if (o.allocated_at) return ' <span class="pill DELIVERED" title="Stock allocated — ready for approval">📦 Allocated · awaiting approval</span>';
+  if (o.parent_order_id) return ' <span class="pill" style="background:#fdf1dc;color:#7a5c10;" title="Balance of an earlier order that could not be allocated for want of stock">⏳ Pending · balance of ' + esc(String(o.so_no||'').replace(/-P\d+$/,'')) + '</span>';
+  return ' <span class="pill" style="background:#f1f1f1;color:#555;">⏳ Pending · not yet allocated</span>';
+}
+async function allocLoadLines(orderId){
+  const S = db.schema('sales');
+  const [{ data: ls, error: e1 }, { data: av, error: e2 }] = await Promise.all([
+    S.from('order_lines').select('id, sku_id, cases, requested_cases').eq('order_id', orderId),
+    S.rpc('fg_available', { p_exclude: orderId }) ]);
+  if (e1) throw new Error(e1.message); if (e2) throw new Error(e2.message);
+  const avBy = {}; (av||[]).forEach(a => avBy[a.sku_id] = a);
+  const lines = sortLinesBrandwise(ls||[], l => l.sku_id).map(l => { const a = avBy[l.sku_id] || { in_stock:0, reserved:0, available:0 };
+    return { id:l.id, sku_id:l.sku_id, sku_code: skuCodeOf(l.sku_id), cases:Number(l.cases), requested: l.requested_cases!=null?Number(l.requested_cases):null,
+             in_stock:Number(a.in_stock), reserved:Number(a.reserved), available:Math.max(0, Number(a.available)) }; });
+  return { lines, avBy };
+}
+async function allocOpen(orderId){
+  const P = $('alloc-panel'); P.innerHTML = '<p style="font-size:13px;color:#777;margin:10px 0;">Loading stock…</p>';
+  const S = db.schema('sales');
+  const { data: o, error } = await S.from('orders').select('*, party:parties(code,name)').eq('id', orderId).single();
+  if (error){ P.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+  let L; try { L = await allocLoadLines(orderId); } catch(e){ P.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+  window.__allocLines = L.lines; window.__allocOrder = o;
+  const head = `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <h3 style="margin:0;font-size:15px;">📦 Stock allocation — ${esc(o.so_no)} · ${esc(o.party?.name||'')} (${esc(o.party?.code||'')}) · ${o.order_date}</h3>
+      <button class="btn ghost sm" onclick="$('alloc-panel').innerHTML=''">✕ Close</button></div>`;
+  if (o.status !== 'RECEIVED'){ P.innerHTML = `<div class="card" style="margin-top:12px;padding:14px;">${head}<p style="font-size:12.5px;color:#777;margin:8px 0 0;">This order is ${esc(o.status)} — allocation applies to RECEIVED orders only.</p></div>`; return; }
+  if (o.allocated_at){
+    const { data: kids } = await S.from('orders').select('id, so_no, status, allocated_at').eq('parent_order_id', orderId);
+    const tot = L.lines.reduce((s,l)=>s+l.cases,0), req = L.lines.reduce((s,l)=>s+(l.requested??l.cases),0);
+    P.innerHTML = `<div class="card" style="margin-top:12px;padding:14px;border-left:4px solid #1a7f37;">${head}
+      <p style="font-size:12.5px;color:#1a7f37;margin:8px 0;">✔ Allocated on ${String(o.allocated_at).slice(0,10)} — <b>${tot}</b> case(s) go forward for approval${(kids||[]).length?`; the balance is pending as ${(kids||[]).map(k=>'<b>'+esc(k.so_no)+'</b> ('+esc(k.status)+(k.allocated_at?', allocated':'')+')').join(', ')}`:''}.</p>
+      <div class="table-scroll"><table><thead><tr><th>SKU</th><th class="amount">Asked for</th><th class="amount">Allocated</th><th class="amount">Pending (balance order)</th></tr></thead><tbody>
+        ${L.lines.map(l=>`<tr><td><b>${esc(l.sku_code)}</b></td><td class="amount">${l.requested??l.cases}</td><td class="amount" style="font-weight:700;">${l.cases}</td><td class="amount">${Math.max(0,(l.requested??l.cases)-l.cases)}</td></tr>`).join('')}
+        <tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td class="amount">${req}</td><td class="amount">${tot}</td><td class="amount">${Math.max(0,req-tot)}</td></tr>
+      </tbody></table></div>
+      <p style="font-size:11.5px;color:#777;margin:8px 0 0;">Lines the distributor asked for that got nothing are not shown here — they sit wholly on the pending order. To change the allocation, undo it first: the pending order is merged back and the order returns to "not yet allocated".</p>
+      <div style="margin-top:8px;"><button class="btn ghost sm" onclick="allocUndo('${o.id}')">↩ Undo allocation</button> <button class="btn gold sm" onclick="openOrderDetail('${o.id}')">Open order → approve</button></div>
+      <div id="alloc-msg"></div></div>`;
+    return;
+  }
+  P.innerHTML = `<div class="card" style="margin-top:12px;padding:14px;border-left:4px solid #c9a227;">${head}
+    <p style="font-size:12.5px;color:#555;margin:8px 0;">Finished goods available at MMC against what this distributor ordered. <b>Available</b> = cases in FG stock minus cases already committed to approved orders not yet dispatched and to other allocated orders. Allocate what you can give now; the balance automatically becomes a pending order (<b>${esc(o.so_no)}-P…</b>) that stays in the RECEIVED tab, and only the allocated cases go forward for approval.</p>
+    <div class="table-scroll"><table><thead><tr><th>SKU</th><th class="amount">Ordered</th><th class="amount">In FG stock</th><th class="amount">Committed to other orders</th><th class="amount">Available</th><th class="amount" style="width:120px;">Allocate now</th><th class="amount">Pending</th></tr></thead><tbody id="alloc-rows"></tbody></table></div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button class="btn gold sm" onclick="allocSave('${o.id}')">📦 Allocate — allocated cases go for approval, balance stays pending</button>
+      <button class="btn ghost sm" onclick="allocFill('max')">Fill: all that is available</button>
+      <button class="btn ghost sm" onclick="allocFill('zero')">Clear all</button>
+    </div>
+    <div id="alloc-msg"></div></div>`;
+  allocRender();
+  $('alloc-panel').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+function allocRender(){
+  const L = window.__allocLines || [];
+  const tb = $('alloc-rows'); if (!tb) return;
+  tb.innerHTML = L.map((l,i)=>{ const give = Math.min(l.cases, l.available); const cur = l.alloc!=null ? l.alloc : give;
+    return `<tr><td><b>${esc(l.sku_code)}</b></td><td class="amount">${l.cases}</td><td class="amount">${l.in_stock}</td><td class="amount" style="color:#777">${l.reserved}</td>
+      <td class="amount" style="font-weight:600;color:${l.available>=l.cases?'#1a7f37':(l.available>0?'#b26a00':'#b3261e')}">${l.available}</td>
+      <td class="amount"><input type="number" id="al-${i}" min="0" max="${give}" step="1" value="${cur}" style="width:100px;padding:6px;text-align:right;" oninput="allocChange(${i})"></td>
+      <td class="amount" id="alp-${i}" style="color:${l.cases-cur>0?'#b3261e':'#1a7f37'}">${l.cases-cur}</td></tr>`; }).join('') +
+    `<tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td class="amount">${L.reduce((s,l)=>s+l.cases,0)}</td><td></td><td></td><td></td><td class="amount" id="al-tot">${L.reduce((s,l)=>s+(l.alloc!=null?l.alloc:Math.min(l.cases,l.available)),0)}</td><td class="amount" id="alp-tot">${L.reduce((s,l)=>s+l.cases-(l.alloc!=null?l.alloc:Math.min(l.cases,l.available)),0)}</td></tr>`;
+}
+function allocChange(i){
+  const L = window.__allocLines; const l = L[i]; const give = Math.min(l.cases, l.available);
+  let v = Math.floor(Number($('al-'+i).value)); if (!(v >= 0)) v = 0; if (v > give) v = give;
+  l.alloc = v; if ($('al-'+i).value !== String(v)) $('al-'+i).value = v;
+  const p = $('alp-'+i); p.textContent = l.cases - v; p.style.color = l.cases - v > 0 ? '#b3261e' : '#1a7f37';
+  $('al-tot').textContent = L.reduce((s,x)=>s+(x.alloc!=null?x.alloc:Math.min(x.cases,x.available)),0);
+  $('alp-tot').textContent = L.reduce((s,x)=>s+x.cases-(x.alloc!=null?x.alloc:Math.min(x.cases,x.available)),0);
+}
+function allocFill(mode){ (window.__allocLines||[]).forEach((l,i)=>{ l.alloc = mode==='max' ? Math.min(l.cases, l.available) : 0; }); allocRender(); }
+async function allocSave(orderId){
+  const L = window.__allocLines || [];
+  const alloc = L.map(l => ({ line_id: l.id, cases: l.alloc!=null ? l.alloc : Math.min(l.cases, l.available) }));
+  const tot = alloc.reduce((s,a)=>s+a.cases,0), req = L.reduce((s,l)=>s+l.cases,0);
+  if (!(tot > 0)){ say('alloc-msg','Nothing to allocate — no finished stock is available for these SKUs. The order stays pending.',false); return; }
+  const pend = req - tot;
+  if (!confirm(`Allocate ${tot} case(s) to ${window.__allocOrder?.so_no||'this order'}${pend>0?` and move the balance of ${pend} case(s) to a pending order (${window.__allocOrder?.so_no||''}-P…)`:''}?`)) return;
+  const { data, error } = await db.schema('sales').rpc('allocate_order', { p_order: orderId, p_alloc: alloc });
+  if (error){ say('alloc-msg', error.message, false); return; }
+  await openOrders();
+  const msg = `✔ ${Number(data?.allocated||0)} case(s) allocated to ${esc(window.__allocOrder?.so_no||'')} — open the order to approve it.` + (data?.pending_order ? ` Balance of ${Number(data.pending)} case(s) is now pending as <b>${esc(data.pending_order)}</b> in this tab.` : ' Nothing pending — the whole order was allocated.');
+  $('alloc-panel').innerHTML = `<div class="msg ok" style="margin-top:10px;">${msg}</div>`;
+}
+async function allocUndo(orderId){
+  if (!confirm('Undo this allocation? The pending balance order is merged back and the order returns to "not yet allocated".')) return;
+  const { error } = await db.schema('sales').rpc('undo_allocation', { p_order: orderId });
+  if (error){ say('alloc-msg', error.message, false); return; }
+  await openOrders(); allocOpen(orderId);
+}
+// Distributor-wise pending orders: every RECEIVED order not yet allocated, SKU by SKU against the finished stock.
+async function pendingSummary(recvOrders){
+  const box = $('pending-summary'); if (!box) return;
+  const pend = recvOrders.filter(o => !o.allocated_at);
+  const alloc = recvOrders.filter(o => !!o.allocated_at);
+  if (!pend.length && !alloc.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<p style="font-size:13px;color:#777;margin:12px 0;">Loading pending orders…</p>';
+  const S = db.schema('sales');
+  let lines = [], av = [];
+  try {
+    const r = await Promise.all([ pend.length ? S.from('order_lines').select('order_id, sku_id, cases').in('order_id', pend.map(o=>o.id)) : { data: [] }, S.rpc('fg_available') ]);
+    lines = r[0].data || []; av = r[1].data || [];
+  } catch(e){ box.innerHTML = ''; return; }
+  const avBy = {}; av.forEach(a => avBy[a.sku_id] = a);
+  const byParty = {};
+  pend.forEach(o => { const k = o.party_id; (byParty[k] = byParty[k] || { party: o.party, orders: [], sku: {} }).orders.push(o); });
+  lines.forEach(l => { const o = pend.find(x=>x.id===l.order_id); if (!o) return; const g = byParty[o.party_id]; const s = (g.sku[l.sku_id] = g.sku[l.sku_id] || { sku_id:l.sku_id, cases:0, orders:new Set() }); s.cases += Number(l.cases); s.orders.add(o.so_no); });
+  const totPend = lines.reduce((s,l)=>s+Number(l.cases),0);
+  let html = `<h3 style="margin:18px 0 4px;font-size:15px;">⏳ Pending orders — distributor-wise <span style="font-weight:normal;font-size:12px;color:#777">${pend.length} order(s) · ${totPend} case(s) not yet allocated${alloc.length?` · ${alloc.length} allocated order(s) awaiting approval`:''}</span></h3>
+    <p style="font-size:12px;color:#777;margin:0 0 10px;">Received orders that have not been allocated finished stock yet — the whole order, or the balance left over after a partial allocation (SO/…-P1). Press <b>📦 Allocate stock</b> on an order above when stock is available.</p>`;
+  const groups = Object.values(byParty).sort((a,b)=>String(a.party?.name||'').localeCompare(String(b.party?.name||'')));
+  for (const g of groups){
+    const skus = sortLinesBrandwise(Object.values(g.sku), s => s.sku_id);
+    const gTot = skus.reduce((s,x)=>s+x.cases,0);
+    html += `<div class="card" style="padding:12px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;"><b>${esc(g.party?.name||'')}</b> <span style="font-size:12px;color:#777">${esc(g.party?.code||'')} · ${g.orders.length} pending order(s): ${g.orders.map(o=>`<a href="#" onclick="event.preventDefault();openOrderDetail('${o.id}')">${esc(o.so_no)}</a>`).join(', ')} · <b>${gTot}</b> case(s)</span></div>
+      <div class="table-scroll" style="margin-top:6px;"><table><thead><tr><th>SKU</th><th class="amount">Pending cases</th><th class="amount">Available in FG stock</th><th class="amount">Short by</th><th>Orders</th></tr></thead><tbody>
+      ${skus.map(s=>{ const a = avBy[s.sku_id] || { available:0 }; const avl = Math.max(0, Number(a.available)); const short = Math.max(0, s.cases - avl);
+        return `<tr><td><b>${esc(skuCodeOf(s.sku_id))}</b></td><td class="amount">${s.cases}</td><td class="amount" style="color:${avl>=s.cases?'#1a7f37':(avl>0?'#b26a00':'#b3261e')}">${avl}</td><td class="amount">${short||'—'}</td><td style="font-size:11.5px;color:#777">${[...s.orders].map(esc).join(', ')}</td></tr>`; }).join('')}
+      <tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td class="amount">${gTot}</td><td></td><td></td><td></td></tr>
+      </tbody></table></div></div>`;
+  }
+  if (!groups.length) html += '<p style="font-size:12.5px;color:#1a7f37;">Nothing pending — every received order has stock allocated.</p>';
+  box.innerHTML = html;
 }
 
 /* New-order lines — systematic entry: Brand → SKU (that brand only) → cases → Add line. */
@@ -1682,7 +1822,7 @@ async function openOrderDetail(id){
     const bA = pr.basic!=null ? pr.basic*c : null, eA = pr.exc!=null ? pr.exc*c : null, wA = pr.wine!=null ? pr.wine*c : null, vA = pr.vat!=null ? pr.vat*c : null, tot = pr.rate*c;
     T.basic += bA||0; T.exc += eA||0; T.wine += wA||0; T.vat += vA||0; T.total += tot;
     tb.insertAdjacentHTML('beforeend',
-      `<tr><td>${esc(l.sku?.sku_code)}</td><td class="amount">${l.cases}</td>` +
+      `<tr><td>${esc(l.sku?.sku_code)}</td><td class="amount">${l.cases}${l.requested_cases!=null && Number(l.requested_cases)!==Number(l.cases)?`<br><span style="font-size:10.5px;color:#777">of ${Number(l.requested_cases)} asked</span>`:''}</td>` +
       `<td class="amount">${pr.basic!=null?inr(pr.basic):'—'}</td><td class="amount">${bA!=null?inr(bA):'—'}</td>` +
       `<td class="amount">${eA!=null?inr(eA):'—'}</td><td class="amount">${wA!=null?inr(wA):'—'}</td><td class="amount">${vA!=null?inr(vA):'—'}</td>` +
       `<td class="amount" style="font-weight:600;">${inr(tot)}</td></tr>`);
@@ -1738,9 +1878,12 @@ async function openOrderDetail(id){
         <div class="row2c" style="margin-top:8px;"><div><label>Paid on</label><input type="date" id="od-exc-date" value="${calFmt(new Date())}"></div>
           <div><label>Note</label><input type="text" id="od-exc-note" placeholder="Bank / mode / any remark"></div></div>
       </div>`);
-      if (calc.missing && calc.missing.length){
+      if (!o.allocated_at){
+        A.insertAdjacentHTML('beforeend', `<p style="font-size:12px;color:#b26a00;margin:0 0 8px;">📦 <b>Stock not allocated yet.</b> Allocate finished stock to this order first — only the allocated cases go forward for approval; the balance stays pending in the RECEIVED tab. <button class="mini" style="border-color:#c9a227;color:#7a5c10;font-weight:600;" onclick="orderFilter='RECEIVED';openOrders().then(()=>allocOpen('${id}'))">📦 Allocate stock</button></p>`);
+      } else if (calc.missing && calc.missing.length){
         A.insertAdjacentHTML('beforeend', `<p style="font-size:12px;color:#b3261e;margin:0 0 8px;">Cannot approve yet — set the basic price per case in Brands &amp; SKUs for: ${calc.missing.map(esc).join(', ')}.</p>`);
       } else {
+        A.insertAdjacentHTML('beforeend', `<p style="font-size:12px;color:#1a7f37;margin:0 0 8px;">📦 Stock allocated on ${String(o.allocated_at).slice(0,10)} — these ${totCases} case(s) are the allocated quantity and go forward on approval${o.parent_order_id?'':''}. <button class="mini" onclick="orderFilter='RECEIVED';openOrders().then(()=>allocOpen('${id}'))">View allocation</button></p>`);
         btn('Approve order (stamp rates from Brands & SKUs)','gold', async()=>{
           const amt = Number($('od-exc-amt').value), ref = $('od-exc-ref').value.trim();
           if (!(amt > 0)){ say('od-msg','Enter the excise duty & vend fees amount paid by the distributor.',false); return; }
