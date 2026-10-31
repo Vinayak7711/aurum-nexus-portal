@@ -825,7 +825,45 @@ function applySections(modKey){
     try { firstVisible.click(); } finally { setTimeout(()=>{ __secBusy = false; }, 0); }
   }
 }
-const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+/* ---- Session keep-alive ----
+   A sign-in token lasts an hour and the client renews it quietly. On a laptop that slept, a tab left in the
+   background, or a PC whose clock runs slow, a request can still go out with a stale token and the section
+   shows "JWT expired". Every request therefore goes through a fetch that, on that answer, renews the session
+   once and repeats the request — the person never sees it. If the session cannot be renewed any more
+   (signed out elsewhere, days idle), the sign-in screen is shown with a plain message instead of an error. */
+let __sessRefreshing = null;
+async function __renewSession(){
+  if (!__sessRefreshing){
+    __sessRefreshing = (async () => { try { const { data, error } = await db.auth.refreshSession(); return (!error && data && data.session) ? data.session : null; } catch(e){ return null; } finally { setTimeout(() => { __sessRefreshing = null; }, 1500); } })();
+  }
+  return __sessRefreshing;
+}
+function sessionExpired(){
+  try { me = null; $('who').classList.add('hidden'); } catch(e){}
+  try { show('login'); say('login-msg', 'Your session has expired after a long idle period — please sign in again.', false); } catch(e){ location.reload(); }
+}
+async function __authFetch(input, init){
+  const res = await fetch(input, init);
+  if (res.status !== 401) return res;
+  let body = ''; try { body = await res.clone().text(); } catch(e){}
+  if (!/jwt expired|invalid jwt|jwt is expired|PGRST301|token is expired|invalid token/i.test(body)) return res;
+  const url = typeof input === 'string' ? input : (input && input.url) || '';
+  if (/\/auth\/v1\//.test(url)) return res;                       // the auth service itself — do not loop
+  const sess = await __renewSession();
+  if (!sess){ sessionExpired(); return res; }
+  const token = sess.access_token;
+  const retry = Object.assign({}, init || {});
+  if (retry.headers instanceof Headers){ const h = new Headers(retry.headers); h.set('Authorization', 'Bearer ' + token); retry.headers = h; }
+  else retry.headers = Object.assign({}, retry.headers || {}, { Authorization: 'Bearer ' + token, authorization: undefined });
+  if (retry.headers && !(retry.headers instanceof Headers)) delete retry.headers.authorization;
+  return fetch(input, retry);
+}
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global: { fetch: __authFetch } });
+// renew ahead of time whenever the tab comes back to the front, and every few minutes while it is open
+document.addEventListener('visibilitychange', () => { if (!document.hidden && me) db.auth.getSession().catch(()=>{}); });
+window.addEventListener('focus', () => { if (me) db.auth.getSession().catch(()=>{}); });
+setInterval(() => { if (me) db.auth.getSession().catch(()=>{}); }, 4 * 60 * 1000);
+db.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT' && me && !window.__signingOut) sessionExpired(); });
 // Remember whether this page was opened from a password-reset email, before the
 // auth library strips the #hash. In that case we ask for the new password first.
 const CAME_FROM_RECOVERY = /type=recovery/.test(location.hash);
@@ -971,7 +1009,7 @@ async function sendMagicLink(){
   const { error } = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.href.split('#')[0] } });
   say('login-msg', error ? 'Could not send the link: '+error.message : 'Link sent. Open the email on this device and tap it.', !error);
 }
-$('btn-signout').onclick = async () => { await db.auth.signOut(); location.reload(); };
+$('btn-signout').onclick = async () => { window.__signingOut = true; await db.auth.signOut(); location.reload(); };
 
 /* ---- first sign-in from an invitation link ---- */
 async function doWelcomeLogin(){
