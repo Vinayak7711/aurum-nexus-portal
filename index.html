@@ -6662,7 +6662,7 @@ async function purchaseTab(t){
   const B = $('purchase-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const G = db.schema('mfg');
   // once the tab has drawn, show the full name of the material currently chosen under its dropdown
-  setTimeout(() => { try { rmShowFull('pol-item','pol-item-full'); rmShowFull('rql-item','rql-item-full'); } catch(e){} }, 400);
+  [400, 1500, 3500].forEach(ms => setTimeout(() => { try { rmShowFull('pol-item','pol-item-full'); rmShowFull('rql-item','rql-item-full'); } catch(e){} }, ms));
 
   if (t === 'pos'){
     const { data: allPos, error } = await G.from('v_po_tracking').select('*').order('order_date', {ascending:false}).limit(200);
