@@ -4910,7 +4910,7 @@ async function prodTab(t){
     // the tiles follow the running targets: this month's if any are set, otherwise the latest month that has targets (they stay open until met)
     const statPeriod = rows.some(r=>r.period===now) ? now : (rows[0] ? rows[0].period : now);
     const cur = rows.filter(r=>r.period===statPeriod);
-    const curTgt = cur.reduce((a,r)=>a+Number(r.target_cases||0),0);
+    const curTgt = cur.reduce((a,r)=>a+ptTgt(r),0);
     const curDone = cur.reduce((a,r)=>a+Math.max(Number(r.reported_cases||0), Number(r.produced_cases||0)),0);
     const curPct = curTgt ? Math.round(curDone*100/curTgt) : 0;
     const lbl = statPeriod === now ? "This month's" : 'Targets of ' + statPeriod + ' —';
@@ -4918,7 +4918,7 @@ async function prodTab(t){
       <div class="stat"><div class="n">${inr(curTgt)}</div><div class="l">${lbl} target (cases)</div></div>
       <div class="stat"><div class="n">${inr(curDone)}</div><div class="l">Produced / completed</div></div>
       <div class="stat"><div class="n" style="color:${curPct>=100?'#1f7a4d':(curPct>=60?'#7a5c10':'#b3382c')}">${curPct}%</div><div class="l">${lbl} progress</div></div></div>
-      <p style="font-size:12px;color:#555;margin:-4px 0 12px;">⛓ Linked to the <b>Production report</b>: every batch recorded there counts toward the latest target set for its SKU on or before the production date, so a target stays open until it is met — production in a later month fills it until a new target is set for that SKU. QC-failed batches are left out. “Mark completion” is only for cases produced outside the batch book.</p>`;
+      <p style="font-size:12px;color:#555;margin:-4px 0 12px;">⛓ Linked to the <b>Production report</b>: every batch recorded there counts toward the latest target set for its SKU on or before the production date, so a target stays open until it is met — production in a later month fills it until a new target is set for that SKU. QC-failed batches are left out. <b>Shortfall carries forward:</b> whatever a month misses is added automatically to that SKU's next target. “Mark completion” is only for cases produced outside the batch book.</p>`;
     if (isDir()){
       // brand first, then every pack of that brand on one screen — one entry sets the whole brand's targets for the month
       const brandIds = new Set(M.skus.filter(s=>s.is_active).map(s=>s.brand_id));
@@ -4965,6 +4965,8 @@ const ptFYOf = period => { const y = Number(period.slice(0,4)), m = Number(perio
 const ptFYMonths = fy => { const y0 = Number(fy.slice(0,4)); return [4,5,6,7,8,9,10,11,12,1,2,3].map((m,i) => (m>=4?y0:y0+1) + '-' + String(m).padStart(2,'0')); };
 const ptMonthName = p => { const [y,m] = p.split('-'); return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(m)-1] + ' ' + y; };
 const ptAch = r => Math.max(Number(r.reported_cases||0), Number(r.produced_cases||0));
+const ptTgt = r => Number(r.eff_target != null ? r.eff_target : r.target_cases) || 0;   // target incl. the shortfall carried from earlier months
+const ptCarry = r => Number(r.carry_in || 0);
 // Months are shown as the targets were given: the run of consecutive months with targets around the current month
 // (one month, or the two or three set together); From / To can be changed to any months, including a single one.
 function ptDefaultRange(periods){
@@ -4990,7 +4992,7 @@ function ptReportRender(){
   const months = P.mode === 'month' ? periods.filter(p => p >= P.from && p <= P.to).sort() : [];
   const sel = P.mode === 'month' ? rows.filter(r=>r.period >= P.from && r.period <= P.to) : rows.filter(r=>ptFYOf(r.period)===P.fy);
   const use = P.brand ? sel.filter(r=>r.brand_name===P.brand) : sel;
-  const tgt = use.reduce((a,r)=>a+Number(r.target_cases||0),0), ach = use.reduce((a,r)=>a+ptAch(r),0);
+  const tgt = use.reduce((a,r)=>a+ptTgt(r),0), ach = use.reduce((a,r)=>a+ptAch(r),0);
   const pct = tgt ? Math.round(ach*1000/tgt)/10 : 0, short = Math.max(tgt-ach, 0);
   const col = v => v>=100 ? '#1a7f37' : (v>=60 ? '#b8860b' : '#b3382c');
   const bar = v => `<div style="display:flex;align-items:center;gap:6px;"><div style="background:#eee;border-radius:6px;height:12px;width:100px;overflow:hidden;"><div style="height:12px;width:${Math.min(v,100)}%;background:${col(v)};"></div></div><span style="font-size:11px;color:${col(v)};font-weight:600">${v}%</span></div>`;
@@ -5004,26 +5006,26 @@ function ptReportRender(){
   if (P.mode === 'month' && months.length <= 1){
     const bySku = use.slice().sort((a,b)=>String(a.sku_code).localeCompare(String(b.sku_code)));
     table = `<div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>SKU</th><th>Brand</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th><th>Source</th><th></th></tr></thead><tbody>
-      ${bySku.map(r => { const a = ptAch(r), p = Number(r.target_cases)?Math.round(a*1000/Number(r.target_cases))/10:0; return `<tr><td><b>${esc(r.sku_code)}</b></td><td style="font-size:12px;color:#555">${esc(r.brand_name||'—')}</td><td class="amount">${inr(r.target_cases)}</td><td class="amount" style="font-weight:600">${inr(a)}${batchTxt(r)}</td><td class="amount" style="color:${Number(r.target_cases)-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(Number(r.target_cases)-a,0))}</td><td>${bar(p)}</td><td style="font-size:11px;color:#777">${srcOf(r)}</td>${acts(r)}</tr>`; }).join('') || '<tr><td colspan="8" style="color:#777">No targets for this month.</td></tr>'}
+      ${bySku.map(r => { const a = ptAch(r), p = ptTgt(r)?Math.round(a*1000/ptTgt(r))/10:0; return `<tr><td><b>${esc(r.sku_code)}</b></td><td style="font-size:12px;color:#555">${esc(r.brand_name||'—')}</td><td class="amount">${inr(ptTgt(r))}${ptCarry(r)>0?'<br><span style="font-size:10.5px;color:#b26a00" title="Shortfall of the earlier month(s) added to this month">'+inr(r.target_cases).replace(/\.00$/,'')+' + '+inr(ptCarry(r)).replace(/\.00$/,'')+' carried</span>':''}</td><td class="amount" style="font-weight:600">${inr(a)}${batchTxt(r)}</td><td class="amount" style="color:${ptTgt(r)-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(ptTgt(r)-a,0))}</td><td>${bar(p)}</td><td style="font-size:11px;color:#777">${srcOf(r)}</td>${acts(r)}</tr>`; }).join('') || '<tr><td colspan="8" style="color:#777">No targets for this month.</td></tr>'}
       ${bySku.length ? `<tr style="font-weight:700;background:#faf6ea"><td colspan="2">Total · ${ptMonthName(P.from)}</td><td class="amount">${inr(tgt)}</td><td class="amount">${inr(ach)}</td><td class="amount">${inr(short)}</td><td>${bar(pct)}</td><td></td><td></td></tr>` : ''}
       </tbody></table></div>`;
   } else if (P.mode === 'month'){
     // several months together, as the targets were given: one line per SKU with the months rolled up, the months underneath
-    const skus = {}; use.forEach(r => { const k = r.sku_code; (skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, rows: [] }); skus[k].t += Number(r.target_cases||0); skus[k].a += ptAch(r); skus[k].rows.push(r); });
+    const skus = {}; use.forEach(r => { const k = r.sku_code; (skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, rows: [] }); skus[k].t += ptTgt(r); skus[k].a += ptAch(r); skus[k].rows.push(r); });
     const keys = Object.keys(skus).sort();
     table = `<div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>SKU</th><th>Brand</th><th class="amount">Months</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th><th></th></tr></thead><tbody>
       ${keys.map(k => { const x = skus[k], p = x.t ? Math.round(x.a*1000/x.t)/10 : 0, open = !!P.open[k];
         return `<tr><td><b>${esc(k)}</b></td><td style="font-size:12px;color:#555">${esc(x.brand||'—')}</td><td class="amount">${x.rows.length}</td><td class="amount">${inr(x.t)}</td><td class="amount" style="font-weight:600">${inr(x.a)}</td><td class="amount" style="color:${x.t-x.a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(x.t-x.a,0))}</td><td>${bar(p)}</td><td style="white-space:nowrap">${isDir()?`<button class="mini" onclick="ptEditSpan('${esc(k)}')">✏️ Edit</button> `:''}<button class="mini" onclick="window.ptRep.open['${esc(k)}']=${open?'false':'true'};ptReportRender()">${open?'▾ hide months':'▸ month-wise'}</button></td></tr>` +
-          (open ? x.rows.slice().sort((a,b)=>a.period<b.period?-1:1).map(r => { const a = ptAch(r), pp = Number(r.target_cases)?Math.round(a*1000/Number(r.target_cases))/10:0; return `<tr style="background:#fbf9f3;font-size:12px;"><td style="padding-left:24px;color:#555">↳ ${ptMonthName(r.period)}</td><td style="font-size:11px;color:#777">${srcOf(r)}</td><td></td><td class="amount">${inr(r.target_cases)}</td><td class="amount">${inr(a)}${batchTxt(r)}</td><td class="amount" style="color:${Number(r.target_cases)-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(Number(r.target_cases)-a,0))}</td><td>${bar(pp)}</td>${acts(r)}</tr>`; }).join('') : ''); }).join('') || '<tr><td colspan="8" style="color:#777">No targets in these months.</td></tr>'}
+          (open ? x.rows.slice().sort((a,b)=>a.period<b.period?-1:1).map(r => { const a = ptAch(r), pp = ptTgt(r)?Math.round(a*1000/ptTgt(r))/10:0; return `<tr style="background:#fbf9f3;font-size:12px;"><td style="padding-left:24px;color:#555">↳ ${ptMonthName(r.period)}</td><td style="font-size:11px;color:#777">${srcOf(r)}</td><td></td><td class="amount">${inr(ptTgt(r))}${ptCarry(r)>0?'<br><span style="font-size:10.5px;color:#b26a00" title="Shortfall of the earlier month(s) added to this month">'+inr(r.target_cases).replace(/\.00$/,'')+' + '+inr(ptCarry(r)).replace(/\.00$/,'')+' carried</span>':''}</td><td class="amount">${inr(a)}${batchTxt(r)}</td><td class="amount" style="color:${ptTgt(r)-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(ptTgt(r)-a,0))}</td><td>${bar(pp)}</td>${acts(r)}</tr>`; }).join('') : ''); }).join('') || '<tr><td colspan="8" style="color:#777">No targets in these months.</td></tr>'}
       ${keys.length ? `<tr style="font-weight:700;background:#faf6ea"><td colspan="2">Total · ${rangeLabel}</td><td class="amount">${use.length}</td><td class="amount">${inr(tgt)}</td><td class="amount">${inr(ach)}</td><td class="amount">${inr(short)}</td><td>${bar(pct)}</td><td></td></tr>` : ''}
       </tbody></table></div>
       <div class="table-scroll" style="margin-top:10px;"><table style="font-size:12.5px;max-width:720px;"><thead><tr><th>Month</th><th class="amount">Targets</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th></tr></thead><tbody>
-      ${months.map(m => { const rs = use.filter(r=>r.period===m); const t = rs.reduce((a,r)=>a+Number(r.target_cases||0),0), a = rs.reduce((x,r)=>x+ptAch(r),0); return `<tr style="cursor:pointer" title="Open this month alone" onclick="window.ptRep.from='${m}';window.ptRep.to='${m}';ptReportRender()"><td><b>${ptMonthName(m)}</b></td><td class="amount">${rs.length}</td><td class="amount">${inr(t)}</td><td class="amount" style="font-weight:600">${inr(a)}</td><td class="amount" style="color:${t-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(t-a,0))}</td><td>${bar(t?Math.round(a*1000/t)/10:0)}</td></tr>`; }).join('')}
+      ${months.map(m => { const rs = use.filter(r=>r.period===m); const t = rs.reduce((a,r)=>a+ptTgt(r),0), a = rs.reduce((x,r)=>x+ptAch(r),0); return `<tr style="cursor:pointer" title="Open this month alone" onclick="window.ptRep.from='${m}';window.ptRep.to='${m}';ptReportRender()"><td><b>${ptMonthName(m)}</b></td><td class="amount">${rs.length}</td><td class="amount">${inr(t)}</td><td class="amount" style="font-weight:600">${inr(a)}</td><td class="amount" style="color:${t-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(t-a,0))}</td><td>${bar(t?Math.round(a*1000/t)/10:0)}</td></tr>`; }).join('')}
       </tbody></table></div>`;
   } else {
     const fyMonths = ptFYMonths(P.fy);
-    const byM = fyMonths.map(m => { const rs = use.filter(r=>r.period===m); const t = rs.reduce((a,r)=>a+Number(r.target_cases||0),0), a = rs.reduce((x,r)=>x+ptAch(r),0); return { m, t, a, n: rs.length }; });
-    const skus = {}; use.forEach(r => { const k = r.sku_code; skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, n: 0 }; skus[k].t += Number(r.target_cases||0); skus[k].a += ptAch(r); skus[k].n++; });
+    const byM = fyMonths.map(m => { const rs = use.filter(r=>r.period===m); const t = rs.reduce((a,r)=>a+ptTgt(r),0), a = rs.reduce((x,r)=>x+ptAch(r),0); return { m, t, a, n: rs.length }; });
+    const skus = {}; use.forEach(r => { const k = r.sku_code; skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, n: 0 }; skus[k].t += ptTgt(r); skus[k].a += ptAch(r); skus[k].n++; });
     table = `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
       <div style="flex:1;min-width:340px;"><h4 class="sec" style="margin-top:0;">Month by month · ${fdFYLabel(P.fy)}</h4>
       <div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>Month</th><th class="amount">Targets</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th></tr></thead><tbody>
@@ -5051,15 +5053,15 @@ function ptReportRender(){
     </div>
     <div class="statgrid" style="margin-bottom:10px;">${tile(inr(tgt), 'Target (cases)' + (months.length>1?' · '+months.length+' months':''))}${tile(inr(ach), 'Achieved (cases)', '#1a7f37')}${tile(inr(short), 'Shortfall (cases)', short>0?'#b3382c':'#1a7f37')}${tile(pct+'%', 'Achievement', col(pct))}</div>
     <div id="pt-report-table">${table}</div>
-    <p style="font-size:11px;color:#777;margin:8px 0 0;">The months shown follow the targets as they were given (a target set for two or three months together is shown together); pick From / To for any single month or spread. Achieved = cases from the production report counted against the target (or the completion marked by hand, whichever is higher). Year-wise follows the financial year April to March; click a month there to open it.</p></div>`;
+    <p style="font-size:11px;color:#777;margin:8px 0 0;">The months shown follow the targets as they were given (a target set for two or three months together is shown together); pick From / To for any single month or spread. A month's shortfall is carried forward automatically: whatever was not produced against a month's target is added to the next target of that SKU (shown as "+ N carried"); an excess is not deducted. Achieved = cases from the production report counted against the target (or the completion marked by hand, whichever is higher). Year-wise follows the financial year April to March; click a month there to open it.</p></div>`;
 }
 function ptReportCsv(){
   const P = window.ptRep || {}; const rows = window.__ptRows || [];
   const use = (P.mode === 'month' ? rows.filter(r=>r.period >= P.from && r.period <= P.to) : rows.filter(r=>ptFYOf(r.period)===P.fy)).filter(r=>!P.brand || r.brand_name===P.brand);
   if (!use.length){ alert('Nothing to download for this selection.'); return; }
   const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
-  const lines = [['Month','SKU','Brand','Target','Achieved','Shortfall','Achievement %','Produced (batch book)','Marked by hand'].join(',')];
-  use.slice().sort((a,b)=>a.period<b.period?-1:a.period>b.period?1:String(a.sku_code).localeCompare(String(b.sku_code))).forEach(r => { const a = ptAch(r); lines.push([e2(r.period), e2(r.sku_code), e2(r.brand_name||''), Number(r.target_cases), a, Math.max(Number(r.target_cases)-a,0), Number(r.target_cases)?Math.round(a*1000/Number(r.target_cases))/10:0, Number(r.produced_cases||0), Number(r.reported_cases||0)].join(',')); });
+  const lines = [['Month','SKU','Brand','Own target','Carried from earlier months','Target (incl. carry)','Achieved','Shortfall','Achievement %','Produced (batch book)','Marked by hand'].join(',')];
+  use.slice().sort((a,b)=>a.period<b.period?-1:a.period>b.period?1:String(a.sku_code).localeCompare(String(b.sku_code))).forEach(r => { const a = ptAch(r); lines.push([e2(r.period), e2(r.sku_code), e2(r.brand_name||''), Number(r.target_cases), ptCarry(r), ptTgt(r), a, Math.max(ptTgt(r)-a,0), ptTgt(r)?Math.round(a*1000/ptTgt(r))/10:0, Number(r.produced_cases||0), Number(r.reported_cases||0)].join(',')); });
   const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = 'target-vs-achieved-' + (P.mode==='month' ? (P.from===P.to ? P.from : P.from + '_to_' + P.to) : 'FY' + P.fy) + '.csv'; document.body.appendChild(a); a.click(); a.remove();
 }
