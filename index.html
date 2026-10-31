@@ -4967,6 +4967,10 @@ const ptMonthName = p => { const [y,m] = p.split('-'); return ['Jan','Feb','Mar'
 const ptAch = r => Math.max(Number(r.reported_cases||0), Number(r.produced_cases||0));
 const ptTgt = r => Number(r.eff_target != null ? r.eff_target : r.target_cases) || 0;   // target incl. the shortfall carried from earlier months
 const ptCarry = r => Number(r.carry_in || 0);
+// target of several months of one SKU taken together: the months' own targets plus only the carry that came in before the first of them
+// (a shortfall carried from one month of the span into the next must not be counted twice)
+function ptSpanTarget(rows){ if (!rows.length) return 0; const first = rows.slice().sort((a,b)=>a.period<b.period?-1:1)[0]; return rows.reduce((s,r)=>s+Number(r.target_cases||0),0) + ptCarry(first); }
+function ptRollupTarget(rows){ const by = {}; rows.forEach(r => (by[r.sku_id] = by[r.sku_id] || []).push(r)); return Object.values(by).reduce((s,g)=>s+ptSpanTarget(g),0); }
 // Months are shown as the targets were given: the run of consecutive months with targets around the current month
 // (one month, or the two or three set together); From / To can be changed to any months, including a single one.
 function ptDefaultRange(periods){
@@ -4992,7 +4996,7 @@ function ptReportRender(){
   const months = P.mode === 'month' ? periods.filter(p => p >= P.from && p <= P.to).sort() : [];
   const sel = P.mode === 'month' ? rows.filter(r=>r.period >= P.from && r.period <= P.to) : rows.filter(r=>ptFYOf(r.period)===P.fy);
   const use = P.brand ? sel.filter(r=>r.brand_name===P.brand) : sel;
-  const tgt = use.reduce((a,r)=>a+ptTgt(r),0), ach = use.reduce((a,r)=>a+ptAch(r),0);
+  const tgt = ptRollupTarget(use), ach = use.reduce((a,r)=>a+ptAch(r),0);
   const pct = tgt ? Math.round(ach*1000/tgt)/10 : 0, short = Math.max(tgt-ach, 0);
   const col = v => v>=100 ? '#1a7f37' : (v>=60 ? '#b8860b' : '#b3382c');
   const bar = v => `<div style="display:flex;align-items:center;gap:6px;"><div style="background:#eee;border-radius:6px;height:12px;width:100px;overflow:hidden;"><div style="height:12px;width:${Math.min(v,100)}%;background:${col(v)};"></div></div><span style="font-size:11px;color:${col(v)};font-weight:600">${v}%</span></div>`;
@@ -5011,7 +5015,7 @@ function ptReportRender(){
       </tbody></table></div>`;
   } else if (P.mode === 'month'){
     // several months together, as the targets were given: one line per SKU with the months rolled up, the months underneath
-    const skus = {}; use.forEach(r => { const k = r.sku_code; (skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, rows: [] }); skus[k].t += ptTgt(r); skus[k].a += ptAch(r); skus[k].rows.push(r); });
+    const skus = {}; use.forEach(r => { const k = r.sku_code; (skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, rows: [] }); skus[k].a += ptAch(r); skus[k].rows.push(r); }); Object.values(skus).forEach(x => { x.t = ptSpanTarget(x.rows); });
     const keys = Object.keys(skus).sort();
     table = `<div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>SKU</th><th>Brand</th><th class="amount">Months</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th><th></th></tr></thead><tbody>
       ${keys.map(k => { const x = skus[k], p = x.t ? Math.round(x.a*1000/x.t)/10 : 0, open = !!P.open[k];
@@ -5025,7 +5029,7 @@ function ptReportRender(){
   } else {
     const fyMonths = ptFYMonths(P.fy);
     const byM = fyMonths.map(m => { const rs = use.filter(r=>r.period===m); const t = rs.reduce((a,r)=>a+ptTgt(r),0), a = rs.reduce((x,r)=>x+ptAch(r),0); return { m, t, a, n: rs.length }; });
-    const skus = {}; use.forEach(r => { const k = r.sku_code; skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, n: 0 }; skus[k].t += ptTgt(r); skus[k].a += ptAch(r); skus[k].n++; });
+    const skus = {}; use.forEach(r => { const k = r.sku_code; skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, n: 0, rows: [] }; skus[k].a += ptAch(r); skus[k].n++; skus[k].rows.push(r); }); Object.values(skus).forEach(x => { x.t = ptSpanTarget(x.rows); });
     table = `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
       <div style="flex:1;min-width:340px;"><h4 class="sec" style="margin-top:0;">Month by month · ${fdFYLabel(P.fy)}</h4>
       <div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>Month</th><th class="amount">Targets</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th></tr></thead><tbody>
