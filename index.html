@@ -5027,8 +5027,8 @@ function ptReportRender(){
           (open ? x.rows.slice().sort((a,b)=>a.period<b.period?-1:1).map(r => { const a = ptAch(r), pp = ptTgt(r)?Math.round(a*1000/ptTgt(r))/10:100; return `<tr style="background:#fbf9f3;font-size:12px;"><td style="padding-left:24px;color:#555">↳ ${ptMonthName(r.period)}</td><td style="font-size:11px;color:#777">${srcOf(r)}</td><td></td><td class="amount">${inr(ptTgt(r))}${ptCarryNote(r)}</td><td class="amount">${inr(a)}${batchTxt(r)}</td><td class="amount" style="color:${ptTgt(r)-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(ptTgt(r)-a,0))}</td><td>${bar(pp)}</td>${acts(r)}</tr>`; }).join('') : ''); }).join('') || '<tr><td colspan="8" style="color:#777">No targets in these months.</td></tr>'}
       ${keys.length ? `<tr style="font-weight:700;background:#faf6ea"><td colspan="2">Total · ${rangeLabel}</td><td class="amount">${use.length}</td><td class="amount">${inr(tgt)}</td><td class="amount">${inr(ach)}</td><td class="amount">${inr(short)}</td><td>${bar(pct)}</td><td></td></tr>` : ''}
       </tbody></table></div>
-      <div class="table-scroll" style="margin-top:10px;"><table style="font-size:12.5px;max-width:720px;"><thead><tr><th>Month</th><th class="amount">Targets</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th></tr></thead><tbody>
-      ${months.map(m => { const rs = use.filter(r=>r.period===m); const t = rs.reduce((a,r)=>a+ptTgt(r),0), a = rs.reduce((x,r)=>x+ptAch(r),0); return `<tr style="cursor:pointer" title="Open this month alone" onclick="window.ptRep.from='${m}';window.ptRep.to='${m}';ptReportRender()"><td><b>${ptMonthName(m)}</b></td><td class="amount">${rs.length}</td><td class="amount">${inr(t)}</td><td class="amount" style="font-weight:600">${inr(a)}</td><td class="amount" style="color:${t-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(t-a,0))}</td><td>${bar(t?Math.round(a*1000/t)/10:0)}</td></tr>`; }).join('')}
+      <div class="table-scroll" style="margin-top:10px;"><table style="font-size:12.5px;max-width:720px;"><thead><tr><th>Month</th><th class="amount">Targets</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th><th>Month report</th></tr></thead><tbody>
+      ${months.map(m => { const rs = use.filter(r=>r.period===m); const t = rs.reduce((a,r)=>a+ptTgt(r),0), a = rs.reduce((x,r)=>x+ptAch(r),0); return `<tr style="cursor:pointer" title="Open this month alone" onclick="window.ptRep.from='${m}';window.ptRep.to='${m}';ptReportRender()"><td><b>${ptMonthName(m)}</b></td><td class="amount">${rs.length}</td><td class="amount">${inr(t)}</td><td class="amount" style="font-weight:600">${inr(a)}</td><td class="amount" style="color:${t-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(t-a,0))}</td><td>${bar(t?Math.round(a*1000/t)/10:100)}</td><td>${ptMonthReportBtn(m)}</td></tr>`; }).join('')}
       </tbody></table></div>`;
   } else {
     const fyMonths = ptFYMonths(P.fy);
@@ -5036,9 +5036,9 @@ function ptReportRender(){
     const skus = {}; use.forEach(r => { const k = r.sku_code; skus[k] = skus[k] || { brand: r.brand_name||'', t: 0, a: 0, n: 0, rows: [] }; skus[k].a += ptAch(r); skus[k].n++; skus[k].rows.push(r); }); Object.values(skus).forEach(x => { x.t = ptSpanTarget(x.rows); });
     table = `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
       <div style="flex:1;min-width:340px;"><h4 class="sec" style="margin-top:0;">Month by month · ${fdFYLabel(P.fy)}</h4>
-      <div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>Month</th><th class="amount">Targets</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th></tr></thead><tbody>
-      ${byM.map(x => x.n ? `<tr style="cursor:pointer" title="Open this month" onclick="window.ptRep.mode='month';window.ptRep.from='${x.m}';window.ptRep.to='${x.m}';ptReportRender()"><td><b>${ptMonthName(x.m)}</b></td><td class="amount">${x.n}</td><td class="amount">${inr(x.t)}</td><td class="amount" style="font-weight:600">${inr(x.a)}</td><td class="amount" style="color:${x.t-x.a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(x.t-x.a,0))}</td><td>${bar(x.t?Math.round(x.a*1000/x.t)/10:0)}</td></tr>` : `<tr style="color:#aaa"><td>${ptMonthName(x.m)}</td><td class="amount">—</td><td class="amount">—</td><td class="amount">—</td><td class="amount">—</td><td></td></tr>`).join('')}
-      <tr style="font-weight:700;background:#faf6ea"><td>Total · ${fdFYLabel(P.fy)}</td><td class="amount">${use.length}</td><td class="amount">${inr(tgt)}</td><td class="amount">${inr(ach)}</td><td class="amount">${inr(short)}</td><td>${bar(pct)}</td></tr>
+      <div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>Month</th><th class="amount">Targets</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th><th>Month report</th></tr></thead><tbody>
+      ${byM.map(x => x.n ? `<tr style="cursor:pointer" title="Open this month" onclick="window.ptRep.mode='month';window.ptRep.from='${x.m}';window.ptRep.to='${x.m}';ptReportRender()"><td><b>${ptMonthName(x.m)}</b></td><td class="amount">${x.n}</td><td class="amount">${inr(x.t)}</td><td class="amount" style="font-weight:600">${inr(x.a)}</td><td class="amount" style="color:${x.t-x.a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(x.t-x.a,0))}</td><td>${bar(x.t?Math.round(x.a*1000/x.t)/10:100)}</td><td>${ptMonthReportBtn(x.m)}</td></tr>` : `<tr style="color:#aaa"><td>${ptMonthName(x.m)}</td><td class="amount">—</td><td class="amount">—</td><td class="amount">—</td><td class="amount">—</td><td></td><td></td></tr>`).join('')}
+      <tr style="font-weight:700;background:#faf6ea"><td>Total · ${fdFYLabel(P.fy)}</td><td class="amount">${use.length}</td><td class="amount">${inr(tgt)}</td><td class="amount">${inr(ach)}</td><td class="amount">${inr(short)}</td><td>${bar(pct)}</td><td></td></tr>
       </tbody></table></div></div>
       <div style="flex:1;min-width:340px;"><h4 class="sec" style="margin-top:0;">SKU-wise · ${fdFYLabel(P.fy)}</h4>
       <div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>SKU</th><th class="amount">Months</th><th class="amount">Target</th><th class="amount">Achieved</th><th>Achievement</th></tr></thead><tbody>
@@ -5049,7 +5049,7 @@ function ptReportRender(){
   const asGiven = ptDefaultRange(periods);
   const monthSel = (which, val, opts) => `<select onchange="window.ptRep.${which}=this.value;${which==='from'?"if(window.ptRep.to<this.value)window.ptRep.to=this.value;":""}ptReportRender()" style="min-width:130px;">${opts.map(p=>`<option value="${p}" ${p===val?'selected':''}>${ptMonthName(p)}</option>`).join('') || `<option>${ptMonthName(val)}</option>`}</select>`;
   el.innerHTML = `<div class="card" style="padding:14px;margin:0 0 14px;">
-    <h4 class="sec" style="margin-top:0;">📊 Target vs achieved — ${label}${P.brand?' · '+esc(P.brand):''}</h4>
+    <h4 class="sec" style="margin-top:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">📊 Target vs achieved — ${label}${P.brand?' · '+esc(P.brand):''}${P.mode==='month' && months.length===1 ? ' ' + ptMonthReportBtn(P.from) : ''}</h4>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:10px;">
       <div><label style="font-size:12px;">View</label><div style="display:flex;gap:6px;"><button class="btn sm ${P.mode==='month'?'gold':'ghost'}" onclick="window.ptRep.mode='month';ptReportRender()">As targets were given</button><button class="btn sm ${P.mode==='year'?'gold':'ghost'}" onclick="window.ptRep.mode='year';ptReportRender()">Year-wise (Apr–Mar)</button></div></div>
       ${P.mode==='month'
@@ -5078,6 +5078,60 @@ function ptReportPrint(){
   const label = P.mode === 'month' ? (P.from===P.to ? ptMonthName(P.from) : ptMonthName(P.from) + ' to ' + ptMonthName(P.to)) : fdFYLabel(P.fy);
   const tiles = [...document.querySelectorAll('#pt-report .stat')].map(s => '<b>' + s.querySelector('.n').innerText + '</b> ' + s.querySelector('.l').innerText).join(' &nbsp;·&nbsp; ');
   printHtml('Target vs achieved — ' + label, `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Production target vs achieved · ${esc(label)}${P.brand?' · '+esc(P.brand):''}</h2><p style="font-size:12px;">${tiles}</p>` + t.innerHTML.replace(/<button[^>]*>[\s\S]*?<\/button>/g,'').replace(/onclick="[^"]*"/g,'').replace(/cursor:pointer/g,'') + `<p style="font-size:11px;color:#666;margin-top:10px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`);
+}
+// ---- Month production report: generated automatically from the batch book and the targets once a month is over ----
+function ptMonthReportBtn(m){
+  const done = m < monthLabelJS();
+  return done ? `<button class="mini" style="white-space:nowrap;border-color:#1c2455;color:#1c2455;font-weight:600;" onclick="event.stopPropagation();ptMonthReport('${m}')">📄 Production report</button>`
+              : `<span style="font-size:11px;color:#999;white-space:nowrap;" title="The report is generated automatically once the month is over">month running — report after ${ptMonthName(m)} ends</span>`;
+}
+async function ptMonthReport(m){
+  const rows = (window.__ptRows||[]).filter(r => r.period === m).sort((a,b)=>String(a.brand_name||'').localeCompare(String(b.brand_name||'')) || String(a.sku_code).localeCompare(String(b.sku_code)));
+  const [y, mm] = m.split('-').map(Number); const nx = new Date(y, mm, 1); const from = m + '-01', to = nx.getFullYear() + '-' + String(nx.getMonth()+1).padStart(2,'0') + '-01';
+  const MF = db.schema('mfg');
+  const { data: batches, error } = await MF.from('batches').select('*').gte('production_date', from).lt('production_date', to).order('production_date');
+  if (error){ alert('Could not read the batch book: ' + error.message); return; }
+  let rm = [];
+  if ((batches||[]).length){
+    if (!rmItems.length){ try { const { data: ri } = await MF.from('rm_items').select('*').order('code'); rmItems = ri || []; } catch(e){} }
+    const { data: brm } = await MF.from('batch_rm').select('batch_id, rm_item_id, qty').in('batch_id', batches.map(b=>b.id)); rm = brm || [];
+  }
+  try { if (typeof loadUserNames === 'function') await loadUserNames(); } catch(e){}
+  const skuName = id => { const sk = (M.skus||[]).find(x=>x.id===id); return sk ? sk.sku_code : '—'; };
+  const brandOf = id => { const sk = (M.skus||[]).find(x=>x.id===id); const b = sk && (M.brands||[]).find(x=>x.id===sk.brand_id); return b ? b.name : ''; };
+  const good = (batches||[]).filter(b => b.qc_status !== 'FAILED');
+  const tgt = rows.reduce((s,r)=>s+ptTgt(r),0), ach = rows.reduce((s,r)=>s+ptAch(r),0), prodM = good.reduce((s,b)=>s+Number(b.cases||0),0);
+  const pct = tgt ? Math.round(ach*1000/tgt)/10 : 100;
+  const carryOut = r => ptTgt(r) - ptAch(r);   // + shortfall / − excess going into the next month
+  const bySku = {}; good.forEach(b => { const k = b.sku_id; (bySku[k] = bySku[k] || { cases:0, n:0 }); bySku[k].cases += Number(b.cases||0); bySku[k].n++; });
+  const rmBy = {}; rm.forEach(l => { const it = rmItems.find(x=>x.id===l.rm_item_id) || {}; const k = l.rm_item_id; (rmBy[k] = rmBy[k] || { name: (typeof rmFullLabel==='function' ? rmFullLabel(it) : (it.name||it.code||'?')), unit: it.unit||'', qty:0 }); rmBy[k].qty += Number(l.qty||0); });
+  const inr0 = v => inr(v).replace(/\.00$/,'');
+  const body = `<h1>AURUM SPIRITS INDIA LIMITED</h1>
+    <h2>Monthly production report · ${esc(ptMonthName(m))} · Manufacturing &amp; Production @ MMC</h2>
+    <p style="font-size:12px;color:#555;margin:0 0 10px;">Generated automatically from the production report (batch book) and the targets set for the month, after the month ended. Target for the month = target set + balance carried from earlier months (shortfall added, excess deducted). Achieved = cases from the batch book counted against the target, or the completion marked by hand, whichever is higher.</p>
+    <table style="margin-bottom:12px;max-width:820px;"><tbody><tr>
+      <td><b>Target for the month</b><br>${inr(tgt)} cases</td><td><b>Achieved</b><br>${inr(ach)} cases</td><td><b>${tgt-ach>0?'Shortfall':'Excess'}</b><br>${inr(Math.abs(tgt-ach))} cases</td><td><b>Achievement</b><br>${pct}%</td>
+      <td><b>Batches recorded</b><br>${(batches||[]).length} (${good.length} passed / pending, ${(batches||[]).length-good.length} failed)</td><td><b>Cases produced in the month</b><br>${inr(prodM)}</td></tr></tbody></table>
+    <h3 style="font-size:14px;margin:12px 0 6px;">Target vs achieved — SKU-wise</h3>
+    <table><thead><tr><th>SKU</th><th>Brand</th><th class="amount">Target set</th><th class="amount">Carried in</th><th class="amount">Target for month</th><th class="amount">Produced (batch book)</th><th class="amount">Marked by hand</th><th class="amount">Achieved</th><th class="amount">Shortfall / excess</th><th class="amount">Carried to next month</th><th class="amount">Achievement</th></tr></thead><tbody>
+      ${rows.map(r => { const c = carryOut(r); return `<tr><td><b>${esc(r.sku_code)}</b></td><td>${esc(r.brand_name||'')}</td><td class="amount">${inr0(r.target_cases)}</td><td class="amount">${ptCarry(r)?(ptCarry(r)>0?'+':'−')+' '+inr0(Math.abs(ptCarry(r))):'—'}</td><td class="amount"><b>${inr0(ptTgt(r))}</b></td><td class="amount">${inr0(r.produced_cases||0)}</td><td class="amount">${r.reported_cases!=null?inr0(r.reported_cases):'—'}</td><td class="amount"><b>${inr0(ptAch(r))}</b></td><td class="amount" style="color:${c>0?'#b3382c':'#1a7f37'}">${c>0?'short '+inr0(c):(c<0?'excess '+inr0(-c):'—')}</td><td class="amount">${c>0?'+ '+inr0(c):(c<0?'− '+inr0(-c):'—')}</td><td class="amount">${ptTgt(r)?Math.round(ptAch(r)*1000/ptTgt(r))/10:100}%</td></tr>`; }).join('') || '<tr><td colspan="11">No targets were set for this month.</td></tr>'}
+      <tr style="font-weight:700;background:#f3eee0;"><td colspan="2">Total · ${esc(ptMonthName(m))}</td><td class="amount">${inr0(rows.reduce((s,r)=>s+Number(r.target_cases||0),0))}</td><td></td><td class="amount">${inr0(tgt)}</td><td class="amount">${inr0(rows.reduce((s,r)=>s+Number(r.produced_cases||0),0))}</td><td></td><td class="amount">${inr0(ach)}</td><td class="amount">${tgt-ach>0?'short '+inr0(tgt-ach):(tgt-ach<0?'excess '+inr0(ach-tgt):'—')}</td><td></td><td class="amount">${pct}%</td></tr>
+    </tbody></table>
+    <h3 style="font-size:14px;margin:14px 0 6px;">Production recorded in ${esc(ptMonthName(m))} — batch book</h3>
+    <table><thead><tr><th>Date</th><th>Product batch no.</th><th>Record</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th>QC</th><th>Entered by</th></tr></thead><tbody>
+      ${(batches||[]).map(b => `<tr><td>${b.production_date}</td><td><b>${esc(b.product_batch_no||'—')}</b></td><td>${esc(b.batch_no||'')}</td><td>${esc(brandOf(b.sku_id))}</td><td>${esc(skuName(b.sku_id))}</td><td class="amount">${inr0(b.cases)}</td><td>${esc(b.qc_status||'')}</td><td>${esc(typeof userNameOf==='function' ? userNameOf(b.created_by) : '')}</td></tr>`).join('') || '<tr><td colspan="8">No production was recorded in this month.</td></tr>'}
+      ${(batches||[]).length ? `<tr style="font-weight:700;background:#f3eee0;"><td colspan="5">Total cases (QC passed / pending)</td><td class="amount">${inr0(prodM)}</td><td colspan="2"></td></tr>` : ''}
+    </tbody></table>
+    <h3 style="font-size:14px;margin:14px 0 6px;">SKU-wise production in the month</h3>
+    <table style="max-width:620px;"><thead><tr><th>SKU</th><th class="amount">Batches</th><th class="amount">Cases produced</th></tr></thead><tbody>
+      ${Object.keys(bySku).map(k => `<tr><td><b>${esc(skuName(k))}</b> <span style="color:#777">${esc(brandOf(k))}</span></td><td class="amount">${bySku[k].n}</td><td class="amount">${inr0(bySku[k].cases)}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}
+    </tbody></table>
+    <h3 style="font-size:14px;margin:14px 0 6px;">Raw material consumed in the month (MMC custody)</h3>
+    <table style="max-width:760px;"><thead><tr><th>Material</th><th class="amount">Quantity consumed</th><th>Unit</th></tr></thead><tbody>
+      ${Object.values(rmBy).sort((a,b)=>a.name.localeCompare(b.name)).map(x => `<tr><td>${esc(x.name)}</td><td class="amount">${inr0(x.qty)}</td><td>${esc(x.unit)}</td></tr>`).join('') || '<tr><td colspan="3">No material consumption recorded for this month.</td></tr>'}
+    </tbody></table>
+    <p style="font-size:11px;color:#666;margin-top:12px;">Generated by Aurum Nexus on ${new Date().toLocaleString('en-IN')} · the balance of this month (+ shortfall / − excess) is carried into ${esc(ptMonthName(ptMonthList(m, 2)[1]))}'s targets automatically.</p>`;
+  printHtml('Production report — ' + ptMonthName(m), body);
 }
 // Edit the target of a SKU for the months shown together: one total, divided equally over its months (as the targets are given)
 function ptEditSpan(skuCode){
