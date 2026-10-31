@@ -4887,9 +4887,11 @@ async function prodTab(t){
       const brandOpts = (M.brands||[]).filter(b => brandIds.has(b.id)).sort((a,b)=>String(a.name).localeCompare(String(b.name)))
         .map(b=>`<option value="${b.id}" ${window.ptBrand===b.id?'selected':''}>${esc(b.name)}</option>`).join('');
       html += `<div class="card" style="margin-bottom:14px;max-width:720px;"><h2 style="font-size:15px;">Set / revise monthly targets — brand-wise</h2>
-        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Choose the brand and the month; every pack (SKU) of that brand is listed below — type the target cases against each and press <b>Set targets</b> once. A pack left blank is skipped; a pack that already has a target for the month shows it, so you can revise it here too.</p>
+        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Choose the brand, the starting month and how many months (1, 2, 3 … up to 12); every pack (SKU) of that brand is listed below — type the target cases against each and press <b>Set targets</b> once. The same figures are set for each of those months. A pack left blank is skipped; a pack that already has a target for the starting month shows it, so you can revise it here too.</p>
         <div class="row2c" style="margin-top:8px;"><div><label>Brand</label><select id="pt-brand" onchange="ptBrandPick()"><option value="">— choose the brand —</option>${brandOpts}</select></div>
-        <div><label>Month</label><input type="month" id="pt-month" value="${window.ptMonth||now}" onchange="ptBrandPick()"></div></div>
+        <div class="row2c"><div><label>From month</label><input type="month" id="pt-month" value="${window.ptMonth||now}" onchange="ptBrandPick()"></div>
+          <div><label>For how many months</label><select id="pt-months" onchange="ptBrandPick()">${[1,2,3,4,5,6,7,8,9,10,11,12].map(n=>`<option value="${n}" ${Number(window.ptMonths||1)===n?'selected':''}>${n} month${n>1?'s':''}</option>`).join('')}</select></div></div></div>
+        <p id="pt-months-note" style="font-size:12px;color:#555;margin:6px 0 0;"></p>
         <div id="pt-skus" style="margin-top:8px;"></div>
         <input type="text" id="pt-note" placeholder="Note (optional — applies to every target set now)" style="margin-top:8px;">
         <div style="margin-top:8px;"><button class="btn gold sm" id="pt-setbtn" onclick="setProdTargets()" disabled>Set targets</button></div>
@@ -5034,7 +5036,10 @@ async function prodTargetEditSave(id){
 // Brand picked (or month changed): list that brand's packs with a target box each; existing targets for the month are shown for revision.
 function ptBrandPick(){
   const bid = $('pt-brand') ? $('pt-brand').value : '', month = $('pt-month') ? $('pt-month').value : '';
-  window.ptBrand = bid; window.ptMonth = month;
+  const nMonths = Math.max(1, Math.min(12, Number($('pt-months') ? $('pt-months').value : 1) || 1));
+  window.ptBrand = bid; window.ptMonth = month; window.ptMonths = nMonths;
+  const months = ptMonthList(month, nMonths);
+  const noteEl = $('pt-months-note'); if (noteEl) noteEl.innerHTML = month ? (months.length > 1 ? `Targets will be set for <b>${months.length} months</b>: ${months.map(ptMonthName).join(', ')} — the same figure for each pack in every month.` : `Targets will be set for <b>${ptMonthName(month)}</b>.`) : '';
   const box = $('pt-skus'), btn = $('pt-setbtn'); if (!box) return;
   if (!bid){ box.innerHTML = '<p style="font-size:12.5px;color:#999;margin:4px 0;">Choose a brand to see its packs.</p>'; if (btn) btn.disabled = true; return; }
   const skus = sortLinesBrandwise(M.skus.filter(s=>s.is_active && s.brand_id===bid), s=>s.id);
@@ -5047,29 +5052,39 @@ function ptBrandPick(){
       <td class="amount"><input type="number" class="pt-sku-cases" data-sku="${s.id}" data-code="${esc(s.sku_code)}" min="0" step="1" value="${e?Number(e.target_cases||0):''}" placeholder="cases" style="width:130px;padding:7px;text-align:right;" oninput="ptTotal()"></td></tr>`; }).join('') || '<tr><td colspan="4" style="color:#777">No active packs for this brand.</td></tr>'}
     <tr style="background:#faf6ea;font-weight:700;"><td colspan="3">Total for ${esc(brand.name||'the brand')}</td><td class="amount" id="pt-total">0</td></tr>
   </tbody></table></div>`;
-  if (btn){ btn.disabled = !skus.length; btn.textContent = 'Set targets for ' + (brand.name||'this brand') + (month ? ' — ' + month : ''); }
+  if (btn){ btn.disabled = !skus.length; btn.textContent = 'Set targets for ' + (brand.name||'this brand') + (month ? (months.length > 1 ? ' — ' + months.length + ' months (' + ptMonthName(months[0]) + ' to ' + ptMonthName(months[months.length-1]) + ')' : ' — ' + ptMonthName(month)) : ''); }
   ptTotal();
 }
+// 'YYYY-MM' plus the following n-1 months
+function ptMonthList(start, n){ if (!start) return []; const [y, m] = start.split('-').map(Number); const out = []; for (let i = 0; i < n; i++){ const d = new Date(y, m - 1 + i, 1); out.push(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0')); } return out; }
 function ptTotal(){ const t = [...document.querySelectorAll('.pt-sku-cases')].reduce((s,i)=>s+(Number(i.value)||0),0); const el = $('pt-total'); if (el) el.textContent = inr(t).replace(/\.00$/,''); }
 // One press sets (or revises) the target of every pack that has a number; blanks are skipped.
 async function setProdTargets(){
   const month = $('pt-month').value;
-  if (!month){ say('pt-msg','Pick a month.',false); return; }
+  if (!month){ say('pt-msg','Pick the starting month.',false); return; }
+  const months = ptMonthList(month, Math.max(1, Math.min(12, Number($('pt-months')?.value) || 1)));
   const inputs = [...document.querySelectorAll('.pt-sku-cases')];
-  const existing = {}; (window.__ptRows||[]).filter(r=>r.period===month).forEach(r=>{ existing[r.sku_id] = Number(r.target_cases||0); });
-  const todo = inputs.map(i => ({ sku: i.dataset.sku, code: i.dataset.code, cases: Number(i.value) })).filter(x => x.cases > 0 && x.cases !== existing[x.sku]);
-  if (!todo.length){ say('pt-msg','Type the target cases against at least one pack (a pack already at that figure needs no change).',false); return; }
   const bad = inputs.find(i => i.value !== '' && !(Number(i.value) >= 0)); if (bad){ say('pt-msg','Target cases must be a number of cases.',false); return; }
+  const wanted = inputs.map(i => ({ sku: i.dataset.sku, code: i.dataset.code, cases: Number(i.value) })).filter(x => x.cases > 0);
+  if (!wanted.length){ say('pt-msg','Type the target cases against at least one pack.',false); return; }
+  // one call per pack per month; a pack already at that figure for a month is left alone
+  const todo = [];
+  for (const per of months){
+    const existing = {}; (window.__ptRows||[]).filter(r=>r.period===per).forEach(r=>{ existing[r.sku_id] = Number(r.target_cases||0); });
+    wanted.forEach(x => { if (x.cases !== existing[x.sku]) todo.push({ ...x, per }); });
+  }
+  if (!todo.length){ say('pt-msg','Every pack is already at that figure for ' + months.map(ptMonthName).join(', ') + ' — nothing to change.',false); return; }
   const btn = $('pt-setbtn'); btn.disabled = true;
-  const note = $('pt-note').value.trim() || null; const done = [], errs = [];
+  const note = $('pt-note').value.trim() || null; const done = {}, errs = [];
   for (const x of todo){
-    const { error } = await db.schema('mfg').rpc('set_prod_target', { p_sku: x.sku, p_period: month, p_target_cases: x.cases, p_note: note });
-    if (error) errs.push(x.code + ': ' + error.message); else done.push(x.code + ' ' + x.cases);
+    const { error } = await db.schema('mfg').rpc('set_prod_target', { p_sku: x.sku, p_period: x.per, p_target_cases: x.cases, p_note: note });
+    if (error) errs.push(x.code + ' (' + ptMonthName(x.per) + '): ' + error.message); else (done[x.per] = done[x.per] || []).push(x.code + ' ' + x.cases);
   }
   btn.disabled = false;
   await prodTab('targets');
-  if (errs.length) say('pt-msg', (done.length ? 'Set: ' + done.join(', ') + '. ' : '') + 'Could not set — ' + errs.join('; '), false);
-  else say('pt-msg', 'Targets set for ' + month + ': ' + done.join(', ') + '.', true);
+  const summary = Object.keys(done).sort().map(per => ptMonthName(per) + ': ' + done[per].join(', ')).join(' · ');
+  if (errs.length) say('pt-msg', (summary ? 'Set — ' + summary + '. ' : '') + 'Could not set — ' + errs.join('; '), false);
+  else say('pt-msg', 'Targets set for ' + months.length + ' month' + (months.length>1?'s':'') + ' — ' + summary + '.', true);
 }
 async function setProdTarget(){ return setProdTargets(); }
 async function updProdCompletion(id, sku, cur){
