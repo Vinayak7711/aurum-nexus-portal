@@ -4975,7 +4975,7 @@ function ptReportRender(){
     const keys = Object.keys(skus).sort();
     table = `<div class="table-scroll"><table style="font-size:12.5px;"><thead><tr><th>SKU</th><th>Brand</th><th class="amount">Months</th><th class="amount">Target</th><th class="amount">Achieved</th><th class="amount">Shortfall</th><th>Achievement</th><th></th></tr></thead><tbody>
       ${keys.map(k => { const x = skus[k], p = x.t ? Math.round(x.a*1000/x.t)/10 : 0, open = !!P.open[k];
-        return `<tr><td><b>${esc(k)}</b></td><td style="font-size:12px;color:#555">${esc(x.brand||'—')}</td><td class="amount">${x.rows.length}</td><td class="amount">${inr(x.t)}</td><td class="amount" style="font-weight:600">${inr(x.a)}</td><td class="amount" style="color:${x.t-x.a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(x.t-x.a,0))}</td><td>${bar(p)}</td><td style="white-space:nowrap"><button class="mini" onclick="window.ptRep.open['${esc(k)}']=${open?'false':'true'};ptReportRender()">${open?'▾ hide months':'▸ month-wise'}</button></td></tr>` +
+        return `<tr><td><b>${esc(k)}</b></td><td style="font-size:12px;color:#555">${esc(x.brand||'—')}</td><td class="amount">${x.rows.length}</td><td class="amount">${inr(x.t)}</td><td class="amount" style="font-weight:600">${inr(x.a)}</td><td class="amount" style="color:${x.t-x.a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(x.t-x.a,0))}</td><td>${bar(p)}</td><td style="white-space:nowrap">${isDir()?`<button class="mini" onclick="ptEditSpan('${esc(k)}')">✏️ Edit</button> `:''}<button class="mini" onclick="window.ptRep.open['${esc(k)}']=${open?'false':'true'};ptReportRender()">${open?'▾ hide months':'▸ month-wise'}</button></td></tr>` +
           (open ? x.rows.slice().sort((a,b)=>a.period<b.period?-1:1).map(r => { const a = ptAch(r), pp = Number(r.target_cases)?Math.round(a*1000/Number(r.target_cases))/10:0; return `<tr style="background:#fbf9f3;font-size:12px;"><td style="padding-left:24px;color:#555">↳ ${ptMonthName(r.period)}</td><td style="font-size:11px;color:#777">${srcOf(r)}</td><td></td><td class="amount">${inr(r.target_cases)}</td><td class="amount">${inr(a)}${batchTxt(r)}</td><td class="amount" style="color:${Number(r.target_cases)-a>0?'#b3382c':'#1a7f37'}">${inr(Math.max(Number(r.target_cases)-a,0))}</td><td>${bar(pp)}</td>${acts(r)}</tr>`; }).join('') : ''); }).join('') || '<tr><td colspan="8" style="color:#777">No targets in these months.</td></tr>'}
       ${keys.length ? `<tr style="font-weight:700;background:#faf6ea"><td colspan="2">Total · ${rangeLabel}</td><td class="amount">${use.length}</td><td class="amount">${inr(tgt)}</td><td class="amount">${inr(ach)}</td><td class="amount">${inr(short)}</td><td>${bar(pct)}</td><td></td></tr>` : ''}
       </tbody></table></div>
@@ -5030,6 +5030,36 @@ function ptReportPrint(){
   const label = P.mode === 'month' ? (P.from===P.to ? ptMonthName(P.from) : ptMonthName(P.from) + ' to ' + ptMonthName(P.to)) : fdFYLabel(P.fy);
   const tiles = [...document.querySelectorAll('#pt-report .stat')].map(s => '<b>' + s.querySelector('.n').innerText + '</b> ' + s.querySelector('.l').innerText).join(' &nbsp;·&nbsp; ');
   printHtml('Target vs achieved — ' + label, `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Production target vs achieved · ${esc(label)}${P.brand?' · '+esc(P.brand):''}</h2><p style="font-size:12px;">${tiles}</p>` + t.innerHTML.replace(/<button[^>]*>[\s\S]*?<\/button>/g,'').replace(/onclick="[^"]*"/g,'').replace(/cursor:pointer/g,'') + `<p style="font-size:11px;color:#666;margin-top:10px;">Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`);
+}
+// Edit the target of a SKU for the months shown together: one total, divided equally over its months (as the targets are given)
+function ptEditSpan(skuCode){
+  if (!isDir()){ alert('Only a Director can edit a target.'); return; }
+  const P = window.ptRep || {}; const rows = (window.__ptRows||[]).filter(r => r.sku_code === skuCode && r.period >= P.from && r.period <= P.to).sort((a,b)=>a.period<b.period?-1:1);
+  const box = $('pt-editbox'); if (!rows.length || !box) return;
+  const total = rows.reduce((s,r)=>s+Number(r.target_cases||0),0);
+  const span = rows.length > 1 ? ptMonthName(rows[0].period) + ' to ' + ptMonthName(rows[rows.length-1].period) : ptMonthName(rows[0].period);
+  box.innerHTML = `<div class="card" style="margin-bottom:14px;max-width:620px;border:1px solid #b8860b;"><h2 style="font-size:15px;">✏️ Edit target — ${esc(skuCode)} · ${esc(span)}</h2>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">The figure is the <b>total for ${rows.length} month${rows.length>1?'s':''}</b>; it is divided equally month by month (${rows.map(r=>ptMonthName(r.period)+' '+inr(r.target_cases).replace(/\.00$/,'')).join(' · ')} now). Production already counted and any completion marked by hand stay attached.</p>
+      <div class="row2c" style="margin-top:8px;"><div><label>Total target cases · ${esc(span)}</label><input type="number" id="pe-span-cases" min="${rows.length}" step="1" value="${total}" oninput="$('pe-span-split').textContent = Number(this.value)>0 ? ptSplit(this.value, ${rows.length}).join(' + ') : ''"></div>
+        <div><label>Month-wise split</label><div id="pe-span-split" style="padding:11px 0;font-size:13px;">${ptSplit(total, rows.length).join(' + ')}</div></div></div>
+      <input type="text" id="pe-span-note" placeholder="Note (optional — goes on every month)" value="${esc(rows[0].note||'')}" style="margin-top:8px;">
+      <div style="display:flex;gap:8px;margin-top:8px;"><button class="btn gold sm" onclick="ptEditSpanSave('${esc(skuCode)}')">Save changes</button><button class="btn ghost sm" onclick="$('pt-editbox').innerHTML=''">Cancel</button></div>
+      <div id="pe-span-msg"></div></div>`;
+  box.scrollIntoView({behavior:'smooth', block:'center'});
+}
+async function ptEditSpanSave(skuCode){
+  const P = window.ptRep || {}; const rows = (window.__ptRows||[]).filter(r => r.sku_code === skuCode && r.period >= P.from && r.period <= P.to).sort((a,b)=>a.period<b.period?-1:1);
+  const total = Number($('pe-span-cases').value), note = $('pe-span-note').value.trim() || null;
+  if (!(total >= rows.length)){ say('pe-span-msg','Give at least ' + rows.length + ' case' + (rows.length>1?'s':'') + ' so every month gets a whole case.', false); return; }
+  const shares = ptSplit(total, rows.length); const errs = [];
+  for (let i = 0; i < rows.length; i++){
+    const r = rows[i]; if (Number(r.target_cases) === shares[i] && (r.note||null) === note) continue;
+    const { error } = await db.schema('mfg').rpc('prod_target_edit', { p_id: r.id, p_sku: r.sku_id, p_period: r.period, p_target_cases: shares[i], p_note: note });
+    if (error) errs.push(ptMonthName(r.period) + ': ' + error.message);
+  }
+  if (errs.length){ say('pe-span-msg', errs.join('; '), false); return; }
+  await prodTab('targets');
+  const m = $('pt-msg'); if (m) say('pt-msg', skuCode + ' — ' + inr(total).replace(/\.00$/,'') + ' cases set as ' + rows.map((r,i)=>ptMonthName(r.period)+' '+shares[i]).join(' + ') + '.', true);
 }
 /* ---- Director: edit a target in place ---- */
 function prodTargetEdit(id){
