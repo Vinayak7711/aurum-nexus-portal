@@ -4556,7 +4556,8 @@ async function mfgTab(which){
     window.__prStock = stock || []; window.__prBatches = batches || [];
     // only consumables are consumed in production — spare parts & plant machinery (Raw material tab category) stay out of this list
     const consumable = (stock||[]).filter(r => Number(r.balance) > 0 && (r.rm_category||'CONSUMABLE') === 'CONSUMABLE');
-    const iopts = consumable.map(i=>`<option value="${i.rm_item_id}" title="${esc(rmFullLabel(i))}">${esc(rmShortLabel(i, 'at MMC: ' + Number(i.balance) + ' ' + (i.unit||'')))}</option>`).join('');
+    const prOpt = i => `<option value="${i.rm_item_id}" title="${esc(rmFullLabel(i))}">${esc(rmShortLabel(i, 'at MMC: ' + Number(i.balance) + ' ' + (i.unit||'')))}</option>`;
+    const iopts = [['CASE','📦 Case-wise consumables'],['BLEND','🧴 Blend-wise consumables'],['', 'Consumables not yet sorted (case-wise / blend-wise)']].map(([sb,l]) => { const g = consumable.filter(i => (i.rm_subcat||'') === sb); return g.length ? `<optgroup label="${l}">${g.map(prOpt).join('')}</optgroup>` : ''; }).join('');
     const skuOpts = M.skus.filter(s=>s.is_active).map(s=>`<option value="${s.id}">${esc(s.sku_code)}</option>`).join('');
     const fgBy = {}; (skusFG||[]).forEach(f => fgBy[f.sku_code] = Number(f.cases));
     // consumption lines for the batches shown
@@ -4641,7 +4642,8 @@ async function mfgTab(which){
     const itemOpts = [...new Map((allIssues||[]).map(r=>[r.rm_item_id, r.item])).entries()].sort((x,y)=>String(x[1]?.code).localeCompare(String(y[1]?.code)));
     window.__rmIssues = allIssues || [];
     window.rmCat = window.rmCat || { mmc:'', store:'' };
-    const catChips = k => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;"><span style="font-size:12px;color:#555;">Category:</span>${[['','All'],['CONSUMABLE',RM_CAT_LABEL.CONSUMABLE],['SPARES',RM_CAT_LABEL.SPARES]].map(([v,l])=>`<button class="chip ${window.rmCat[k]===v?'on':''}" onclick="window.rmCat['${k}']='${v}';rmPosDraw('${k}')">${l}</button>`).join('')}${rmCanSetCat()?'<span style="font-size:11px;color:#777;margin-left:6px;">— change an item\'s category from the box beside its name</span>':''}</div>`;
+    window.rmSub = window.rmSub || { mmc:'', store:'' };
+    const catChips = k => `<div id="rm-chips-${k}"></div>`;
     const tools = k => catChips(k) + `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;">
         <input type="text" placeholder="🔍 Search item" value="${esc(window.rmQ[k])}" oninput="window.rmQ['${k}']=this.value;rmPosDraw('${k}')" style="max-width:240px;padding:7px;font-size:12.5px;">
         <label style="font-size:12px;display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" style="width:auto;" ${(window.rmZero||{})[k]?'checked':''} onchange="window.rmZero=window.rmZero||{};window.rmZero['${k}']=this.checked;rmPosDraw('${k}')"> show items with zero balance</label>
@@ -4671,26 +4673,52 @@ function rmRows(k){
   let list = (window.__rm||{})[k] || [];
   if (!(window.rmZero||{})[k]) list = list.filter(r => Number(k==='mmc' ? r.balance : r.store_balance) !== 0);
   const cat = (window.rmCat||{})[k]; if (cat) list = list.filter(r => (r.rm_category||'CONSUMABLE') === cat);
-  list = list.slice().sort((a,b) => (RM_CAT_ORDER[a.rm_category||'CONSUMABLE'] - RM_CAT_ORDER[b.rm_category||'CONSUMABLE']) || String(a.code).localeCompare(String(b.code)));
+  const sub = (window.rmSub||{})[k]; if (sub) list = list.filter(r => (r.rm_category||'CONSUMABLE') === 'CONSUMABLE' && (sub === 'NONE' ? !r.rm_subcat : r.rm_subcat === sub));
+  list = list.slice().sort((a,b) => (RM_CAT_ORDER[a.rm_category||'CONSUMABLE'] - RM_CAT_ORDER[b.rm_category||'CONSUMABLE']) || (RM_SUB_ORDER[rmSubOf(a)] - RM_SUB_ORDER[rmSubOf(b)]) || String(a.code).localeCompare(String(b.code)));
   return q ? list.filter(r => (String(r.code)+' '+String(r.name)).toLowerCase().includes(q)) : list;
 }
 const RM_CAT_LABEL = { CONSUMABLE: '🧪 Consumables', SPARES: '🔧 Spare parts & plant machinery' };
 const RM_CAT_ORDER = { CONSUMABLE: 0, SPARES: 1 };
+const RM_SUB_LABEL = { CASE: '📦 Case-wise', BLEND: '🧴 Blend-wise', '': '— not yet sorted' };
+const RM_SUB_ORDER = { CASE: 0, BLEND: 1, '': 2 };
+const rmSubOf = r => (r.rm_category||'CONSUMABLE') === 'CONSUMABLE' ? (r.rm_subcat || '') : '';
+// the category / sub-category chip rows above each list
+function rmChipsDraw(k){
+  const box = $('rm-chips-' + k); if (!box) return;
+  window.rmCat = window.rmCat || { mmc:'', store:'' }; window.rmSub = window.rmSub || { mmc:'', store:'' };
+  const cat = window.rmCat[k] || '', sub = window.rmSub[k] || '';
+  const chip = (on, js, label) => `<button class="chip ${on?'on':''}" onclick="${js}">${label}</button>`;
+  let h = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;"><span style="font-size:12px;color:#555;">Category:</span>` +
+    [['','All'],['CONSUMABLE',RM_CAT_LABEL.CONSUMABLE],['SPARES',RM_CAT_LABEL.SPARES]].map(([v,l]) => chip(cat===v, `window.rmCat['${k}']='${v}';window.rmSub['${k}']='';rmPosDraw('${k}')`, l)).join('') +
+    (rmCanSetCat() ? '<span style="font-size:11px;color:#777;margin-left:6px;">— change an item\'s category and, for consumables, case-wise / blend-wise from the boxes beside its name</span>' : '') + '</div>';
+  if (cat !== 'SPARES') h += `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 2px 14px;"><span style="font-size:12px;color:#555;">Consumables:</span>` +
+    [['','All'],['CASE',RM_SUB_LABEL.CASE],['BLEND',RM_SUB_LABEL.BLEND],['NONE','not yet sorted']].map(([v,l]) => chip(sub===v, `window.rmSub['${k}']='${v}';if('${v}')window.rmCat['${k}']='CONSUMABLE';rmPosDraw('${k}')`, l)).join('') + '</div>';
+  box.innerHTML = h;
+}
 function rmCanSetCat(){ const pj = (me && me.permissions_json) || {}; return isDir() || !!((pj.mfg||{}).edit || (pj.mfg||{}).admin || (pj.purchase||{}).edit || (pj.purchase||{}).approve); }
 function rmCatPick(r){
-  const c = r.rm_category || 'CONSUMABLE';
-  if (!rmCanSetCat()) return `<span style="font-size:10.5px;color:#777;">${c==='SPARES'?'🔧 spare / machinery':'🧪 consumable'}</span>`;
-  return `<select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;" onchange="rmSetCat('${r.rm_item_id}', this.value)"><option value="CONSUMABLE" ${c==='CONSUMABLE'?'selected':''}>🧪 consumable</option><option value="SPARES" ${c==='SPARES'?'selected':''}>🔧 spare / machinery</option></select>`;
+  const c = r.rm_category || 'CONSUMABLE', sb = c === 'CONSUMABLE' ? (r.rm_subcat || '') : '';
+  if (!rmCanSetCat()) return `<span style="font-size:10.5px;color:#777;">${c==='SPARES'?'🔧 spare / machinery':'🧪 consumable · ' + (sb ? RM_SUB_LABEL[sb].replace(/^.. /,'').toLowerCase() : 'not yet sorted')}</span>`;
+  return `<select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;" onchange="rmSetCat('${r.rm_item_id}', this.value, null)"><option value="CONSUMABLE" ${c==='CONSUMABLE'?'selected':''}>🧪 consumable</option><option value="SPARES" ${c==='SPARES'?'selected':''}>🔧 spare / machinery</option></select>` +
+    (c === 'CONSUMABLE' ? ` <select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;${sb?'':'border-color:#b26a00;'}" onchange="rmSetCat('${r.rm_item_id}', 'CONSUMABLE', this.value||null)"><option value="" ${!sb?'selected':''}>— case-wise or blend-wise? —</option><option value="CASE" ${sb==='CASE'?'selected':''}>📦 case-wise</option><option value="BLEND" ${sb==='BLEND'?'selected':''}>🧴 blend-wise</option></select>` : '');
 }
-async function rmSetCat(id, cat){
-  const { error } = await db.schema('mfg').rpc('set_rm_category', { p_item: id, p_cat: cat });
+async function rmSetCat(id, cat, sub){
+  if (sub === null && cat === 'CONSUMABLE'){ const cur = ((window.__rm||{}).items||[]).concat((window.__rm||{}).mmc||[], (window.__rm||{}).store||[]).find(r => r.rm_item_id === id); sub = cur ? (cur.rm_subcat || null) : null; }
+  const { error } = await db.schema('mfg').rpc('set_rm_category', { p_item: id, p_cat: cat, p_sub: cat === 'CONSUMABLE' ? sub : null });
   if (error){ alert('Could not change the category: ' + error.message); return; }
-  ['mmc','store','items'].forEach(k => ((window.__rm||{})[k]||[]).forEach(r => { if (r.rm_item_id === id) r.rm_category = cat; }));
-  (rmItems||[]).forEach(it => { if (it.id === id) it.rm_category = cat; });
+  ['mmc','store','items'].forEach(k => ((window.__rm||{})[k]||[]).forEach(r => { if (r.rm_item_id === id){ r.rm_category = cat; r.rm_subcat = cat === 'CONSUMABLE' ? sub : null; } }));
+  (rmItems||[]).forEach(it => { if (it.id === id){ it.rm_category = cat; it.rm_subcat = cat === 'CONSUMABLE' ? sub : null; } });
   rmPosDraw('mmc'); rmPosDraw('store');
 }
-// a heading row whenever the category changes (only when all categories are shown)
-function rmCatHeading(k, r, prev, cols){ const c = r.rm_category || 'CONSUMABLE'; if ((window.rmCat||{})[k] || c === prev) return ''; return `<tr><td colspan="${cols}" style="background:#f3eee0;font-weight:700;font-size:12px;padding:6px 10px;">${RM_CAT_LABEL[c]}</td></tr>`; }
+// heading rows whenever the category / sub-category changes (when the list is not already filtered down to one)
+function rmCatHeading(k, r, prev, cols){
+  const c = r.rm_category || 'CONSUMABLE', sb = rmSubOf(r), key = c + '|' + sb; if (key === prev) return '';
+  const cat = (window.rmCat||{})[k] || '', sub = (window.rmSub||{})[k] || '';
+  let h = '';
+  if (!cat && (!prev || prev.split('|')[0] !== c)) h += `<tr><td colspan="${cols}" style="background:#f3eee0;font-weight:700;font-size:12px;padding:6px 10px;">${RM_CAT_LABEL[c]}</td></tr>`;
+  if (c === 'CONSUMABLE' && !sub) h += `<tr><td colspan="${cols}" style="background:#faf7ee;font-weight:600;font-size:11.5px;padding:4px 10px 4px 22px;color:#555;">${RM_SUB_LABEL[sb]}</td></tr>`;
+  return h;
+}
 function rmIssSearch(){
   const F = window.rmIss;
   F.from = $('rmi-from').value; F.to = $('rmi-to').value; F.item = $('rmi-item').value; F.status = $('rmi-status').value;
@@ -4726,15 +4754,16 @@ function rmPosDraw(k){
   if (k === 'mmc'){
     head = `<th>Item</th><th class="amount">Issued to MMC</th><th class="amount">Consumed</th><th class="amount"><b>At MMC (balance)</b></th><th>Unit</th>`;
     let prevC = null;
-    body = rows.map(r=>{ const h = rmCatHeading('mmc', r, prevC, cols); prevC = r.rm_category||'CONSUMABLE'; return h + `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}<br>${rmCatPick(r)}</td><td class="amount">${Number(r.issued||0)}</td><td class="amount">${Number(r.consumed||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.balance)<0?'#b3261e':'inherit'}">${Number(r.balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`; }).join('');
+    body = rows.map(r=>{ const h = rmCatHeading('mmc', r, prevC, cols); prevC = (r.rm_category||'CONSUMABLE') + '|' + rmSubOf(r); return h + `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}<br>${rmCatPick(r)}</td><td class="amount">${Number(r.issued||0)}</td><td class="amount">${Number(r.consumed||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.balance)<0?'#b3261e':'inherit'}">${Number(r.balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`; }).join('');
     empty = 'No material at MMC' + (window.rmQ.mmc?' matching the search':'') + '.';
   } else {
     head = `<th>Item</th><th class="amount">Received in store</th><th class="amount">Sent to MMC</th><th class="amount"><b>In company store (balance)</b></th><th>Unit</th>`;
     let prevC = null;
-    body = rows.map(r=>{ const h = rmCatHeading('store', r, prevC, cols); prevC = r.rm_category||'CONSUMABLE'; return h + `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}<br>${rmCatPick(r)}</td><td class="amount">${Number(r.received||0)}</td><td class="amount">${Number(r.issued_to_mmc||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.store_balance)<0?'#b3261e':Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`; }).join('');
+    body = rows.map(r=>{ const h = rmCatHeading('store', r, prevC, cols); prevC = (r.rm_category||'CONSUMABLE') + '|' + rmSubOf(r); return h + `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}<br>${rmCatPick(r)}</td><td class="amount">${Number(r.received||0)}</td><td class="amount">${Number(r.issued_to_mmc||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.store_balance)<0?'#b3261e':Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`; }).join('');
     empty = 'Nothing in the company store' + (window.rmQ.store?' matching the search':'') + '.';
   }
   const tot = (V && rows.length) ? `<tr style="font-weight:700;background:#faf6ea;"><td colspan="6">Total value ${k==='mmc'?'at MMC':'in company store'} — landed, incl. taxes &amp; transport${noCost?` <span style="font-weight:400;font-size:11px;color:#777">· ${noCost} item(s) have no purchase price</span>`:''}</td><td class="amount">₹ ${inr(totV)}</td></tr>` : '';
+  rmChipsDraw(k);
   box.innerHTML = `<table><thead><tr>${head}${valHead}</tr></thead><tbody>${body || `<tr><td colspan="${cols}" style="color:#777">${empty}</td></tr>`}${tot}</tbody></table>` +
     (V ? `<p style="font-size:11px;color:#777;margin:6px 0 0;">Landed cost / unit = weighted average of the purchase orders for that item: basic + taxes + transport / freight to us (transport entered on the purchase order, shared by value). Hover a rate to see its make-up.</p>` : '');
 }
@@ -4759,9 +4788,9 @@ function rmSheet(k){
   let S;
   const catT = (window.rmCat||{})[k] ? ' — ' + ((window.rmCat||{})[k]==='SPARES' ? 'spare parts & plant machinery' : 'consumables') : '';
   if (k === 'mmc') S = { title: 'Raw material at MMC' + catT, file: 'rm-at-mmc', head: ['Category','Item code','Item','Issued to MMC','Consumed','At MMC (balance)','Unit'].concat(vh),
-      rows: rmRows('mmc').map(r=>[r.rm_category==='SPARES'?'Spare parts & plant machinery':'Consumable', r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||''].concat(vc(r, Number(r.balance||0)))) };
+      rows: rmRows('mmc').map(r=>[r.rm_category==='SPARES'?'Spare parts & plant machinery':'Consumable' + (r.rm_subcat==='CASE'?' · case-wise':r.rm_subcat==='BLEND'?' · blend-wise':''), r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||''].concat(vc(r, Number(r.balance||0)))) };
   else S = { title: 'Raw material in company store' + catT, file: 'rm-company-store', head: ['Category','Item code','Item','Received in store','Sent to MMC','In company store (balance)','Unit'].concat(vh),
-      rows: rmRows('store').map(r=>[r.rm_category==='SPARES'?'Spare parts & plant machinery':'Consumable', r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||''].concat(vc(r, Number(r.store_balance||0)))) };
+      rows: rmRows('store').map(r=>[r.rm_category==='SPARES'?'Spare parts & plant machinery':'Consumable' + (r.rm_subcat==='CASE'?' · case-wise':r.rm_subcat==='BLEND'?' · blend-wise':''), r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||''].concat(vc(r, Number(r.store_balance||0)))) };
   if (V && S.rows.length){ S.title += ' — with landed value (incl. taxes & transport)'; S.rows.push(['','','Total value','','','','','', Math.round(S.rows.reduce((t,r)=>t+(Number(r[8])||0),0)*100)/100]); }
   return S;
 }
@@ -6790,7 +6819,9 @@ async function rmQuickAdd(backTab){
   const cat = catAns.startsWith('S') ? 'SPARES' : 'CONSUMABLE';
   const { data: newId, error } = await db.schema('mfg').rpc('add_rm_item', { p_code: code, p_name: name, p_unit: unit });
   if (error){ alert('Could not add material: ' + error.message); return; }
-  if (cat === 'SPARES' && newId){ const { error: ce } = await db.schema('mfg').rpc('set_rm_category', { p_item: newId, p_cat: cat }); if (ce) alert('Material added, but its category could not be set: ' + ce.message); }
+  let sub = null;
+  if (cat === 'CONSUMABLE'){ const sa = (prompt('Consumed how? Type C for case-wise (packaging per case — bottles, caps, labels, cartons…) or B for blend-wise (per blend / batch volume — spirit, flavour, water, chemicals…). Leave blank to sort it later:', 'C')||'').trim().toUpperCase(); sub = sa.startsWith('B') ? 'BLEND' : (sa.startsWith('C') ? 'CASE' : null); }
+  if (newId && (cat === 'SPARES' || sub)){ const { error: ce } = await db.schema('mfg').rpc('set_rm_category', { p_item: newId, p_cat: cat, p_sub: sub }); if (ce) alert('Material added, but its category could not be set: ' + ce.message); }
   const { data } = await db.schema('mfg').from('rm_items').select('*').eq('is_active', true).order('code');
   rmItems = data || [];
   await purchaseTab(backTab);
