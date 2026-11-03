@@ -5460,12 +5460,13 @@ async function blendSave(){
   const litres = Number($('bl-litres').value), name = $('bl-name').value.trim();
   if (!name){ say('pr-msg','Give the blend a name.',false); return; }
   if (!(litres > 0)){ say('pr-msg','Enter the litres of blend produced.',false); return; }
-  const { error } = await db.schema('mfg').rpc('create_blend', { p_date: $('bl-date').value || null, p_tank: $('bl-tank').value, p_blend_name: name, p_litres: litres,
+  const tank = $('bl-tank').value;
+  const { error } = await db.schema('mfg').rpc('create_blend', { p_date: $('bl-date').value || null, p_tank: tank, p_blend_name: name, p_litres: litres,
     p_rm: blendLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty })), p_note: $('bl-note').value.trim() || null });
   if (error){ say('pr-msg','Could not record the blend: '+error.message,false); return; }
   blendLines = []; window.prMode = 'blend';
   await mfgTab('report');
-  say('pr-msg','Blend recorded — ' + litres + ' L of ' + name + ' into ' + tankLabel($('bl-tank') ? $('bl-tank').value : '') + '; the materials consumed are minused from MMC custody.', true);
+  say('pr-msg','Blend recorded — ' + litres + ' L of ' + name + ' into ' + tankLabel(tank) + '; the materials consumed are minused from MMC custody.', true);
 }
 let blEditLines = [];
 function blendEdit(id){
