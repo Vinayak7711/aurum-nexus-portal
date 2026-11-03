@@ -4618,8 +4618,9 @@ async function mfgTab(which){
       return Number(s.received||0) !== 0 || Number(s.store_balance||0) !== 0 ||
              Number(r.issued||0) !== 0 || Number(r.consumed||0) !== 0 || Number(r.balance||0) !== 0;
     });
-    const iopts = live.filter(i => Number((storeBy[i.rm_item_id]||{}).store_balance||0) > 0)
-      .map(i=>`<option value="${i.rm_item_id}">${esc(i.code)} — ${esc(i.name)} (store: ${Number((storeBy[i.rm_item_id]||{}).store_balance||0)})</option>`).join('');
+    const sendable = live.filter(i => Number((storeBy[i.rm_item_id]||{}).store_balance||0) > 0);
+    const optOf = i => `<option value="${i.rm_item_id}" title="${esc(rmFullLabel(i))}">${esc(rmShortLabel(i, 'store: ' + Number((storeBy[i.rm_item_id]||{}).store_balance||0)))}</option>`;
+    const iopts = ['CONSUMABLE','SPARES'].map(c => { const g = sendable.filter(i => (i.rm_category||'CONSUMABLE') === c); return g.length ? `<optgroup label="${RM_CAT_LABEL[c]}">${g.map(optOf).join('')}</optgroup>` : ''; }).join('');
     let html = `<div class="card" style="margin-bottom:14px;max-width:560px;"><h2 style="font-size:15px;">Record material sent to MMC</h2>
       <p style="font-size:11.5px;color:#777;margin:4px 0 0;">Only materials with balance in the company store can be sent.</p>
       <div class="row2c" style="margin-top:8px;"><select id="ri-item">${iopts || '<option value="">— nothing in the company store —</option>'}</select>
@@ -4638,7 +4639,9 @@ async function mfgTab(which){
     window.rmIss = window.rmIss || { from: '', to: '', item: '', status: '', searched: false };
     const itemOpts = [...new Map((allIssues||[]).map(r=>[r.rm_item_id, r.item])).entries()].sort((x,y)=>String(x[1]?.code).localeCompare(String(y[1]?.code)));
     window.__rmIssues = allIssues || [];
-    const tools = k => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;">
+    window.rmCat = window.rmCat || { mmc:'', store:'' };
+    const catChips = k => `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;"><span style="font-size:12px;color:#555;">Category:</span>${[['','All'],['CONSUMABLE',RM_CAT_LABEL.CONSUMABLE],['SPARES',RM_CAT_LABEL.SPARES]].map(([v,l])=>`<button class="chip ${window.rmCat[k]===v?'on':''}" onclick="window.rmCat['${k}']='${v}';rmPosDraw('${k}')">${l}</button>`).join('')}${rmCanSetCat()?'<span style="font-size:11px;color:#777;margin-left:6px;">— change an item\'s category from the box beside its name</span>':''}</div>`;
+    const tools = k => catChips(k) + `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;">
         <input type="text" placeholder="🔍 Search item" value="${esc(window.rmQ[k])}" oninput="window.rmQ['${k}']=this.value;rmPosDraw('${k}')" style="max-width:240px;padding:7px;font-size:12.5px;">
         <label style="font-size:12px;display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" style="width:auto;" ${(window.rmZero||{})[k]?'checked':''} onchange="window.rmZero=window.rmZero||{};window.rmZero['${k}']=this.checked;rmPosDraw('${k}')"> show items with zero balance</label>
         ${canPurView()?`<label style="font-size:12px;display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" style="width:auto;" ${(window.rmVal||{})[k]?'checked':''} onchange="window.rmVal=window.rmVal||{};window.rmVal['${k}']=this.checked;rmPosDraw('${k}')"> show item with value</label>`:''}
@@ -4666,8 +4669,27 @@ function rmRows(k){
   const q = String((window.rmQ||{})[k]||'').trim().toLowerCase();
   let list = (window.__rm||{})[k] || [];
   if (!(window.rmZero||{})[k]) list = list.filter(r => Number(k==='mmc' ? r.balance : r.store_balance) !== 0);
+  const cat = (window.rmCat||{})[k]; if (cat) list = list.filter(r => (r.rm_category||'CONSUMABLE') === cat);
+  list = list.slice().sort((a,b) => (RM_CAT_ORDER[a.rm_category||'CONSUMABLE'] - RM_CAT_ORDER[b.rm_category||'CONSUMABLE']) || String(a.code).localeCompare(String(b.code)));
   return q ? list.filter(r => (String(r.code)+' '+String(r.name)).toLowerCase().includes(q)) : list;
 }
+const RM_CAT_LABEL = { CONSUMABLE: '🧪 Consumables', SPARES: '🔧 Spare parts & plant machinery' };
+const RM_CAT_ORDER = { CONSUMABLE: 0, SPARES: 1 };
+function rmCanSetCat(){ const pj = (me && me.permissions_json) || {}; return isDir() || !!((pj.mfg||{}).edit || (pj.mfg||{}).admin || (pj.purchase||{}).edit || (pj.purchase||{}).approve); }
+function rmCatPick(r){
+  const c = r.rm_category || 'CONSUMABLE';
+  if (!rmCanSetCat()) return `<span style="font-size:10.5px;color:#777;">${c==='SPARES'?'🔧 spare / machinery':'🧪 consumable'}</span>`;
+  return `<select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;" onchange="rmSetCat('${r.rm_item_id}', this.value)"><option value="CONSUMABLE" ${c==='CONSUMABLE'?'selected':''}>🧪 consumable</option><option value="SPARES" ${c==='SPARES'?'selected':''}>🔧 spare / machinery</option></select>`;
+}
+async function rmSetCat(id, cat){
+  const { error } = await db.schema('mfg').rpc('set_rm_category', { p_item: id, p_cat: cat });
+  if (error){ alert('Could not change the category: ' + error.message); return; }
+  ['mmc','store','items'].forEach(k => ((window.__rm||{})[k]||[]).forEach(r => { if (r.rm_item_id === id) r.rm_category = cat; }));
+  (rmItems||[]).forEach(it => { if (it.id === id) it.rm_category = cat; });
+  rmPosDraw('mmc'); rmPosDraw('store');
+}
+// a heading row whenever the category changes (only when all categories are shown)
+function rmCatHeading(k, r, prev, cols){ const c = r.rm_category || 'CONSUMABLE'; if ((window.rmCat||{})[k] || c === prev) return ''; return `<tr><td colspan="${cols}" style="background:#f3eee0;font-weight:700;font-size:12px;padding:6px 10px;">${RM_CAT_LABEL[c]}</td></tr>`; }
 function rmIssSearch(){
   const F = window.rmIss;
   F.from = $('rmi-from').value; F.to = $('rmi-to').value; F.item = $('rmi-item').value; F.status = $('rmi-status').value;
@@ -4702,11 +4724,13 @@ function rmPosDraw(k){
   let head, body, empty;
   if (k === 'mmc'){
     head = `<th>Item</th><th class="amount">Issued to MMC</th><th class="amount">Consumed</th><th class="amount"><b>At MMC (balance)</b></th><th>Unit</th>`;
-    body = rows.map(r=>`<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${Number(r.issued||0)}</td><td class="amount">${Number(r.consumed||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.balance)<0?'#b3261e':'inherit'}">${Number(r.balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`).join('');
+    let prevC = null;
+    body = rows.map(r=>{ const h = rmCatHeading('mmc', r, prevC, cols); prevC = r.rm_category||'CONSUMABLE'; return h + `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}<br>${rmCatPick(r)}</td><td class="amount">${Number(r.issued||0)}</td><td class="amount">${Number(r.consumed||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.balance)<0?'#b3261e':'inherit'}">${Number(r.balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`; }).join('');
     empty = 'No material at MMC' + (window.rmQ.mmc?' matching the search':'') + '.';
   } else {
     head = `<th>Item</th><th class="amount">Received in store</th><th class="amount">Sent to MMC</th><th class="amount"><b>In company store (balance)</b></th><th>Unit</th>`;
-    body = rows.map(r=>`<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td class="amount">${Number(r.received||0)}</td><td class="amount">${Number(r.issued_to_mmc||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.store_balance)<0?'#b3261e':Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`).join('');
+    let prevC = null;
+    body = rows.map(r=>{ const h = rmCatHeading('store', r, prevC, cols); prevC = r.rm_category||'CONSUMABLE'; return h + `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}<br>${rmCatPick(r)}</td><td class="amount">${Number(r.received||0)}</td><td class="amount">${Number(r.issued_to_mmc||0)}</td><td class="amount" style="font-weight:700;color:${Number(r.store_balance)<0?'#b3261e':Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance||0)}</td><td>${esc(r.unit||'')}</td>${valCells(r)}</tr>`; }).join('');
     empty = 'Nothing in the company store' + (window.rmQ.store?' matching the search':'') + '.';
   }
   const tot = (V && rows.length) ? `<tr style="font-weight:700;background:#faf6ea;"><td colspan="6">Total value ${k==='mmc'?'at MMC':'in company store'} — landed, incl. taxes &amp; transport${noCost?` <span style="font-weight:400;font-size:11px;color:#777">· ${noCost} item(s) have no purchase price</span>`:''}</td><td class="amount">₹ ${inr(totV)}</td></tr>` : '';
@@ -4732,11 +4756,12 @@ function rmSheet(k){
   const V = rmValOn(k), vh = V ? ['Landed cost / unit (Rs)','Value (Rs)'] : [];
   const vc = (r, b) => { if (!V) return []; const c = rmCostOf(r); return c == null ? ['', ''] : [Math.round(c*100)/100, Math.round(b*c*100)/100]; };
   let S;
-  if (k === 'mmc') S = { title: 'Raw material at MMC', file: 'rm-at-mmc', head: ['Item code','Item','Issued to MMC','Consumed','At MMC (balance)','Unit'].concat(vh),
-      rows: rmRows('mmc').map(r=>[r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||''].concat(vc(r, Number(r.balance||0)))) };
-  else S = { title: 'Raw material in company store', file: 'rm-company-store', head: ['Item code','Item','Received in store','Sent to MMC','In company store (balance)','Unit'].concat(vh),
-      rows: rmRows('store').map(r=>[r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||''].concat(vc(r, Number(r.store_balance||0)))) };
-  if (V && S.rows.length){ S.title += ' — with landed value (incl. taxes & transport)'; S.rows.push(['','Total value','','','','','', Math.round(S.rows.reduce((t,r)=>t+(Number(r[7])||0),0)*100)/100]); }
+  const catT = (window.rmCat||{})[k] ? ' — ' + ((window.rmCat||{})[k]==='SPARES' ? 'spare parts & plant machinery' : 'consumables') : '';
+  if (k === 'mmc') S = { title: 'Raw material at MMC' + catT, file: 'rm-at-mmc', head: ['Category','Item code','Item','Issued to MMC','Consumed','At MMC (balance)','Unit'].concat(vh),
+      rows: rmRows('mmc').map(r=>[r.rm_category==='SPARES'?'Spare parts & plant machinery':'Consumable', r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||''].concat(vc(r, Number(r.balance||0)))) };
+  else S = { title: 'Raw material in company store' + catT, file: 'rm-company-store', head: ['Category','Item code','Item','Received in store','Sent to MMC','In company store (balance)','Unit'].concat(vh),
+      rows: rmRows('store').map(r=>[r.rm_category==='SPARES'?'Spare parts & plant machinery':'Consumable', r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||''].concat(vc(r, Number(r.store_balance||0)))) };
+  if (V && S.rows.length){ S.title += ' — with landed value (incl. taxes & transport)'; S.rows.push(['','','Total value','','','','','', Math.round(S.rows.reduce((t,r)=>t+(Number(r[8])||0),0)*100)/100]); }
   return S;
 }
 function rmCsv(k){
@@ -6760,8 +6785,11 @@ async function rmQuickAdd(backTab){
   const suggested = name.replace(/[^A-Za-z0-9]/g,'').slice(0,6).toUpperCase() || 'ITEM';
   const code = (prompt('Short unique code for it:', suggested)||'').trim().toUpperCase();
   if (!code) return;
+  const catAns = (prompt('Category — type C for a consumable (used up in production) or S for a spare part / plant machinery:', 'C')||'').trim().toUpperCase();
+  const cat = catAns.startsWith('S') ? 'SPARES' : 'CONSUMABLE';
   const { data: newId, error } = await db.schema('mfg').rpc('add_rm_item', { p_code: code, p_name: name, p_unit: unit });
   if (error){ alert('Could not add material: ' + error.message); return; }
+  if (cat === 'SPARES' && newId){ const { error: ce } = await db.schema('mfg').rpc('set_rm_category', { p_item: newId, p_cat: cat }); if (ce) alert('Material added, but its category could not be set: ' + ce.message); }
   const { data } = await db.schema('mfg').from('rm_items').select('*').eq('is_active', true).order('code');
   rmItems = data || [];
   await purchaseTab(backTab);
