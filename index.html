@@ -4504,20 +4504,25 @@ async function mfgTab(which){
     // the three blend tanks: what was blended into each (from the blend-wise production report)
     let tankTiles = '';
     try {
-      const { data: bl } = await MF.from('blends').select('id, blend_no, blend_date, tank, blend_name, litres, created_at').order('blend_date',{ascending:false}).order('created_at',{ascending:false}).limit(500);
+      const [{ data: bl }, { data: tb }] = await Promise.all([
+        MF.from('blends').select('id, blend_no, blend_date, tank, blend_name, litres, created_at').order('blend_date',{ascending:false}).order('created_at',{ascending:false}).limit(500),
+        MF.rpc('tank_balances')
+      ]);
+      const balBy = {}; (tb||[]).forEach(x => balBy[x.tank] = x);
       const mon = monthLabelJS();
       tankTiles = ['TANK1','TANK2','TANK3'].map(t => {
         const rows = (bl||[]).filter(b => b.tank === t); const last = rows[0];
         const monthL = rows.filter(b => String(b.blend_date).slice(0,7) === mon).reduce((x,b)=>x+Number(b.litres||0),0);
-        const allL = rows.reduce((x,b)=>x+Number(b.litres||0),0);
-        return `<div class="stat" style="cursor:pointer;min-width:200px;" title="Open the blend-wise production report" onclick="window.prMode='blend';mfgTab('report')">
-          <div class="n" style="font-size:20px;">${last ? Number(last.litres) + ' L' : '—'}</div>
+        const tbx = balBy[t]; const now = tbx ? Number(tbx.balance) : rows.reduce((x,b)=>x+Number(b.litres||0),0);
+        const blended = tbx ? Number(tbx.blended) : rows.reduce((x,b)=>x+Number(b.litres||0),0); const drawn = tbx ? Number(tbx.drawn) : 0;
+        return `<div class="stat" style="cursor:pointer;min-width:210px;" title="Open the blend-wise production report" onclick="window.prMode='blend';mfgTab('report')">
+          <div class="n" style="font-size:20px;${now < 0 ? 'color:#b3261e;' : ''}">${rows.length ? now + ' L' : '—'}</div>
           <div class="l"><b>${tankLabel(t)}</b>${last ? ' · ' + esc(last.blend_name) : ' · empty'}</div>
-          <div style="font-size:10.5px;color:#777;margin-top:2px;">${last ? 'blended ' + last.blend_date + ' · ' + esc(last.blend_no||'') : 'no blend recorded yet'}${rows.length ? '<br>' + rows.length + ' blend(s) · ' + monthL + ' L this month · ' + allL + ' L in all' : ''}</div></div>`;
+          <div style="font-size:10.5px;color:#777;margin-top:2px;">${last ? 'in tank now · last blend ' + Number(last.litres) + ' L on ' + last.blend_date + ' · ' + esc(last.blend_no||'') : 'no blend recorded yet'}${rows.length ? '<br>' + blended + ' L blended in − ' + drawn + ' L drawn for bottling · ' + monthL + ' L blended this month' : ''}</div></div>`;
       }).join('');
     } catch(e){ tankTiles = ''; }
     let html = `<div class="statgrid"><div class="stat"><div class="n">${total}</div><div class="l">Total FG cases at MMC</div></div>${tankTiles}</div>
-      <p style="font-size:11px;color:#777;margin:-4px 0 10px;">Tanks show the latest blend prepared in each (name and litres) from the blend-wise production report; click a tank to open it.</p>`;
+      <p style="font-size:11px;color:#777;margin:-4px 0 10px;">Tanks show what is in each tank now: all blends prepared (blend-wise production report) minus the blend drawn for bottling (case-wise production report), with the latest blend's name; click a tank to open the report.</p>`;
     html += '<div class="table-scroll"><table><thead><tr><th>SKU</th><th class="amount">Cases in stock</th></tr></thead><tbody>';
     for (const r of (data||[]).filter(x=>Number(x.cases)!==0))
       html += `<tr><td><b>${esc(r.sku_code)}</b></td><td class="amount">${r.cases}</td></tr>`;
@@ -4576,6 +4581,10 @@ async function mfgTab(which){
       (brm||[]).forEach(l => { const it = rmItems.find(x=>x.id===l.rm_item_id); l.item = it ? { code: it.code, unit: it.unit, name: it.name } : null; (blendRmBy[l.blend_id] ??= []).push(l); });
     }
     window.__prBlends = blends || []; window.__prBlendRmBy = blendRmBy;
+    // what is in each tank right now = litres blended in − litres drawn by case-wise production
+    let tankBal = {}; try { const { data: tb } = await MF.rpc('tank_balances'); (tb||[]).forEach(t => tankBal[t.tank] = t); } catch(e){}
+    window.__prTankBal = tankBal;
+    const tankNow = t => tankBal[t] ? Number(tankBal[t].balance) : 0;
     (batches||[]).forEach(b => { b.sku = { sku_code: skuCodeOf(b.sku_id) }; });
     window.__prStock = stock || []; window.__prBatches = batches || [];
     // only consumables are consumed in production — spare parts & plant machinery (Raw material tab category) stay out of this list
@@ -4609,6 +4618,12 @@ async function mfgTab(which){
           <div class="row2c"><div><label>Cases *</label><input type="number" id="pr-cases" min="1"></div>
           <div><label>Date</label><input type="date" id="pr-date" value="${calFmt(new Date())}"></div></div></div>
         <div style="margin-top:8px;"><label>Batch number of the product <span style="font-weight:normal;color:#888;font-size:11px;">— the batch number printed on the product / MMC’s batch; used to track these cases in Batches &amp; QC, FG stock and Targets</span></label><input type="text" id="pr-batchno" placeholder="e.g. MMC/FR/1026-01" list="pr-batchno-list"><datalist id="pr-batchno-list">${[...new Set((batches||[]).map(b=>b.product_batch_no).filter(Boolean))].map(x=>`<option value="${esc(x)}">`).join('')}</datalist></div>
+        <div style="margin-top:10px;padding:8px 10px;background:#f4f7fb;border-radius:8px;">
+          <div style="font-weight:600;font-size:12.5px;margin-bottom:4px;">🧴 Blend used for bottling <span style="font-weight:normal;color:#777;font-size:11px;">— the litres drawn are minused from that tank (FG stock tab shows what is left)</span></div>
+          <div class="row2c"><div><label>Blend drawn from tank</label><select id="pr-tank" onchange="prTankHint()"><option value="">— none / not from a tank —</option>${['TANK1','TANK2','TANK3'].map(t=>`<option value="${t}">${tankLabel(t)} — ${tankNow(t)} L in tank</option>`).join('')}</select></div>
+            <div><label>Blend consumed (litres)</label><input type="number" id="pr-blend-litres" min="0" step="any" placeholder="litres" oninput="prTankHint()"></div></div>
+          <div id="pr-tank-hint" style="font-size:11.5px;color:#555;margin-top:4px;"></div>
+        </div>
         <h4 class="sec" style="margin-top:12px;">Raw material consumed</h4>
         <div><label>Material (at MMC) <span style="font-weight:normal;color:#888;font-size:11px;">— consumables only; spare parts &amp; plant machinery are not consumed in a batch</span></label><select id="pr-item" style="width:100%;max-width:100%;" onchange="rmShowFull('pr-item','pr-item-full')">${iopts || '<option value="">— no consumable material at MMC — send material from the store first —</option>'}</select>
           <div id="pr-item-full" style="font-size:11.5px;color:#555;margin:4px 0 0;"></div></div>
@@ -4638,7 +4653,7 @@ async function mfgTab(which){
       <div id="pr-editbox"></div>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>Batch no.</th><th>SKU</th><th class="amount">Cases</th><th>Materials consumed</th><th>QC</th><th>Entered by</th>${isDir()?'<th></th>':''}</tr></thead><tbody>
       ${(batches||[]).map(b=>`<tr><td>${b.production_date}</td><td>${batchLabel(b)}</td><td>${esc(b.sku?.sku_code)}</td><td class="amount">${b.cases}</td>` +
-        `<td style="font-size:12px;">${(rmBy[b.id]||[]).map(l=>esc(l.item?.code||'?')+' × '+Number(l.qty)+' '+(l.item?.unit||'')).join(', ')||'—'}</td>` +
+        `<td style="font-size:12px;">${(b.blend_tank && Number(b.blend_litres) > 0 ? '<span style="color:#1f4e79;font-weight:600;">🧴 ' + esc(tankLabel(b.blend_tank)) + ' · ' + Number(b.blend_litres) + ' L blend</span>' + ((rmBy[b.id]||[]).length ? '<br>' : '') : '')}${(rmBy[b.id]||[]).map(l=>esc(l.item?.code||'?')+' × '+Number(l.qty)+' '+(l.item?.unit||'')).join(', ')||(b.blend_tank && Number(b.blend_litres) > 0 ? '' : '—')}</td>` +
         `<td><span class="pill ${b.qc_status==='PASSED'?'DELIVERED':(b.qc_status==='FAILED'?'CANCELLED':'RECEIVED')}">${b.qc_status}</span></td>` +
         `<td style="font-size:11.5px;color:#555;">${esc(userNameOf(b.created_by))}<br><span style="color:#999">${String(b.created_at||'').slice(0,10)}</span></td>` +
         (isDir() ? `<td style="white-space:nowrap"><button class="mini" onclick="prodRepEdit('${b.id}')">✏️ Edit</button> ${dirDelBtn('mfg','batches', b.id, b.batch_no, "mfgTab('report')")}</td>` : '') + `</tr>`).join('')
@@ -4654,7 +4669,7 @@ async function mfgTab(which){
         (isDir() ? `<td style="white-space:nowrap"><button class="mini" onclick="blendEdit('${b.id}')">✏️ Edit</button> ${dirDelBtn('mfg','blends', b.id, b.blend_no, "mfgTab('report')")}</td>` : '') + `</tr>`).join('')
         || `<tr><td colspan="${isDir()?8:7}" style="color:#777">No blend recorded yet.</td></tr>`}
       </tbody></table></div>
-      ${(blends||[]).length ? `<p style="font-size:11.5px;color:#777;margin-top:6px;">Tank-wise, these entries: ${['TANK1','TANK2','TANK3'].map(t=>tankLabel(t)+' '+(blends||[]).filter(b=>b.tank===t).reduce((x,b)=>x+Number(b.litres||0),0)+' L').join(' · ')} (blends shown here only).</p>` : ''}`;
+      <p style="font-size:11.5px;color:#777;margin-top:6px;">In the tanks now (all blends in − all blend drawn by case-wise production): ${['TANK1','TANK2','TANK3'].map(t=>'<b>'+tankLabel(t)+'</b> '+tankNow(t)+' L' + (tankBal[t] ? ' (blended ' + Number(tankBal[t].blended) + ' − drawn ' + Number(tankBal[t].drawn) + ')' : '')).join(' · ')}.</p>`;
     prodRepRender(); blendRender(); rmShowFull('pr-item','pr-item-full'); rmShowFull('bl-item','bl-item-full');
     return;
   }
@@ -5236,9 +5251,9 @@ async function ptMonthReport(m){
       <tr style="font-weight:700;background:#f3eee0;"><td colspan="2">Total · ${esc(ptMonthName(m))}</td><td class="amount">${inr0(rows.reduce((s,r)=>s+Number(r.target_cases||0),0))}</td><td></td><td class="amount">${inr0(tgt)}</td><td class="amount">${inr0(rows.reduce((s,r)=>s+Number(r.produced_cases||0),0))}</td><td></td><td class="amount">${inr0(ach)}</td><td class="amount">${tgt-ach>0?'short '+inr0(tgt-ach):(tgt-ach<0?'excess '+inr0(ach-tgt):'—')}</td><td></td><td class="amount">${pct}%</td></tr>
     </tbody></table>
     <h3 style="font-size:14px;margin:14px 0 6px;">Production recorded in ${esc(ptMonthName(m))} — batch book</h3>
-    <table><thead><tr><th>Date</th><th>Product batch no.</th><th>Record</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th>QC</th><th>Entered by</th></tr></thead><tbody>
-      ${(batches||[]).map(b => `<tr><td>${b.production_date}</td><td><b>${esc(b.product_batch_no||'—')}</b></td><td>${esc(b.batch_no||'')}</td><td>${esc(brandOf(b.sku_id))}</td><td>${esc(skuName(b.sku_id))}</td><td class="amount">${inr0(b.cases)}</td><td>${esc(b.qc_status||'')}</td><td>${esc(typeof userNameOf==='function' ? userNameOf(b.created_by) : '')}</td></tr>`).join('') || '<tr><td colspan="8">No production was recorded in this month.</td></tr>'}
-      ${(batches||[]).length ? `<tr style="font-weight:700;background:#f3eee0;"><td colspan="5">Total cases (QC passed / pending)</td><td class="amount">${inr0(prodM)}</td><td colspan="2"></td></tr>` : ''}
+    <table><thead><tr><th>Date</th><th>Product batch no.</th><th>Record</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th>Blend drawn (tank · L)</th><th>QC</th><th>Entered by</th></tr></thead><tbody>
+      ${(batches||[]).map(b => `<tr><td>${b.production_date}</td><td><b>${esc(b.product_batch_no||'—')}</b></td><td>${esc(b.batch_no||'')}</td><td>${esc(brandOf(b.sku_id))}</td><td>${esc(skuName(b.sku_id))}</td><td class="amount">${inr0(b.cases)}</td><td>${b.blend_tank && Number(b.blend_litres)>0 ? esc(tankLabel(b.blend_tank)) + ' · ' + inr0(b.blend_litres) + ' L' : '—'}</td><td>${esc(b.qc_status||'')}</td><td>${esc(typeof userNameOf==='function' ? userNameOf(b.created_by) : '')}</td></tr>`).join('') || '<tr><td colspan="9">No production was recorded in this month.</td></tr>'}
+      ${(batches||[]).length ? `<tr style="font-weight:700;background:#f3eee0;"><td colspan="5">Total cases (QC passed / pending)</td><td class="amount">${inr0(prodM)}</td><td>${['TANK1','TANK2','TANK3'].map(t => { const l = (batches||[]).filter(b=>b.blend_tank===t).reduce((x,b)=>x+Number(b.blend_litres||0),0); return l ? tankLabel(t) + ' ' + inr0(l) + ' L' : ''; }).filter(Boolean).join(' · ') || '—'}</td><td colspan="2"></td></tr>` : ''}
     </tbody></table>
     <h3 style="font-size:14px;margin:14px 0 6px;">SKU-wise production in the month</h3>
     <table style="max-width:620px;"><thead><tr><th>SKU</th><th class="amount">Batches</th><th class="amount">Cases produced</th></tr></thead><tbody>
@@ -5413,6 +5428,12 @@ function prodRepEdit(id){
         <div class="row2c"><div><label>Cases *</label><input type="number" id="pe-cases" min="1" value="${Number(b.cases)}"></div>
         <div><label>Date</label><input type="date" id="pe-date" value="${b.production_date}"></div></div></div>
       <div style="margin-top:8px;"><label>Batch number of the product</label><input type="text" id="pe-batchno" value="${esc(b.product_batch_no||'')}" placeholder="e.g. MMC/FR/1026-01"></div>
+      <div style="margin-top:10px;padding:8px 10px;background:#f4f7fb;border-radius:8px;">
+        <div style="font-weight:600;font-size:12.5px;margin-bottom:4px;">🧴 Blend used for bottling <span style="font-weight:normal;color:#777;font-size:11px;">— this report's own litres count as available again while editing</span></div>
+        <div class="row2c"><div><label>Blend drawn from tank</label><select id="pe-tank" onchange="prTankHint('pe')"><option value="">— none / not from a tank —</option>${['TANK1','TANK2','TANK3'].map(t=>{ const tb = (window.__prTankBal||{})[t]; const avail = (tb ? Number(tb.balance) : 0) + (b.blend_tank===t ? Number(b.blend_litres||0) : 0); return `<option value="${t}" data-avail="${avail}" ${b.blend_tank===t?'selected':''}>${tankLabel(t)} — ${avail} L available</option>`; }).join('')}</select></div>
+          <div><label>Blend consumed (litres)</label><input type="number" id="pe-blend-litres" min="0" step="any" value="${b.blend_litres != null ? Number(b.blend_litres) : ''}" placeholder="litres" oninput="prTankHint('pe')"></div></div>
+        <div id="pe-tank-hint" style="font-size:11.5px;color:#555;margin-top:4px;"></div>
+      </div>
       <h4 class="sec" style="margin-top:12px;">Raw material consumed</h4>
       <div><label>Material (at MMC)</label><select id="pe-item" style="width:100%;max-width:100%;" onchange="rmShowFull('pe-item','pe-item-full')">${iopts || '<option value="">— nothing at MMC —</option>'}</select>
         <div id="pe-item-full" style="font-size:11.5px;color:#555;margin:4px 0 0;"></div></div>
@@ -5423,8 +5444,29 @@ function prodRepEdit(id){
         <button class="btn gold sm" onclick="prodRepEditSave('${b.id}')">Save changes</button>
         <button class="btn ghost sm" onclick="$('pr-editbox').innerHTML=''">Cancel</button></div>
       <div id="pe-msg"></div></div>`;
-  prodRepEditRender(); rmShowFull('pe-item','pe-item-full');
+  prodRepEditRender(); rmShowFull('pe-item','pe-item-full'); prTankHint('pe');
   box.scrollIntoView({behavior:'smooth', block:'start'});
+}
+// Blend drawn from a tank on a case-wise report: reads the chosen tank + litres, validates against what the tank holds.
+function prBlendPick(prefix){
+  const sel = $(prefix + '-tank'), inp = $(prefix + '-blend-litres');
+  const tank = sel ? sel.value : ''; const litres = Number(inp ? inp.value : 0) || 0;
+  let avail = null;
+  if (tank && sel){ const o = sel.options[sel.selectedIndex]; avail = o && o.dataset.avail != null ? Number(o.dataset.avail) : (((window.__prTankBal||{})[tank] ? Number(window.__prTankBal[tank].balance) : 0)); }
+  let err = '';
+  if (litres < 0) err = 'Blend consumed cannot be negative.';
+  else if (litres > 0 && !tank) err = 'Choose the tank the blend was drawn from.';
+  else if (litres > 0 && avail != null && litres > avail) err = 'Only ' + avail + ' L of blend is in ' + tankLabel(tank) + ' — cannot draw ' + litres + ' L.';
+  return { tank: litres > 0 ? tank : null, litres: litres > 0 ? litres : null, avail, err };
+}
+function prTankHint(prefix){
+  prefix = prefix || 'pr';
+  const h = $(prefix + '-tank-hint'); if (!h) return;
+  const p = prBlendPick(prefix);
+  if (p.err){ h.innerHTML = '<span style="color:#b3261e;font-weight:600;">' + esc(p.err) + '</span>'; return; }
+  if (p.tank && p.litres) h.innerHTML = esc(tankLabel(p.tank)) + ': ' + p.avail + ' L − ' + p.litres + ' L = <b>' + (Math.round((p.avail - p.litres) * 1000) / 1000) + ' L</b> left after this report.';
+  else if (p.tank) h.innerHTML = esc(tankLabel(p.tank)) + ' holds ' + p.avail + ' L — enter the litres consumed.';
+  else h.innerHTML = '';
 }
 function prodRepEditRender(){
   const out = $('pe-lines'); if (!out) return;
@@ -5444,8 +5486,10 @@ async function prodRepEditSave(id){
   const cases = Number($('pe-cases').value);
   if (!(cases > 0)){ say('pe-msg','Enter the cases produced.',false); return; }
   if (prEditLines.some(l => !(l.qty > 0))){ say('pe-msg','Every material line needs a quantity above zero (remove the line if nothing was used).',false); return; }
-  const { error } = await db.schema('mfg').rpc('batch_edit', { p_batch: id, p_sku: $('pe-sku').value, p_cases: cases, p_date: $('pe-date').value || null,
-    p_rm: prEditLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty })), p_batch_no: ($('pe-batchno')?.value || '').trim() || null });
+  const bp = prBlendPick('pe'); if (bp.err){ say('pe-msg', bp.err, false); return; }
+  const { error } = await db.schema('mfg').rpc('batch_edit_v2', { p_batch: id, p_sku: $('pe-sku').value, p_cases: cases, p_date: $('pe-date').value || null,
+    p_rm: prEditLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty })), p_batch_no: ($('pe-batchno')?.value || '').trim() || null,
+    p_tank: bp.tank, p_blend_litres: bp.litres });
   if (error){ say('pe-msg','Could not save: '+error.message,false); return; }
   prEditLines = [];
   await mfgTab('report');
@@ -5559,16 +5603,20 @@ function prodRepAddLine(){
 async function prodRepSave(){
   const cases = Number($('pr-cases').value);
   if (!(cases > 0)){ say('pr-msg','Enter the cases produced.',false); return; }
-  const { data: batchId, error } = await db.schema('mfg').rpc('create_batch', {
+  const bp = prBlendPick('pr'); if (bp.err){ say('pr-msg', bp.err, false); return; }
+  const { data: batchId, error } = await db.schema('mfg').rpc('create_batch_v2', {
     p_sku: $('pr-sku').value, p_cases: cases, p_date: $('pr-date').value || null,
-    p_rm: prodRepLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty })), p_batch_no: ($('pr-batchno')?.value || '').trim() || null });
+    p_rm: prodRepLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty })), p_batch_no: ($('pr-batchno')?.value || '').trim() || null,
+    p_tank: bp.tank, p_blend_litres: bp.litres });
   if (error){ say('pr-msg','Could not record: '+error.message,false); return; }
+  window.__prLastBlend = bp.tank && bp.litres ? tankLabel(bp.tank) + ' − ' + bp.litres + ' L' : '';
   if ($('pr-qc').checked && batchId){
     const { error: qErr } = await db.schema('mfg').rpc('qc_set', { p_batch: batchId, p_status: 'PASSED', p_remarks: 'Passed at production report entry' });
     if (qErr){ say('pr-msg','Production recorded and material consumed — but QC could not be marked passed ('+qErr.message+'). The cases will enter FG stock once QC passes the batch in Batches & QC.',false); prodRepLines=[]; return; }
   }
   prodRepLines = [];
-  mfgTab('report');
+  await mfgTab('report');
+  if (window.__prLastBlend){ const m = $('pr-msg'); if (m) say('pr-msg', 'Production recorded — blend drawn: ' + window.__prLastBlend + ' (see the tank balance below and on the FG stock tab).', true); window.__prLastBlend = ''; }
 }
 async function createBatch(){
   const cases = Number($('nb-cases').value);
