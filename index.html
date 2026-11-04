@@ -7350,15 +7350,15 @@ async function purchaseTab(t){
              Number(m.balance||0)!==0 || Number(m.consumed||0)!==0;});
     B.innerHTML = `
       <h4 class="sec">Raw material inventory</h4>
-      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>.':''}</p>
-      <div id="rm-asset-box"></div>
+      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>. <b>✏️ Edit</b> corrects a material’s code or name — every section (purchase orders, material requests, receipts, MMC custody, production reports, targets) shows the corrected name, as they all refer to the same material record.':''}</p>
+      <div id="rm-asset-box"></div><div id="rm-name-box"></div>
       <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th>${anyMoved?'<th class="amount">Moved to assets</th>':''}<th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th>${canMove?'<th></th>':''}</tr></thead><tbody>
       ${live.map(r=>{const m=mmcBy[r.rm_item_id]||{};return `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td>${r.unit}</td>` +
         `<td class="amount">${Number(r.received)}</td><td class="amount">${Number(r.issued_to_mmc)}</td>` +
         (anyMoved ? `<td class="amount">${Number(r.moved_to_asset||0) ? '<span style="color:#1a5fb4" title="Moved into the asset register">'+Number(r.moved_to_asset)+'</span>' : '0'}</td>` : '') +
         `<td class="amount" style="font-weight:700;color:${Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance)}</td>` +
         `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td>` +
-        (canMove ? `<td>${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="8" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
+        (canMove ? `<td style="white-space:nowrap"><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name — reflects in every section">✏️ Edit</button> ${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="8" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
       </tbody></table></div>`;
     return;
   }
@@ -7892,6 +7892,30 @@ async function grnDelGo(inspId, orphKey){
   const ac = window.__grnDelAcct; window.__grnDelAcct = null;
   apprModalClose(); alert('Deleted. ' + data + '.' + (ac && Number(ac.lot_value) ? '\n\nAccounts: ₹ ' + inr(ac.lot_value) + ' of ' + (ac.vendor||'the vendor') + '’s dues (as per material received) has been removed.' : ''));
   purchaseTab('grn');
+}
+// ---- RM store: edit a material's code / name. Every table keeps the material's id, so the corrected name shows everywhere. ----
+function rmNameEdit(itemId){
+  const r = (window.__rmStoreRows||{})[itemId]; if (!r) return;
+  const box = $('rm-name-box'); if (!box) return;
+  box.innerHTML = `<div class="card" style="margin:0 0 14px;max-width:640px;border:1px solid #b8860b;"><h3 style="font-size:15px;">✏️ Edit material — ${esc(r.code)}</h3>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Correct the code or the name. Purchase orders, material requests, receipts, the company store, MMC custody, production and blend reports and the targets report all show the corrected name at once — quantities, costs and history stay exactly as they are. The unit (${esc(r.unit||'')}) cannot be changed here because stock is already counted in it.</p>
+      <div class="row2c"><div><label>Code *</label><input type="text" id="rn-code" value="${esc(r.code||'')}" maxlength="40" style="text-transform:uppercase"></div>
+        <div><label>Unit</label><input type="text" value="${esc(r.unit||'')}" disabled></div></div>
+      <div style="margin-top:8px;"><label>Material name *</label><input type="text" id="rn-name" value="${esc(r.name||'')}" maxlength="200"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btn gold sm" onclick="rmNameSave('${itemId}')">Save name</button>
+        <button class="btn ghost sm" onclick="$('rm-name-box').innerHTML=''">Cancel</button></div>
+      <div id="rn-msg"></div></div>`;
+  box.scrollIntoView({behavior:'smooth', block:'start'}); const n = $('rn-name'); if (n) n.focus();
+}
+async function rmNameSave(itemId){
+  const code = ($('rn-code').value||'').trim().toUpperCase(), name = ($('rn-name').value||'').trim();
+  if (!code || !name){ say('rn-msg','Code and name are both required.',false); return; }
+  const { error } = await db.schema('mfg').rpc('rm_item_edit', { p_item: itemId, p_code: code, p_name: name });
+  if (error){ say('rn-msg','Could not save: '+error.message,false); return; }
+  rmItems = [];   // cached material list — reloaded by every tab that needs it, so the new name shows everywhere
+  await purchaseTab('store');
+  const m = $('rm-name-box'); if (m) m.innerHTML = `<div class="msg ok">Material saved as <b>${esc(code)}</b> — ${esc(name)}. The corrected name now shows in every section.</div>`;
 }
 // ---- RM store → asset register: take material out of the store and book it as a company asset ----
 async function rmAssetForm(itemId){
