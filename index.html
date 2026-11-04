@@ -7913,7 +7913,8 @@ async function rmNameSave(itemId){
   if (!code || !name){ say('rn-msg','Code and name are both required.',false); return; }
   const { error } = await db.schema('mfg').rpc('rm_item_edit', { p_item: itemId, p_code: code, p_name: name });
   if (error){ say('rn-msg','Could not save: '+error.message,false); return; }
-  rmItems = [];   // cached material list — reloaded by every tab that needs it, so the new name shows everywhere
+  // refresh the cached material list (shared by New PO, Material requests, MMC's tabs and the production report) so the new name shows everywhere at once
+  try { const { data: ri } = await db.schema('mfg').from('rm_items').select('*').eq('is_active', true).order('code'); rmItems = ri || []; } catch(e){ rmItems = []; }
   await purchaseTab('store');
   const m = $('rm-name-box'); if (m) m.innerHTML = `<div class="msg ok">Material saved as <b>${esc(code)}</b> — ${esc(name)}. The corrected name now shows in every section.</div>`;
 }
