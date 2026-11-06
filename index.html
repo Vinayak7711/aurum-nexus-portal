@@ -1968,8 +1968,10 @@ async function openOrderDetail(id){
     try { const { data: sp, error: se } = await S.from('payments').select('amount, mode').eq('order_id', id).in('mode', ['SCHEME','SCHEME_REIMB']);
           if (se) schemeKnown = false; else schemeDed = (sp||[]).reduce((s,p)=>s+Number(p.amount||0),0); } catch(e){ schemeKnown = false; }
     const netAfterScheme = Math.max(0, T.total - schemeDed);
-    const tcsRateNow = Number(window.__payTerms?.tcsRate ?? 2), tcsNow = Math.round(netAfterScheme * tcsRateNow) / 100;
-    window.__odScheme = { schemeDed, schemeKnown };
+    // breakage discount: the amount entered by hand on the approved order, deducted from the final bill
+    const breakage = Math.max(0, Number(o.breakage_discount||0)), netFinal = Math.max(0, netAfterScheme - breakage);
+    const tcsRateNow = Number(window.__payTerms?.tcsRate ?? 2), tcsNow = Math.round(netFinal * tcsRateNow) / 100;
+    window.__odScheme = { schemeDed, schemeKnown, breakage, netFinal };
     tb.insertAdjacentHTML('beforeend',
       `<tr style="background:#faf6ea;font-weight:700;"><td>Total</td><td class="amount">${totCases}</td><td></td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td></tr>` +
       `<tr><td colspan="8" style="padding:10px 12px;">
@@ -1983,9 +1985,14 @@ async function openOrderDetail(id){
           <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border-left:4px solid #7a5c10;"><div style="font-size:11px;color:#777">Less: scheme deduction</div><div style="font-size:16px;font-weight:700;color:${schemeDed>0.005?'#b3261e':'#555'}">${schemeKnown ? '− ₹ '+inr(schemeDed) : '—'}</div><div style="font-size:10.5px;color:#777">${schemeDed>0.005 ? "last month's scheme settlement, deducted on this bill" : (schemeKnown ? 'no scheme settlement pending on this bill' : 'not visible to your role')}</div></div>
           <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border:2px solid #7a5c10;background:#fbf7ec;"><div style="font-size:11px;color:#777">Net payable after scheme deduction</div><div style="font-size:16px;font-weight:700;">₹ ${inr(netAfterScheme)}</div></div>
         </div>
+        ${(o.status !== 'RECEIVED' && o.status !== 'CANCELLED') ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+          <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border-left:4px solid #b26a00;"><div style="font-size:11px;color:#777">Less: breakage discount</div><div style="font-size:16px;font-weight:700;color:${breakage>0.005?'#b3261e':'#555'}">− ₹ ${inr(breakage)}</div><div style="font-size:10.5px;color:#777">${breakage>0.005 ? 'given by hand on this order' + (o.breakage_note ? ' · ' + esc(o.breakage_note) : '') : 'no breakage discount on this bill'}</div></div>
+          <div class="card" style="flex:1;min-width:150px;text-align:center;padding:10px;border:2px solid #b26a00;background:#fff8ee;"><div style="font-size:11px;color:#777">Final bill — net payable after all deductions</div><div style="font-size:16px;font-weight:700;">₹ ${inr(netFinal)}</div></div>
+        </div>` : ''}
         ${anyPreview ? '<p style="font-size:11.5px;color:#777;margin:8px 0 0;">Figures come live from Brands &amp; SKUs (basic price, excise duty × bottles, vend fees, VAT × bottles) and are stamped on the order at approval.</p>' : ''}
         <p style="font-size:11.5px;color:#555;margin:8px 0 0;">🎁 <b>Scheme deduction:</b> the distributor's scheme claims settled for the previous month are deducted on the first bill of each month, after the order total incl. VAT and before TCS.${schemeDed>0.005 ? ' On this bill: <b>₹ '+inr(schemeDed)+'</b>.' : ' Nothing is deducted on this bill (₹ 0.00).'}</p>
-        <p style="font-size:11.5px;color:#555;margin:6px 0 0;">TCS ${tcsRateNow}% on ₹ ${inr(netAfterScheme)} (order total incl. VAT${schemeDed>0.005?' less the scheme deduction':''}): <b>₹ ${inr(tcsNow)}</b> — payable by the distributor with the month's TCS by the ${(window.__payTerms?.tcsDay ?? 5)}th of the next month. <b>Payable incl. TCS: ₹ ${inr(netAfterScheme + tcsNow)}</b>.</p>
+        ${breakage>0.005 ? `<p style="font-size:11.5px;color:#555;margin:6px 0 0;">📦 <b>Breakage discount:</b> ₹ ${inr(breakage)} deducted from the final bill${o.breakage_note?' — '+esc(o.breakage_note):''}${o.breakage_set_at?' (entered '+String(o.breakage_set_at).slice(0,10)+')':''}.</p>` : ''}
+        <p style="font-size:11.5px;color:#555;margin:6px 0 0;">TCS ${tcsRateNow}% on ₹ ${inr(netFinal)} (order total incl. VAT${schemeDed>0.005?' less the scheme deduction':''}${breakage>0.005?' less the breakage discount':''}): <b>₹ ${inr(tcsNow)}</b> — payable by the distributor with the month's TCS by the ${(window.__payTerms?.tcsDay ?? 5)}th of the next month. <b>Payable incl. TCS: ₹ ${inr(netFinal + tcsNow)}</b>.</p>
         ${o.excise_paid_amount != null ? `<p style="font-size:12px;margin:8px 0 0;"><b>Excise duty &amp; vend fees paid by distributor:</b> ₹ ${inr(o.excise_paid_amount)} · ref ${esc(o.excise_paid_ref||'—')} · ${o.excise_paid_date||''}${o.excise_paid_note?' · '+esc(o.excise_paid_note):''}</p>` : ''}
         <div id="od-balance" style="font-size:12px;margin:6px 0 0;"></div>
       </td></tr>`);
@@ -2029,6 +2036,17 @@ async function openOrderDetail(id){
     if (o.status!=='RECEIVED' && o.status!=='CANCELLED'){
       btn('🖨 Order report / PDF','ghost', ()=>orderReport(id));
     }
+    // Breakage discount — a manual amount deducted from the final bill; entered on the approved order before dispatch (a Director may still correct it after dispatch)
+    if (o.status==='APPROVED' || ((o.status==='DISPATCHED' || o.status==='DELIVERED') && isDir())){
+      const br = Number(o.breakage_discount||0), sc = window.__odScheme || {}; const T0 = (window.__odCalc||{}).T || {};
+      A.insertAdjacentHTML('beforeend', `<div class="card" style="max-width:720px;padding:12px;margin:6px 0 10px;border-left:4px solid #b26a00;">
+        <h4 class="sec" style="margin:0 0 4px;">📦 Breakage discount — deducted from the final bill</h4>
+        <p style="font-size:12px;color:#777;margin:0 0 8px;">Enter the amount to be deducted for breakage${o.status==='APPROVED' ? ' before dispatching' : ''}. It comes off the order total incl. VAT after the scheme deduction: ₹ ${inr(Math.max(0, Number(T0.total||0) - Number(sc.schemeDed||0)))} − breakage = <b>final bill</b>; TCS is then worked on the final bill. Leave 0 for no breakage.${br>0.005 ? ' Currently <b>₹ '+inr(br)+'</b>'+(o.breakage_set_at?' (entered '+String(o.breakage_set_at).slice(0,10)+')':'')+'.' : ''}</p>
+        <div class="row2c"><div><label>Breakage discount ₹</label><input type="number" id="od-brk-amt" min="0" step="any" value="${br>0.005?br.toFixed(2):''}" placeholder="0.00"></div>
+          <div><label>Note (optional)</label><input type="text" id="od-brk-note" value="${esc(o.breakage_note||'')}" placeholder="e.g. 3 cases broken in transit"></div></div>
+        <div style="margin-top:8px;"><button class="btn sm ghost" style="border-color:#b26a00;color:#7a4a00;font-weight:600;" onclick="odBreakageSave('${id}')">${br>0.005?'Update breakage discount':'Apply breakage discount'}</button>${br>0.005?` <button class="btn sm ghost" onclick="$('od-brk-amt').value='0';odBreakageSave('${id}')">Remove</button>`:''}</div>
+      </div>`);
+    }
     if (o.status==='APPROVED'){
       A.insertAdjacentHTML('beforeend', `<p style="font-size:12px;color:#1a7f37;margin:6px 0 8px;">✔ Approved${o.approved_at?' on '+String(o.approved_at).slice(0,10):''} — rates stamped and the distributor's excise duty &amp; vend fees payment recorded. <b>Ready for dispatch:</b> enter the invoice number and press Dispatch.</p>`);
       A.insertAdjacentHTML('beforeend','<input type="text" id="od-inv" placeholder="Invoice no." style="width:180px;display:inline-block;margin-right:8px;">');
@@ -2053,7 +2071,7 @@ async function openOrderDetail(id){
     if ($('od-balance') && bd){
       $('od-balance').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
         <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #c9a227;"><div style="font-size:11px;color:#777">Basic — distributor pays MMC, MMC pays Aurum · ${bd.credit} days credit</div>
-          <div>Basic ₹ ${inr(bd.basic)}${bd.basicMmc?' − paid to MMC ₹ '+inr(bd.basicMmc):''}${bd.basicDirect?' − paid direct to Aurum ₹ '+inr(bd.basicDirect):''}${bd.disc?' − cash discount ₹ '+inr(bd.disc):''}${bd.otherDisc?' − other discount ₹ '+inr(bd.otherDisc):''}${bd.scheme?' − scheme ₹ '+inr(bd.scheme):''}${bd.schReimb?' − scheme reimbursement adjusted ₹ '+inr(bd.schReimb):''} = <b style="color:${bd.basicLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.basicLeft)}</b></div>
+          <div>Basic ₹ ${inr(bd.basic)}${bd.basicMmc?' − paid to MMC ₹ '+inr(bd.basicMmc):''}${bd.basicDirect?' − paid direct to Aurum ₹ '+inr(bd.basicDirect):''}${bd.disc?' − cash discount ₹ '+inr(bd.disc):''}${bd.otherDisc?' − other discount ₹ '+inr(bd.otherDisc):''}${bd.scheme?' − scheme ₹ '+inr(bd.scheme):''}${bd.schReimb?' − scheme reimbursement adjusted ₹ '+inr(bd.schReimb):''}${bd.breakage?' − breakage discount ₹ '+inr(bd.breakage):''} = <b style="color:${bd.basicLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.basicLeft)}</b></div>
           <div style="font-size:11.5px;color:${bd.basicOver?'#b3261e':'#555'}">Due by <b>${bd.basicDue}</b>${bd.provisional?' (from approval date — reset on dispatch)':''}${bd.basicOver?' · overdue '+bd.basicLate+' days':''}</div>
           ${bd.discNow>0.005?`<div style="font-size:11.5px;color:#0b57d0">Early payment: ${bd.pct}% cash discount if paid by ${bd.discUntil} → pay ₹ ${inr(bd.basicLeft-bd.discNow)} to settle</div>`:''}</div>
         <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #1a7f37;"><div style="font-size:11px;color:#777">VAT — paid by the distributor to MMC</div>
@@ -2061,7 +2079,7 @@ async function openOrderDetail(id){
           <div style="font-size:11.5px;color:${bd.vatOver?'#b3261e':'#555'}">Due on <b>${bd.vatDue}</b> (19th of the month after the sale)${bd.vatOver?' · overdue':''}</div></div>
         ${bd.levyLeft>0.005?`<div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #b3261e;"><div style="font-size:11px;color:#777">Excise &amp; vend fees still unpaid (MMC excise a/c)</div><div><b style="color:#b3261e">₹ ${inr(bd.levyLeft)}</b></div></div>`:''}
         <div class="card" style="flex:1;min-width:210px;padding:8px 10px;border-left:4px solid #0b57d0;"><div style="font-size:11px;color:#777">TCS ${bd.tcsRate}% — payable by the distributor, month-wise</div>
-          <div>${bd.tcsRate}% of ₹ ${inr(bd.tcsBase)}${bd.schemeDed>0.005?' <span style="font-size:11px;color:#777">(total incl. VAT ₹ '+inr(T.total)+' − scheme deductions ₹ '+inr(bd.schemeDed)+')':' <span style="font-size:11px;color:#777">(total incl. VAT)'}</span> = ₹ ${inr(bd.tcs)}${bd.tcsPaid?' − paid ₹ '+inr(bd.tcsPaid):''} = <b style="color:${bd.tcsLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.tcsLeft)}</b></div>
+          <div>${bd.tcsRate}% of ₹ ${inr(bd.tcsBase)}${(bd.schemeDed>0.005||bd.breakage>0.005)?' <span style="font-size:11px;color:#777">(total incl. VAT ₹ '+inr(T.total)+(bd.schemeDed>0.005?' − scheme deductions ₹ '+inr(bd.schemeDed):'')+(bd.breakage>0.005?' − breakage discount ₹ '+inr(bd.breakage):'')+')':' <span style="font-size:11px;color:#777">(total incl. VAT)'}</span> = ₹ ${inr(bd.tcs)}${bd.tcsPaid?' − paid ₹ '+inr(bd.tcsPaid):''} = <b style="color:${bd.tcsLeft>0.005?'#b3261e':'#1a7f37'}">₹ ${inr(bd.tcsLeft)}</b></div>
           <div style="font-size:11.5px;color:${bd.tcsOver?'#b3261e':'#555'}">Due on <b>${bd.tcsDue}</b> (${PT.tcsDay}th of the month after the sale — the whole month's TCS together)${bd.tcsOver?' · overdue':''}</div></div>
       </div>
       ${bd.schReimb>0.005 ? `<p style="font-size:11.5px;color:#7a5c10;margin:6px 0 0;">🎁 Scheme claims of earlier months deducted on this bill: ₹ ${inr(bd.schReimb)} (first bill of the month).</p>` : ''}`;
@@ -2076,6 +2094,15 @@ async function openOrderDetail(id){
     if (e){ say('od-msg', e.message, false); return; }
     openOrderDetail(oid);
   }
+}
+// Save the breakage discount entered on an approved order; the detail re-renders with the final bill and TCS recomputed.
+async function odBreakageSave(orderId){
+  const amt = Number(($('od-brk-amt')||{}).value || 0), note = (($('od-brk-note')||{}).value || '').trim();
+  if (!(amt >= 0)){ say('od-msg','Enter the breakage discount amount (0 for none).',false); return; }
+  const { error } = await db.schema('sales').rpc('set_breakage_discount', { p_order: orderId, p_amount: amt, p_note: note || null });
+  if (error){ say('od-msg', error.message, false); return; }
+  await openOrderDetail(orderId);
+  say('od-msg', amt > 0.005 ? 'Breakage discount of ₹ ' + inr(amt) + ' applied — deducted from the final bill.' : 'Breakage discount removed.', true);
 }
 /* ============ DISTRIBUTOR PAYMENT TERMS ======================================
    Excise duty + vend fees → MMC excise account, before approval.
@@ -2118,7 +2145,9 @@ function orderTerms(o, T, pays, PT, partyCredit, tcsPays){
   const credit = Number(partyCredit) > 0 ? Number(partyCredit) : PT.credit;
   const basicDue = addDaysStr(sale, credit), vatDue = vatDueStr(sale, PT.vatDay);
   const basic = Number(T.basic||0), vat = Number(T.vat||0), exc = Number(T.exc||0), wine = Number(T.wine||0);
-  const levyLeft = Math.max(0, exc + wine - levyPaid), vatLeft = vat - vatPaid, basicLeft = basic - basicRecv - disc - otherDisc - scheme - schReimb;
+  // breakage discount: a manual amount given on the approved order, deducted from the final bill (comes off Aurum's basic)
+  const breakage = Math.max(0, Number(o.breakage_discount||0));
+  const levyLeft = Math.max(0, exc + wine - levyPaid), vatLeft = vat - vatPaid, basicLeft = basic - basicRecv - disc - otherDisc - scheme - schReimb - breakage;
   const days = Math.max(0, daysBetweenStr(sale, today));
   const slab = basicLeft > 0.005 ? discSlab(days, PT.slabs) : null;
   const pct = slab ? Number(slab.pct) : 0, discNow = slab ? Math.round(basicLeft * pct) / 100 : 0;
@@ -2126,11 +2155,12 @@ function orderTerms(o, T, pays, PT, partyCredit, tcsPays){
   const basicOver = basicLeft > 0.005 && today > basicDue, vatOver = vatLeft > 0.005 && today > vatDue;
   // TCS: % of the order total incl. VAT, after the scheme deductions on the bill; the month's TCS is payable by day N of the next month
   const tcsRate = Number(PT.tcsRate ?? 2), total = Number(T.total||0);
-  const tcsBase = Math.max(0, total - scheme - schReimb), tcs = Math.round(tcsBase * tcsRate) / 100;
+  const tcsBase = Math.max(0, total - scheme - schReimb - breakage), tcs = Math.round(tcsBase * tcsRate) / 100;
   const tcsPaid = (tcsPays||[]).reduce((s,p)=>s+Number(p.amount),0), tcsLeft = tcs - tcsPaid;
   const tcsDue = vatDueStr(sale, PT.tcsDay ?? 5), tcsOver = tcsLeft > 0.005 && today > tcsDue;
   return { sale, provisional, credit, basicDue, vatDue, basic, vat, exc, wine, levyPaid, vatPaid, disc, otherDisc, scheme, schReimb, basicRecv, basicMmc, basicDirect,
-           levyLeft, vatLeft, basicLeft, days, pct, discNow, discUntil, basicOver, vatOver,
+           levyLeft, vatLeft, basicLeft, days, pct, discNow, discUntil, basicOver, vatOver, breakage,
+           netBill: Math.max(0, total - scheme - schReimb - breakage),
            tcsRate, tcsBase, tcs, tcsPaid, tcsLeft, tcsDue, tcsOver, schemeDed: scheme + schReimb,
            basicLate: basicOver ? daysBetweenStr(basicDue, today) : 0, balance: basicLeft + vatLeft + levyLeft + tcsLeft };
 }
@@ -2182,8 +2212,10 @@ async function orderReport(id){
       <tr style="font-weight:700;background:#f3eee0;"><td>Order total incl. VAT</td><td class="amount">${inr(T.total)}</td></tr>
       <tr><td>Less: scheme deduction — last month's scheme settlement of this distributor, deducted on the first bill of the month${bd.schemeDed>0.005?'':' (nothing pending on this bill)'}</td><td class="amount">${bd.schemeDed>0.005?'− ':''}${inr(bd.schemeDed)}</td></tr>
       <tr style="font-weight:700;"><td>Net payable after scheme deduction</td><td class="amount">${inr(Math.max(0, T.total - bd.schemeDed))}</td></tr>
+      <tr><td>Less: breakage discount${bd.breakage>0.005 ? (o.breakage_note ? ' — ' + esc(o.breakage_note) : '') : ' (none on this bill)'}</td><td class="amount">${bd.breakage>0.005?'− ':''}${inr(bd.breakage)}</td></tr>
+      <tr style="font-weight:700;"><td>Final bill — net payable after all deductions</td><td class="amount">${inr(bd.netBill)}</td></tr>
       <tr><td>TCS ${bd.tcsRate}% on ₹ ${inr(bd.tcsBase)} · payable by the distributor by ${bd.tcsDue}</td><td class="amount">${inr(bd.tcs)}</td></tr>
-      <tr style="font-weight:700;background:#f3eee0;"><td>Payable incl. TCS</td><td class="amount">${inr(Math.max(0, T.total - bd.schemeDed) + bd.tcs)}</td></tr>
+      <tr style="font-weight:700;background:#f3eee0;"><td>Payable incl. TCS</td><td class="amount">${inr(bd.netBill + bd.tcs)}</td></tr>
     </tbody></table>
     <h3 style="margin-top:14px;">Excise duty &amp; vend fees paid by the distributor (to MMC excise account)</h3>
     <table style="max-width:720px;"><tbody>
@@ -2205,6 +2237,7 @@ async function orderReport(id){
       ${bd.otherDisc ? `<tr><td>Less: other discount</td><td class="amount">− ${inr(bd.otherDisc)}</td></tr>` : ''}
       ${bd.scheme ? `<tr><td>Less: scheme</td><td class="amount">− ${inr(bd.scheme)}</td></tr>` : ''}
       ${bd.schReimb ? `<tr><td>Less: scheme reimbursement adjusted</td><td class="amount">− ${inr(bd.schReimb)}</td></tr>` : ''}
+      ${bd.breakage ? `<tr><td>Less: breakage discount${o.breakage_note ? ' — ' + esc(o.breakage_note) : ''}</td><td class="amount">− ${inr(bd.breakage)}</td></tr>` : ''}
       <tr style="font-weight:700;"><td>Basic balance · due by ${bd.basicDue}</td><td class="amount">${inr(bd.basicLeft)}</td></tr>
       ${bd.discNow>0.005 ? `<tr><td colspan="2" style="font-size:11px;">Early payment: ${bd.pct}% cash discount if paid by ${bd.discUntil} — pay ₹ ${inr(bd.basicLeft-bd.discNow)} to settle.</td></tr>` : ''}
       <tr style="background:#f7f3e8;"><td colspan="2"><b>VAT — payable by the distributor to MMC</b> · due ${bd.vatDue} (19th of the month after the sale)</td></tr>
@@ -2213,7 +2246,7 @@ async function orderReport(id){
       <tr style="font-weight:700;"><td>VAT balance</td><td class="amount">${inr(bd.vatLeft)}</td></tr>
       ${bd.levyLeft>0.005 ? `<tr><td>Excise duty &amp; vend fees still unpaid (MMC excise a/c)</td><td class="amount">${inr(bd.levyLeft)}</td></tr>` : ''}
       <tr style="background:#f7f3e8;"><td colspan="2"><b>TCS ${bd.tcsRate}% — payable by the distributor, month-wise</b> · due ${bd.tcsDue} (${PT.tcsDay}th of the month after the sale)</td></tr>
-      <tr><td>TCS ${bd.tcsRate}% on ₹ ${inr(bd.tcsBase)} (order total incl. VAT${bd.schemeDed>0.005?' less scheme deductions':''})</td><td class="amount">${inr(bd.tcs)}</td></tr>
+      <tr><td>TCS ${bd.tcsRate}% on ₹ ${inr(bd.tcsBase)} (order total incl. VAT${bd.schemeDed>0.005?' less scheme deductions':''}${bd.breakage>0.005?' less breakage discount':''})</td><td class="amount">${inr(bd.tcs)}</td></tr>
       ${bd.tcsPaid ? `<tr><td>Less: TCS paid</td><td class="amount">− ${inr(bd.tcsPaid)}</td></tr>` : ''}
       <tr style="font-weight:700;"><td>TCS balance</td><td class="amount">${inr(bd.tcsLeft)}</td></tr>
       <tr style="font-weight:700;background:#f3eee0;"><td>Balance due (total)</td><td class="amount">${inr(bd.balance)}</td></tr>
@@ -3900,7 +3933,7 @@ async function mmcAccounts(B){
   window.__rcptRefresh = () => ratesTab('cm');
   window.mmcFrom = window.mmcFrom || ''; window.mmcTo = window.mmcTo || ''; window.mmcParty = window.mmcParty || '';
   const PT = await loadPayTerms(true);
-  let qO = S.from('orders').select('id, so_no, order_date, status, invoice_no, approved_at, dispatched_at, excise_paid_amount, excise_paid_ref, excise_paid_date, party_id, party:parties(code,name,credit_days)')
+  let qO = S.from('orders').select('id, so_no, order_date, status, invoice_no, approved_at, dispatched_at, excise_paid_amount, excise_paid_ref, excise_paid_date, breakage_discount, breakage_note, party_id, party:parties(code,name,credit_days)')
     .in('status', ['APPROVED','DISPATCHED','DELIVERED','CLOSED']).order('order_date',{ascending:false}).limit(1000);
   if (window.mmcFrom) qO = qO.gte('order_date', window.mmcFrom);
   if (window.mmcTo) qO = qO.lte('order_date', window.mmcTo);
@@ -3925,7 +3958,7 @@ async function mmcAccounts(B){
     a.T.basic += Number(v.basic_amount ?? v.amount ?? 0); a.T.exc += Number(v.excise_amount||0); a.T.wine += Number(v.wine_fee_amount||0); a.T.vat += Number(v.vat_amount||0); a.T.total += Number(v.amount||0); });
   pays.forEach(p=>{ const a = agg[p.order_id]; if (a) a.pays.push(p); });
   tcsAll.forEach(p=>{ const a = agg[p.order_id]; if (a) a.tcsPays.push(p); });
-  const K = ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','vatPaid','vatLeft','basicRecv','basicMmc','basicDirect','disc','otherDisc','scheme','schReimb','basicLeft','basicOverdue','vatOverdue'];
+  const K = ['cases','basic','exc','wine','vat','total','levyPaid','levyLeft','vatPaid','vatLeft','basicRecv','basicMmc','basicDirect','disc','otherDisc','scheme','schReimb','breakage','basicLeft','basicOverdue','vatOverdue'];
   let rows = Object.values(agg).map(a=>{
     const t = orderTerms(a.o, a.T, a.pays, PT, a.o.party?.credit_days, a.tcsPays);
     return Object.assign(a, t, { total: a.T.total, basicOverdue: t.basicOver ? t.basicLeft : 0, vatOverdue: t.vatOver ? t.vatLeft : 0 });
@@ -3996,7 +4029,7 @@ async function mmcAccounts(B){
     </div>
     <h4 class="sec" style="margin:10px 0 6px;">Basic — distributor pays MMC</h4>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-      ${tile('Basic billed', T.basic)}${tile('Basic paid by distributors to MMC', T.basicMmc, '#0b57d0', T.basicDirect?'+ ₹ '+inr(T.basicDirect)+' paid direct to Aurum':'')}${tile('Discounts &amp; schemes allowed', T.disc + T.otherDisc + T.scheme, '#7a5c10', (T.disc||T.otherDisc||T.scheme)?`cash ₹ ${inr(T.disc)} · other ₹ ${inr(T.otherDisc)} · scheme ₹ ${inr(T.scheme)}`:'')}${tile('Scheme reimbursements adjusted', T.schReimb, '#7a5c10', 'deducted from basic payable')}${tile('Basic still due from distributors', T.basicLeft, red(T.basicLeft))}${tile('Basic overdue (past credit)', T.basicOverdue, T.basicOverdue>0.005?'#b3261e':'#777')}
+      ${tile('Basic billed', T.basic)}${tile('Basic paid by distributors to MMC', T.basicMmc, '#0b57d0', T.basicDirect?'+ ₹ '+inr(T.basicDirect)+' paid direct to Aurum':'')}${tile('Discounts &amp; schemes allowed', T.disc + T.otherDisc + T.scheme, '#7a5c10', (T.disc||T.otherDisc||T.scheme)?`cash ₹ ${inr(T.disc)} · other ₹ ${inr(T.otherDisc)} · scheme ₹ ${inr(T.scheme)}`:'')}${tile('Scheme reimbursements adjusted', T.schReimb, '#7a5c10', 'deducted from basic payable')}${T.breakage>0.005?tile('Breakage discounts given', T.breakage, '#b26a00', 'deducted from the final bills'):''}${tile('Basic still due from distributors', T.basicLeft, red(T.basicLeft))}${tile('Basic overdue (past credit)', T.basicOverdue, T.basicOverdue>0.005?'#b3261e':'#777')}
     </div>
     <h4 class="sec" style="margin:10px 0 6px;">MMC net due — basic received from distributors <span style="font-weight:400;font-size:11.5px;color:#777">(all dates)</span></h4>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
@@ -4017,7 +4050,7 @@ async function mmcAccounts(B){
       <td class="amount">${a.cases}</td><td class="amount">${inr(a.basic)}</td><td class="amount">${inr(a.exc)}</td><td class="amount">${inr(a.wine)}</td><td class="amount">${inr(a.vat)}</td><td class="amount" style="font-weight:600">${inr(a.total)}</td>
       <td class="amount" style="color:#0b57d0">${inr(a.levyPaid)}${a.levyLeft>0.005?'<br><span style="font-size:10.5px;color:#b3261e">short ₹ '+inr(a.levyLeft)+'</span>':''}${a.o.excise_paid_ref?'<br><span style="font-size:10.5px;color:#777">ref '+esc(a.o.excise_paid_ref)+'</span>':''}</td>
       <td style="font-size:12px;white-space:nowrap;">${a.vatPaid?'paid ₹ '+inr(a.vatPaid)+'<br>':''}<b style="color:${red(a.vatLeft)}">due ₹ ${inr(a.vatLeft)}</b><br><span style="color:${a.vatOver?'#b3261e':'#777'}">by ${a.vatDue}${a.vatOver?' · overdue':''}</span></td>
-      <td style="font-size:12px;white-space:nowrap;">${a.basicMmc?'paid to MMC ₹ '+inr(a.basicMmc)+'<br>':''}${a.basicDirect?'direct to Aurum ₹ '+inr(a.basicDirect)+'<br>':''}${a.disc?'disc ₹ '+inr(a.disc)+'<br>':''}${(a.otherDisc||a.scheme)?'other disc / scheme ₹ '+inr(a.otherDisc+a.scheme)+'<br>':''}${a.schReimb?'<span style="color:#7a5c10">scheme reimb. adj. ₹ '+inr(a.schReimb)+'</span><br>':''}<b style="color:${red(a.basicLeft)}">bal ₹ ${inr(a.basicLeft)}</b><br><span style="color:${a.basicOver?'#b3261e':'#777'}">by ${a.basicDue}${a.basicOver?' · '+a.basicLate+' days late':''}</span>${(a.basicLeft>0.005||a.vatLeft>0.005)&&(isDir()||canFinEdit())?`<br><button class="mini" style="margin-top:4px;" onclick="mmcRcptOpen('${a.o.id}')">➕ Receive basic / VAT</button>`:''}</td>
+      <td style="font-size:12px;white-space:nowrap;">${a.basicMmc?'paid to MMC ₹ '+inr(a.basicMmc)+'<br>':''}${a.basicDirect?'direct to Aurum ₹ '+inr(a.basicDirect)+'<br>':''}${a.disc?'disc ₹ '+inr(a.disc)+'<br>':''}${(a.otherDisc||a.scheme)?'other disc / scheme ₹ '+inr(a.otherDisc+a.scheme)+'<br>':''}${a.schReimb?'<span style="color:#7a5c10">scheme reimb. adj. ₹ '+inr(a.schReimb)+'</span><br>':''}${a.breakage?'<span style="color:#b26a00">breakage disc. ₹ '+inr(a.breakage)+'</span><br>':''}<b style="color:${red(a.basicLeft)}">bal ₹ ${inr(a.basicLeft)}</b><br><span style="color:${a.basicOver?'#b3261e':'#777'}">by ${a.basicDue}${a.basicOver?' · '+a.basicLate+' days late':''}</span>${(a.basicLeft>0.005||a.vatLeft>0.005)&&(isDir()||canFinEdit())?`<br><button class="mini" style="margin-top:4px;" onclick="mmcRcptOpen('${a.o.id}')">➕ Receive basic / VAT</button>`:''}</td>
       <td style="font-size:12px;">${a.discNow>0.005?`<span style="color:#0b57d0">${a.pct}% till ${a.discUntil}</span><br>pay ₹ ${inr(a.basicLeft-a.discNow)} (save ₹ ${inr(a.discNow)})`:(a.basicLeft>0.005?'<span style="color:#777">—</span>':'<span style="color:#1a7f37">settled</span>')}</td></tr>`).join('') || '<tr><td colspan="14" style="color:#777">No approved orders in this selection.</td></tr>'}
     ${rows.length?`<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Total</td><td class="amount">${T.cases}</td><td class="amount">${inr(T.basic)}</td><td class="amount">${inr(T.exc)}</td><td class="amount">${inr(T.wine)}</td><td class="amount">${inr(T.vat)}</td><td class="amount">${inr(T.total)}</td><td class="amount">${inr(T.levyPaid)}</td><td style="font-size:12px;">due ₹ ${inr(T.vatLeft)}</td><td style="font-size:12px;">bal ₹ ${inr(T.basicLeft)}</td><td></td></tr>`:''}
     </tbody></table></div>
@@ -4092,7 +4125,7 @@ function mmcRcptCalc(reset){
   }
   const bLate = a.basicLeft > 0.005 && payDate > a.basicDue, vLate = a.vatLeft > 0.005 && payDate > a.vatDue;
   $('mr-info').innerHTML = `<b>${esc(a.o.so_no)}</b> · ${esc(a.o.party?.name||'')} · sale ${a.sale}${a.provisional?' (approval date)':''}<br>
-    <b>Basic</b> billed ₹ ${inr(a.basic)}${(a.basicRecv+a.disc+a.otherDisc+a.scheme+a.schReimb)>0.005?' · already settled ₹ '+inr(a.basicRecv+a.disc+a.otherDisc+a.scheme+a.schReimb)+(a.schReimb?' (incl. scheme reimbursement ₹ '+inr(a.schReimb)+')':''):''} · <b>still due ₹ ${inr(Math.max(0,a.basicLeft))}</b> · due by <b style="color:${bLate?'#b3261e':'inherit'}">${a.basicDue}</b>${bLate?' (late by '+daysBetweenStr(a.basicDue, payDate)+' days)':''}<br>
+    <b>Basic</b> billed ₹ ${inr(a.basic)}${(a.basicRecv+a.disc+a.otherDisc+a.scheme+a.schReimb+(a.breakage||0))>0.005?' · already settled ₹ '+inr(a.basicRecv+a.disc+a.otherDisc+a.scheme+a.schReimb+(a.breakage||0))+(a.schReimb?' (incl. scheme reimbursement ₹ '+inr(a.schReimb)+')':'')+(a.breakage?' (incl. breakage discount ₹ '+inr(a.breakage)+')':''):''} · <b>still due ₹ ${inr(Math.max(0,a.basicLeft))}</b> · due by <b style="color:${bLate?'#b3261e':'inherit'}">${a.basicDue}</b>${bLate?' (late by '+daysBetweenStr(a.basicDue, payDate)+' days)':''}<br>
     <b>VAT</b> ₹ ${inr(a.vat)}${a.vatPaid>0.005?' · already paid ₹ '+inr(a.vatPaid):''} · <b>still due ₹ ${inr(Math.max(0,a.vatLeft))}</b> · due on <b style="color:${vLate?'#b3261e':'inherit'}">${a.vatDue}</b>${vLate?' (late by '+daysBetweenStr(a.vatDue, payDate)+' days)':''}<br>
     Paid ${days} day(s) after the sale → ${slab ? `<span style="color:#0b57d0">cash discount slab ${Number(slab.pct)}% (within ${slab.paid_within_days} days)</span>` : '<span style="color:#777">no cash-discount slab applies</span>'}`;
   $('mr-vat-due').textContent = a.vatLeft > 0.005 ? `(due ₹ ${inr(a.vatLeft)} on ${a.vatDue})` : '(no VAT due)';
@@ -4200,7 +4233,7 @@ let recvRows = [], recvOpen = null, recvTarget = 'rates-body', recvView = 'all';
 async function distLoadRows(){
   const S = db.schema('sales');
   const PT = await loadPayTerms(true);
-  const { data: ords, error } = await S.from('orders').select('id, so_no, order_date, status, invoice_no, approved_at, dispatched_at, excise_paid_amount, excise_paid_ref, excise_paid_date, party_id, party:parties(code,name,credit_days,city)')
+  const { data: ords, error } = await S.from('orders').select('id, so_no, order_date, status, invoice_no, approved_at, dispatched_at, excise_paid_amount, excise_paid_ref, excise_paid_date, breakage_discount, breakage_note, party_id, party:parties(code,name,credit_days,city)')
     .in('status', ['APPROVED','DISPATCHED','DELIVERED','CLOSED']).order('order_date',{ascending:false}).limit(2000);
   if (error) throw error;
   const all = ords || [], ids = all.map(o=>o.id), lines = [], vals = [], pays = [], tcsAll = [];
@@ -4271,7 +4304,7 @@ async function distLedger(B){
   if (ledParty && !P[ledParty]) ledParty = '';
   const sumL = (list, k) => list.reduce((t,a)=>t+Number(a[k]||0),0);
   const pSum = g => { const l = g.list; const billed = sumL(l,'basic')+sumL(l,'vat')+sumL(l,'exc')+sumL(l,'wine')+sumL(l,'tcs');
-    const paid = sumL(l,'basicRecv')+sumL(l,'vatPaid')+sumL(l,'levyPaid')+sumL(l,'tcsPaid'); const ded = sumL(l,'disc')+sumL(l,'otherDisc')+sumL(l,'scheme')+sumL(l,'schReimb');
+    const paid = sumL(l,'basicRecv')+sumL(l,'vatPaid')+sumL(l,'levyPaid')+sumL(l,'tcsPaid'); const ded = sumL(l,'disc')+sumL(l,'otherDisc')+sumL(l,'scheme')+sumL(l,'schReimb')+sumL(l,'breakage');
     return { billed, paid, ded, schReimb: sumL(l,'schReimb'), basicLeft: sumL(l,'basicLeft'), out: l.reduce((t,a)=>t+a.outstanding,0), over: l.reduce((t,a)=>t+a.overdue,0) }; };
   const tile = (l, v, c, sub) => `<div class="card" style="flex:1;min-width:140px;text-align:center;padding:10px;"><div style="font-size:11px;color:#777">${l}</div><div style="font-size:16px;font-weight:700;${c?'color:'+c:''}">₹ ${inr(v||0)}</div>${sub?`<div style="font-size:10.5px;color:#777">${sub}</div>`:''}</div>`;
   const sel = `<div class="card" style="padding:12px;margin-bottom:10px;"><div class="row2c">
