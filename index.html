@@ -7369,11 +7369,16 @@ async function purchaseTab(t){
   }
 
   if (t === 'store'){
-    const [st, mmc] = await Promise.all([
+    const [st, mmc, itm] = await Promise.all([
       G.from('v_rm_store').select('*').order('code'),
-      G.from('v_rm_stock').select('*').order('code')
+      G.from('v_rm_stock').select('*').order('code'),
+      G.from('rm_items').select('id, code, name, rm_category, rm_subcat, units_per_case')
     ]);
     const mmcBy = {}; (mmc.data||[]).forEach(r => mmcBy[r.rm_item_id] = r);
+    const itemBy = {}; (itm.data||[]).forEach(i => itemBy[i.id] = i); window.__rmItemBy = itemBy;
+    // Tentative cases: how many cases of production the material at MMC can make, for case-wise consumables only
+    // (units needed per case: set on the item, else read from the pack size in its code / name — 180 ml → 48, 750 ml → 12, 90 ml → 100)
+    const anyCaseWise = (st.data||[]).some(r => rmIsCaseWise(itemBy[r.rm_item_id]));
     const canMove = isDir() || canFinEdit() || canPurEdit() || canPurApprove();   // Purchases & RM Store editors too
     const anyMoved = (st.data||[]).some(r=>Number(r.moved_to_asset||0)>0);
     window.__rmStoreRows = {}; (st.data||[]).forEach(r=>{ window.__rmStoreRows[r.rm_item_id] = r; });
@@ -7385,14 +7390,16 @@ async function purchaseTab(t){
       <h4 class="sec">Raw material inventory</h4>
       <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>. <b>✏️ Edit</b> corrects a material’s code or name — every section (purchase orders, material requests, receipts, MMC custody, production reports, targets) shows the corrected name, as they all refer to the same material record.':''}</p>
       <div id="rm-asset-box"></div><div id="rm-name-box"></div>
-      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th>${anyMoved?'<th class="amount">Moved to assets</th>':''}<th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th>${canMove?'<th></th>':''}</tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th>${anyMoved?'<th class="amount">Moved to assets</th>':''}<th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th>${anyCaseWise?'<th class="amount" title="Case-wise consumables only: material at MMC ÷ units needed per case">Tentative cases<br><span style="font-weight:normal;font-size:10px;">from MMC custody</span></th>':''}${canMove?'<th></th>':''}</tr></thead><tbody>
       ${live.map(r=>{const m=mmcBy[r.rm_item_id]||{};return `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td>${r.unit}</td>` +
         `<td class="amount">${Number(r.received)}</td><td class="amount">${Number(r.issued_to_mmc)}</td>` +
         (anyMoved ? `<td class="amount">${Number(r.moved_to_asset||0) ? '<span style="color:#1a5fb4" title="Moved into the asset register">'+Number(r.moved_to_asset)+'</span>' : '0'}</td>` : '') +
         `<td class="amount" style="font-weight:700;color:${Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance)}</td>` +
         `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td>` +
-        (canMove ? `<td style="white-space:nowrap"><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name — reflects in every section">✏️ Edit</button> ${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="8" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
-      </tbody></table></div>`;
+        (anyCaseWise ? `<td class="amount">${rmTentativeCell(itemBy[r.rm_item_id], m.balance, canMove)}</td>` : '') +
+        (canMove ? `<td style="white-space:nowrap"><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button> ${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
+      </tbody></table></div>
+      ${anyCaseWise ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">📦 <b>Tentative cases</b> = material at MMC (custody) ÷ units needed for one case, for case-wise consumables only (Raw material tab → Consumables → Case-wise). Units per case come from the pack size in the item’s code / name — <b>180 ml → 48</b>, <b>750 ml → 12</b>, <b>90 ml → 100</b> — unless a figure is set on the item with ✏️ Edit (e.g. 1 carton per case). The figure is indicative: the smallest tentative figure across a line’s materials is what can actually be made.</p>' : ''}`;
     return;
   }
 
@@ -7926,7 +7933,25 @@ async function grnDelGo(inspId, orphKey){
   apprModalClose(); alert('Deleted. ' + data + '.' + (ac && Number(ac.lot_value) ? '\n\nAccounts: ₹ ' + inr(ac.lot_value) + ' of ' + (ac.vendor||'the vendor') + '’s dues (as per material received) has been removed.' : ''));
   purchaseTab('grn');
 }
-// ---- RM store: edit a material's code / name. Every table keeps the material's id, so the corrected name shows everywhere. ----
+// ---- Tentative production cases from a case-wise consumable ----
+// Pack size read from the code / name: 180 ml → 48 units per case, 750 ml → 12, 90 ml → 100 (a figure set on the item wins).
+function rmPerCaseAuto(i){
+  if (!i) return null;
+  const txt = ((i.code||'') + ' ' + (i.name||'')).toUpperCase();
+  const has = n => new RegExp('(^|[^0-9])' + n + '(?![0-9])').test(txt);
+  if (has('180')) return 48; if (has('750')) return 12; if (has('90')) return 100;
+  return null;
+}
+function rmIsCaseWise(i){ return !!i && (i.rm_category||'CONSUMABLE') === 'CONSUMABLE' && i.rm_subcat === 'CASE'; }
+function rmPerCase(i){ if (!i) return { upc: null, auto: false }; const set = Number(i.units_per_case||0); if (set > 0) return { upc: set, auto: false }; const a = rmPerCaseAuto(i); return { upc: a, auto: true }; }
+function rmTentativeCell(i, mmcBal, canEdit){
+  if (!rmIsCaseWise(i)) return '<span style="color:#bbb" title="Not a case-wise consumable">—</span>';
+  const { upc, auto } = rmPerCase(i);
+  if (!upc) return canEdit ? `<a href="#" onclick="rmNameEdit('${i.id}');return false;" style="font-size:11px;color:#b26a00;text-decoration:none;" title="No pack size (180 / 750 / 90) in the name — set the units needed per case">set per case ✎</a>` : '<span style="color:#bbb" title="Units per case not set">—</span>';
+  const bal = Number(mmcBal||0), cases = Math.floor(bal / upc);
+  return `<b style="color:${cases>0?'#1a7f37':'#777'}">${cases.toLocaleString('en-IN')}</b><br><span style="font-size:10.5px;color:#777" title="${bal} at MMC ÷ ${upc} per case">@ ${upc}/case${auto?' (auto)':''}</span>`;
+}
+// ---- RM store: edit a material's code / name / units per case. Every table keeps the material's id, so the corrected name shows everywhere. ----
 function rmNameEdit(itemId){
   const r = (window.__rmStoreRows||{})[itemId]; if (!r) return;
   const box = $('rm-name-box'); if (!box) return;
@@ -7935,6 +7960,9 @@ function rmNameEdit(itemId){
       <div class="row2c"><div><label>Code *</label><input type="text" id="rn-code" value="${esc(r.code||'')}" maxlength="40" style="text-transform:uppercase"></div>
         <div><label>Unit</label><input type="text" value="${esc(r.unit||'')}" disabled></div></div>
       <div style="margin-top:8px;"><label>Material name *</label><input type="text" id="rn-name" value="${esc(r.name||'')}" maxlength="200"></div>
+      ${(() => { const i = (window.__rmItemBy||{})[itemId]; if (!rmIsCaseWise(i)) return '<p style="font-size:11.5px;color:#777;margin:8px 0 0;">Units per case apply to case-wise consumables only — mark the item Case-wise under MMC → Raw material → Consumables to get a tentative-cases figure.</p>';
+        const a = rmPerCaseAuto(i); const set = Number(i.units_per_case||0);
+        return `<div style="margin-top:8px;"><label>Units needed for one case <span style="font-weight:normal;color:#888;font-size:11px;">— for the tentative cases column; leave blank to use the automatic figure${a ? ' (' + a + ' from the pack size in the name)' : ' (none — no 180 / 750 / 90 pack size in the name)'}</span></label><input type="number" id="rn-upc" min="0.001" step="any" value="${set>0?set:''}" placeholder="${a ? 'auto: ' + a + ' per case' : 'e.g. 1 carton per case, 48 caps per case'}"></div>`; })()}
       <div style="display:flex;gap:8px;margin-top:12px;">
         <button class="btn gold sm" onclick="rmNameSave('${itemId}')">Save name</button>
         <button class="btn ghost sm" onclick="$('rm-name-box').innerHTML=''">Cancel</button></div>
@@ -7944,7 +7972,9 @@ function rmNameEdit(itemId){
 async function rmNameSave(itemId){
   const code = ($('rn-code').value||'').trim().toUpperCase(), name = ($('rn-name').value||'').trim();
   if (!code || !name){ say('rn-msg','Code and name are both required.',false); return; }
-  const { error } = await db.schema('mfg').rpc('rm_item_edit', { p_item: itemId, p_code: code, p_name: name });
+  const upcEl = $('rn-upc'); const upcRaw = upcEl ? String(upcEl.value||'').trim() : '';
+  if (upcEl && upcRaw !== '' && !(Number(upcRaw) > 0)){ say('rn-msg','Units per case must be above zero — or leave it blank for the automatic figure.',false); return; }
+  const { error } = await db.schema('mfg').rpc('rm_item_edit', { p_item: itemId, p_code: code, p_name: name, p_units_per_case: upcEl && upcRaw !== '' ? Number(upcRaw) : null, p_set_upc: !!upcEl });
   if (error){ say('rn-msg','Could not save: '+error.message,false); return; }
   // refresh the cached material list (shared by New PO, Material requests, MMC's tabs and the production report) so the new name shows everywhere at once
   try { const { data: ri } = await db.schema('mfg').from('rm_items').select('*').eq('is_active', true).order('code'); rmItems = ri || []; } catch(e){ rmItems = []; }
