@@ -7393,11 +7393,20 @@ async function purchaseTab(t){
     live.sort((a,b) => a.__grp - b.__grp || String(a.code||'').localeCompare(String(b.code||'')));
     const nCols = 7 + (anyMoved?1:0) + (anyCaseWise?1:0) + (canMove?1:0);
     let lastGrp = -1;
+    // rows kept for the Excel download / print of exactly what is shown
+    window.__rmStoreExport = live.map(r => { const m = mmcBy[r.rm_item_id]||{}; const i = itemBy[r.rm_item_id]; const cw = rmIsCaseWise(i); const pc = cw ? rmPerCase(i) : { upc:null, auto:false };
+      return { group: RM_GROUP_TITLE[r.__grp].replace(/^[^A-Za-z]+/, ''), code: r.code, name: r.name, unit: r.unit, received: Number(r.received||0), issued: Number(r.issued_to_mmc||0), moved: Number(r.moved_to_asset||0),
+               store: Number(r.store_balance||0), mmc: m.balance!=null ? Number(m.balance) : null, upc: pc.upc, upcAuto: pc.auto, cases: (cw && pc.upc) ? Math.floor(Number(m.balance||0) / pc.upc) : null, caseWise: cw }; });
     B.innerHTML = `
       <h4 class="sec">Raw material inventory</h4>
       <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>. <b>✏️ Edit</b> corrects a material’s code or name — every section (purchase orders, material requests, receipts, MMC custody, production reports, targets) shows the corrected name, as they all refer to the same material record.':''}</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;">
+        <button class="btn ghost sm" onclick="rmStoreXlsx()" title="Download this inventory as an Excel workbook (.xlsx)">⬇ Download Excel</button>
+        <button class="btn ghost sm" onclick="rmStorePrint()" title="Print this inventory">🖨 Print</button>
+        <span style="font-size:11.5px;color:#777">${live.length} material(s) · as on ${calFmt(new Date())}</span>
+      </div>
       <div id="rm-asset-box"></div><div id="rm-name-box"></div>
-      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th>${anyMoved?'<th class="amount">Moved to assets</th>':''}<th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th>${anyCaseWise?'<th class="amount" title="Case-wise consumables only: material at MMC ÷ units needed per case">Tentative cases<br><span style="font-weight:normal;font-size:10px;">from MMC custody</span></th>':''}${canMove?'<th></th>':''}</tr></thead><tbody>
+      <div class="table-scroll"><table id="rm-store-table"><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th>${anyMoved?'<th class="amount">Moved to assets</th>':''}<th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th>${anyCaseWise?'<th class="amount" title="Case-wise consumables only: material at MMC ÷ units needed per case">Tentative cases<br><span style="font-weight:normal;font-size:10px;">from MMC custody</span></th>':''}${canMove?'<th></th>':''}</tr></thead><tbody>
       ${live.map(r=>{const m=mmcBy[r.rm_item_id]||{}; let head = ''; if (r.__grp !== lastGrp){ lastGrp = r.__grp; head = `<tr style="background:#f3eee0;"><td colspan="${nCols}" style="font-weight:700;font-size:12px;padding:6px 10px;">${RM_GROUP_TITLE[r.__grp]} <span style="font-weight:normal;color:#777">— ${live.filter(x=>x.__grp===r.__grp).length} item(s)</span></td></tr>`; } return head + `<tr><td><b>${esc(r.code)}</b> ${esc(r.name)}</td><td>${r.unit}</td>` +
         `<td class="amount">${Number(r.received)}</td><td class="amount">${Number(r.issued_to_mmc)}</td>` +
         (anyMoved ? `<td class="amount">${Number(r.moved_to_asset||0) ? '<span style="color:#1a5fb4" title="Moved into the asset register">'+Number(r.moved_to_asset)+'</span>' : '0'}</td>` : '') +
@@ -7940,6 +7949,47 @@ async function grnDelGo(inspId, orphKey){
   const ac = window.__grnDelAcct; window.__grnDelAcct = null;
   apprModalClose(); alert('Deleted. ' + data + '.' + (ac && Number(ac.lot_value) ? '\n\nAccounts: ₹ ' + inr(ac.lot_value) + ' of ' + (ac.vendor||'the vendor') + '’s dues (as per material received) has been removed.' : ''));
   purchaseTab('grn');
+}
+// ---- Excel (.xlsx) download: SheetJS is fetched on first use; falls back to CSV if it cannot be loaded ----
+async function xlsxLib(){
+  if (window.XLSX) return window.XLSX;
+  await new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload = ok; sc.onerror = () => no(new Error('xlsx lib')); document.head.appendChild(sc); });
+  return window.XLSX;
+}
+async function xlsxDownload(filename, sheets){   // sheets: [{ name, rows: [[...], ...], widths: [n,...] }]
+  try {
+    const X = await xlsxLib(); const wb = X.utils.book_new();
+    sheets.forEach(sh => { const ws = X.utils.aoa_to_sheet(sh.rows); if (sh.widths) ws['!cols'] = sh.widths.map(w => ({ wch: w })); X.utils.book_append_sheet(wb, ws, (sh.name||'Sheet').slice(0,31)); });
+    X.writeFile(wb, filename.replace(/\.xlsx$/i,'') + '.xlsx');
+  } catch(e){
+    const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+    const lines = sheets[0].rows.map(r => r.map(e2).join(','));
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = filename.replace(/\.xlsx$/i,'') + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+    alert('The Excel library could not be loaded, so the file was downloaded as CSV (opens in Excel as well).');
+  }
+}
+// RM store → Excel and print (exactly the rows shown, in the same group order)
+function rmStoreXlsx(){
+  const R = window.__rmStoreExport || []; if (!R.length){ alert('Nothing to download.'); return; }
+  const rows = [['Raw material inventory — Purchases & RM Store · as on ' + calFmt(new Date())], [],
+    ['Group','Code','Material','Unit','Purchased in','Issued to MMC','Moved to assets','Store balance','At MMC (custody)','Units per case','Tentative cases (from MMC custody)']];
+  R.forEach(r => rows.push([r.group, r.code, r.name, r.unit, r.received, r.issued, r.moved, r.store, r.mmc, r.upc ? r.upc + (r.upcAuto ? ' (auto)' : '') : (r.caseWise ? 'not set' : ''), r.cases]));
+  rows.push([]); rows.push(['Totals','','','', R.reduce((s,r)=>s+r.received,0), R.reduce((s,r)=>s+r.issued,0), R.reduce((s,r)=>s+r.moved,0), R.reduce((s,r)=>s+r.store,0), R.reduce((s,r)=>s+(r.mmc||0),0), '', '']);
+  rows.push([]); rows.push(['Tentative cases = material at MMC ÷ units per case (case-wise consumables only). Units per case: 180 ml → 48, 750 ml → 12, 90 ml → 100 unless set on the item.']);
+  xlsxDownload('rm-store-' + calFmt(new Date()), [{ name: 'RM store', rows, widths: [26, 30, 48, 6, 13, 13, 14, 13, 16, 14, 18] }]);
+}
+function rmStorePrint(){
+  const R = window.__rmStoreExport || []; if (!R.length){ alert('Nothing to print.'); return; }
+  const anyMoved = R.some(r => r.moved), anyCW = R.some(r => r.caseWise); let last = '';
+  const body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Raw material inventory · Purchases &amp; RM Store · as on ${calFmt(new Date())}</h2>
+    <table><thead><tr><th>Code</th><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th>${anyMoved?'<th class="amount">Moved to assets</th>':''}<th class="amount">Store balance</th><th class="amount">At MMC (custody)</th>${anyCW?'<th class="amount">Units / case</th><th class="amount">Tentative cases</th>':''}</tr></thead><tbody>
+    ${R.map(r => { let h = ''; if (r.group !== last){ last = r.group; h = `<tr class="tot"><td colspan="${7 + (anyMoved?1:0) + (anyCW?2:0)}">${esc(r.group)}</td></tr>`; }
+      return h + `<tr><td><b>${esc(r.code)}</b></td><td>${esc(r.name)}</td><td>${esc(r.unit)}</td><td class="amount">${r.received}</td><td class="amount">${r.issued}</td>${anyMoved?'<td class="amount">'+r.moved+'</td>':''}<td class="amount"><b>${r.store}</b></td><td class="amount">${r.mmc!=null?r.mmc:'—'}</td>${anyCW?'<td class="amount">'+(r.upc?r.upc+(r.upcAuto?' (auto)':''):(r.caseWise?'not set':'—'))+'</td><td class="amount"><b>'+(r.cases!=null?r.cases.toLocaleString('en-IN'):'—')+'</b></td>':''}</tr>`; }).join('')}
+    <tr class="tot"><td colspan="3">Totals · ${R.length} material(s)</td><td class="amount">${R.reduce((s,r)=>s+r.received,0)}</td><td class="amount">${R.reduce((s,r)=>s+r.issued,0)}</td>${anyMoved?'<td class="amount">'+R.reduce((s,r)=>s+r.moved,0)+'</td>':''}<td class="amount">${R.reduce((s,r)=>s+r.store,0)}</td><td class="amount">${R.reduce((s,r)=>s+(r.mmc||0),0)}</td>${anyCW?'<td></td><td></td>':''}</tr>
+    </tbody></table>
+    <p style="font-size:11px;color:#555;margin-top:10px;">Store balance = purchased in − issued to MMC − moved to assets. Tentative cases = material at MMC ÷ units per case, for case-wise consumables only (180 ml → 48, 750 ml → 12, 90 ml → 100 unless set on the item); the smallest figure across a line's materials is what can actually be made.</p>`;
+  printHtml('RM store — ' + calFmt(new Date()), body);
 }
 // ---- Tentative production cases from a case-wise consumable ----
 // Pack size read from the code / name: 180 ml → 48 units per case, 750 ml → 12, 90 ml → 100 (a figure set on the item wins).
