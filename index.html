@@ -7425,7 +7425,7 @@ async function purchaseTab(t){
         (canMove ? `<td style="white-space:nowrap"><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button> ${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
       </tbody></table></div>
       <p style="font-size:11.5px;color:#777;margin-top:6px;">Listed in this order: case-wise consumables, then blend-wise, then consumables not yet sorted, then spare parts &amp; plant machinery — A→Z within each group (the category is set under MMC → Raw material).</p>
-      ${anyCaseWise ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">📦 <b>Tentative cases</b> = material at MMC (custody) ÷ units needed for one case, for case-wise consumables only (Raw material tab → Consumables → Case-wise). Units per case come from the pack size in the item’s code / name — <b>180 ml → 48</b>, <b>750 ml → 12</b>, <b>90 ml → 100</b> — unless a figure is set on the item with ✏️ Edit (e.g. 1 carton per case). The figure is indicative: the smallest tentative figure across a line’s materials is what can actually be made.</p>' : ''}`;
+      ${anyCaseWise ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">📦 <b>Tentative cases</b> = material at MMC (custody) ÷ units needed for one case, for case-wise consumables only (Raw material tab → Consumables → Case-wise). Units per case come from the pack size in the item’s code / name — <b>180 ml → 48</b>, <b>750 ml → 12</b>, <b>90 ml → 100</b>, a <b>box / carton → 1</b> — unless a figure is set on the item with ✏️ Edit (e.g. 1 carton per case). The figure is indicative: the smallest tentative figure across a line’s materials is what can actually be made.</p>' : ''}`;
     return;
   }
 
@@ -8146,6 +8146,7 @@ function rmStorePrint(){
 function rmPerCaseAuto(i){
   if (!i) return null;
   const txt = ((i.code||'') + ' ' + (i.name||'')).toUpperCase();
+  if (/\bBOX\b|CARTON|\bCTN\b|SHIPPER/.test(txt)) return 1;   // a box / carton holds the whole case → 1 per case
   const has = n => new RegExp('(^|[^0-9])' + n + '(?![0-9])').test(txt);
   if (has('180')) return 48; if (has('750')) return 12; if (has('90')) return 100;
   return null;
