@@ -5661,7 +5661,7 @@ let prodRepLines = [];
 // Case-wise production: the material list follows the SKU chosen — only the materials set for that SKU (its bill of materials), grouped by component
 window.prAllMats = false;
 function prSkuBom(skuId){ return (window.__prBom||[]).filter(b => b.sku_id === skuId); }
-function prBomQtyPerCase(b, item, sku){ if (b && Number(b.qty_per_case) > 0) return Number(b.qty_per_case); if (typeof rmPerCase === 'function'){ const pc = rmPerCase(item); if (pc.upc) return pc.upc; } return (/\bBOX\b|CARTON|\bCTN\b|SHIPPER/i.test((item.code||'')+' '+(item.name||''))) ? 1 : (Number(sku && sku.units_per_case || 0) || null); }
+function prBomQtyPerCase(b, item, sku){ return rmBomQty(b, item, sku).q; }
 function prSkuMaterials(){
   const sel = $('pr-item'), skuSel = $('pr-sku'); if (!sel || !skuSel) return;
   const sku = (M.skus||[]).find(s => s.id === skuSel.value) || {}; const stock = window.__prStock || [];
@@ -8091,9 +8091,18 @@ function rmBomSuggest(sku){
     const ip = rmItemPack(i); const packOk = !pack || !ip || ip === pack;
     return brandOk && sizeOk && packOk; }).map(i => i.id);
 }
-// default qty of a material per case of a SKU: the figure set on the BOM line, else the item's own per-case figure, else the SKU's bottles per case (boxes/cartons default to 1)
-function rmBomQty(line, item, sku){ if (line && Number(line.qty_per_case) > 0) return { q: Number(line.qty_per_case), src: 'set' }; const pc = rmPerCase(item); if (pc.upc) return { q: pc.upc, src: pc.auto ? 'auto' : 'item' };
-  if (/\bBOX\b|CARTON|CTN|SHIPPER/i.test((item.code||'')+' '+(item.name||''))) return { q: 1, src: 'default' }; return { q: Number(sku.units_per_case||0) || null, src: 'sku' }; }
+// Standard qty of a material per case of a SKU, in this order: the figure set on the SKU's material line; the figure set on the item itself;
+// then by component — a box/carton is 1 per case, a bottle / cap / front label / back label is one per bottle (the SKU's bottles per case);
+// only for anything else the pack size read from the material's name (180 → 48, 750 → 12, 90 → 100).
+function rmBomQty(line, item, sku){
+  if (line && Number(line.qty_per_case) > 0) return { q: Number(line.qty_per_case), src: 'set' };
+  if (Number(item && item.units_per_case) > 0) return { q: Number(item.units_per_case), src: 'item' };
+  const role = (line && line.component) || (typeof rmItemRoleAuto === 'function' ? rmItemRoleAuto(item) : 'OTHER');
+  if (role === 'BOX') return { q: 1, src: 'default' };
+  const upc = Number(sku && sku.units_per_case || 0);
+  if (['BOTTLE','CAP','FRONT_LABEL','BACK_LABEL'].includes(role) && upc > 0) return { q: upc, src: 'sku' };
+  const pc = rmPerCase(item); if (pc.upc) return { q: pc.upc, src: 'auto' };
+  return { q: upc || null, src: 'sku' }; }
 // The five components every SKU needs for a case: bottle, cap, box, front label, back label — read from the material's code / name unless set on the line
 const RM_COMPONENTS = [['BOTTLE','Bottle'],['CAP','Cap'],['BOX','Box'],['FRONT_LABEL','Front label'],['BACK_LABEL','Back label']];
 const RM_COMP_LABEL = Object.fromEntries(RM_COMPONENTS.concat([['OTHER','Other']]));
@@ -8200,7 +8209,7 @@ function rmSkuViewHtml(){
       <div class="table-scroll"><table><thead><tr><th>Component</th><th>Material</th><th>Unit</th><th class="amount">Needed per case</th><th class="amount">At MMC (custody)</th><th class="amount">In company store</th><th class="amount">Cases possible</th><th>Note</th></tr></thead><tbody>
       ${c.missing.map(mname => `<tr style="background:#fdecea;"><td style="color:#b3261e;font-weight:700;">✗ ${esc(mname)}</td><td colspan="7" style="color:#b3261e;">Missing — no ${esc(mname.toLowerCase())} is set for this SKU, so no case can be completed.${canEdit ? ' Use Edit materials to add it.' : ''}</td></tr>`).join('')}
       ${c.lines.map(l => `<tr style="${c.complete && l.cases != null && l.cases === c.cases ? 'background:#fff3f0;' : ''}"><td style="font-size:12px;${l.role==='OTHER'?'color:#999':''}">${esc(RM_COMP_LABEL[l.role]||l.role)}${l.roleSet?'':' <span style="font-size:10px;color:#aaa">(auto)</span>'}</td><td><b>${esc(l.item.code)}</b> <span style="color:#555">${esc(l.item.name||'')}</span></td><td>${esc(l.item.unit||'')}</td>
-          <td class="amount">${l.qty ? l.qty + (l.qtySrc==='set' ? '' : ' <span style="font-size:10.5px;color:#999">(' + (l.qtySrc==='auto' ? 'auto' : l.qtySrc==='item' ? 'item' : l.qtySrc==='sku' ? 'bottles/case' : 'default') + ')</span>') : '<span style="color:#b26a00">not set</span>'}</td>
+          <td class="amount">${l.qty ? l.qty + (l.qtySrc==='set' ? '' : ' <span style="font-size:10.5px;color:#999">(' + (l.qtySrc==='auto' ? 'auto' : l.qtySrc==='item' ? 'item' : l.qtySrc==='sku' ? 'one per bottle' : 'default') + ')</span>') : '<span style="color:#b26a00">not set</span>'}</td>
           <td class="amount">${fmt(l.mmc)}</td><td class="amount" style="color:#777">${fmt(l.store)}</td>
           <td class="amount" style="font-weight:700;color:${l.cases==null?'#999':(l.cases===c.casesByItems?'#b3261e':'#1a7f37')}">${fmt(l.cases)}${l.cases != null && l.cases === c.casesByItems ? ' <span title="Running short — this material limits the SKU">⚠</span>' : ''}</td>
           <td style="font-size:11.5px;color:#777;">${rmLineNote(l, c, fmt)}</td></tr>`).join('')}
@@ -8252,7 +8261,7 @@ function rmBomRender(){
         <td><b>${esc(i.code)}</b> <span style="color:#555">${esc(i.name||'')}</span>${sugg.has(i.id)?' <span style="font-size:10.5px;color:#7a5c10" title="Matches this SKU by brand, size and bottle type">✨ suggested</span>':''}</td>
         <td>${on ? `<select style="width:auto;padding:3px 6px;display:inline-block;font-size:12px;" onchange="if(this.value===rmItemRoleAuto(window.__rmItemBy['${i.id}'])) delete rmBomComp['${i.id}']; else rmBomComp['${i.id}']=this.value; rmBomRender()">${RM_COMPONENTS.concat([['OTHER','Other']]).map(([k,l])=>`<option value="${k}" ${role===k?'selected':''}>${l}</option>`).join('')}</select>${rmBomComp[i.id]?'':' <span style="font-size:10px;color:#aaa">(auto)</span>'}` : `<span style="color:#aaa;font-size:12px;">${esc(RM_COMP_LABEL[role]||role)}</span>`}</td>
         <td class="amount">${mmc.toLocaleString('en-IN')}</td>
-        <td class="amount">${on ? `<input type="number" min="0.001" step="any" value="${rmBomSel[i.id]!=null?rmBomSel[i.id]:''}" placeholder="${def.q ? def.q + ' (' + (def.src==='auto'?'auto':def.src==='item'?'item':def.src==='sku'?'bottles/case':'default') + ')' : 'qty'}" style="width:120px;padding:3px 6px;display:inline-block;" onchange="rmBomSel['${i.id}']=this.value===''?null:Number(this.value)">` : `<span style="color:#aaa">${def.q||''}</span>`}</td></tr>`; }).join('') + `</tbody></table>`;
+        <td class="amount">${on ? `<input type="number" min="0.001" step="any" value="${rmBomSel[i.id]!=null?rmBomSel[i.id]:''}" placeholder="${def.q ? def.q + ' (' + (def.src==='auto'?'auto':def.src==='item'?'item':def.src==='sku'?'one per bottle':'default') + ')' : 'qty'}" style="width:120px;padding:3px 6px;display:inline-block;" onchange="rmBomSel['${i.id}']=this.value===''?null:Number(this.value)">` : `<span style="color:#aaa">${def.q||''}</span>`}</td></tr>`; }).join('') + `</tbody></table>`;
   const cnt = $('rm-bom-count'); if (cnt) cnt.textContent = Object.keys(rmBomSel).length + ' material(s) ticked';
 }
 function rmBomSuggestApply(){ const sku = (M.skus||[]).find(s => s.id === window.__rmBomSku); const ids = rmBomSuggest(sku); if (!ids.length){ say('rm-bom-msg','No material name matches this SKU’s brand, pack size and bottle type — tick them by hand.',false); return; } ids.forEach(id => { if (!(id in rmBomSel)) rmBomSel[id] = null; }); say('rm-bom-msg', ids.length + ' material(s) suggested from the names — check and Save.', true); rmBomRender(); }
@@ -8322,7 +8331,7 @@ async function rmConsLoad(){
   const rmBy = {}; rm.forEach(l => (rmBy[l.batch_id] = rmBy[l.batch_id] || []).push(l));
   const brmBy = {}; brm.forEach(l => (brmBy[l.blend_id] = brmBy[l.blend_id] || []).push(l));
   const skuOf = id => (M.skus||[]).find(s => s.id === id) || {}; const brandOf = sku => ((M.brands||[]).find(b => b.id === sku.brand_id) || {}).name || '—';
-  const stdPerCase = (sku, item, bline) => { if (bline && Number(bline.qty_per_case) > 0) return Number(bline.qty_per_case); const pc = (typeof rmPerCase === 'function') ? rmPerCase(item) : { upc: null }; if (pc.upc) return pc.upc; if (/\bBOX\b|CARTON|\bCTN\b|SHIPPER/i.test((item.code||'')+' '+(item.name||''))) return 1; return Number(sku.units_per_case||0) || null; };
+  const stdPerCase = (sku, item, bline) => rmBomQty(bline, item, sku).q;
   const rows = (batches||[]).map(b => { const sku = skuOf(b.sku_id); const cases = Number(b.cases||0);
     const lines = (rmBy[b.id]||[]).map(l => { const item = itemBy[l.rm_item_id] || { code:'?', name:'', unit:'' }; const bline = bomBy[b.sku_id + '|' + l.rm_item_id]; const per = stdPerCase(sku, item, bline);
       const std = per != null ? Math.round(per * cases * 1000) / 1000 : null; const qty = Number(l.qty||0);
@@ -8366,7 +8375,7 @@ async function rmConsRender(B){
       <div class="stat"><div class="n">${fmt(T.blendL)} L</div><div class="l">Blend drawn from tanks for bottling</div></div>
       <div class="stat" style="border-left:4px solid ${T.waste>0?'#b3261e':'#1a7f37'};"><div class="n" style="color:${T.waste>0?'#b3261e':'#1a7f37'}">${fmt(T.waste)}</div><div class="l">Wastage (units above the standard)${T.wasteLines?' · '+T.wasteLines+' material(s)':''}</div></div>
     </div>
-    <p style="font-size:11.5px;color:#777;margin:-6px 0 10px;">🗑 <b>Wastage</b> = material consumed above the standard for the cases produced. The standard per case is the quantity set for the SKU's materials (Purchases → RM store → By brand SKU), else the item's own figure (180 ml → 48, 750 ml → 12, 90 ml → 100, box → 1). Example: 50 bottles consumed for 1 case of a 48-bottle SKU = 2 wasted. Consumption below the standard is shown as “short”.</p>
+    <p style="font-size:11.5px;color:#777;margin:-6px 0 10px;">🗑 <b>Wastage</b> = material consumed above the standard for the cases produced. The standard per case is the quantity set for the SKU's materials (Purchases → RM store → By brand SKU); if none is set, a box is 1 per case and a bottle, cap or label is one per bottle (the SKU's bottles per case: 180 ml → 48, 750 ml → 12, 90 ml → 100). Example: 50 bottles consumed for 1 case of a 48-bottle SKU = 2 wasted. Consumption below the standard is shown as “short”.</p>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px;">${chip('batch','🧾 Batch-wise')}${chip('brand','🏷 Brand-wise')}${chip('sku','📦 SKU-wise')}${chip('material','🧪 Material-wise')}${chip('blend','🧴 Blend-wise (tanks)')}</div>`;
   const matList = lines => lines.map(l => esc(l.item.code) + ' × ' + fmt(l.qty) + ' ' + esc(l.item.unit||'')).join(', ') || '—';
   if (C.view === 'batch'){
@@ -8433,7 +8442,7 @@ function rmConsPrint(){
   const roll = (keyFn, icon) => { const g = {}; rows.forEach(r => (g[keyFn(r)] = g[keyFn(r)] || []).push(r)); return Object.keys(g).sort().map(k => { const A = rmConsAgg(g[k]); return `<h3 style="margin-top:12px;">${icon} ${esc(k)} — cases produced ${fmt(A.cases)} from ${A.batches} batch(es) · wastage ${fmt(A.waste)}</h3><table><thead><tr><th>Raw material</th><th>Unit</th><th class="amount">Actual consumed</th><th class="amount">Standard per case</th><th class="amount">Actual per case</th><th class="amount">Standard for cases</th><th class="amount">Wastage</th><th class="amount">Batches</th></tr></thead><tbody>${A.mats.map(m=>`<tr class="${m.waste>0?'tot':''}"><td><b>${esc(m.item.code)}</b> ${esc(m.item.name||'')}</td><td>${esc(m.item.unit||'')}</td><td class="amount">${fmt(m.qty)}</td><td class="amount">${m.per!=null?fmt(m.per):'—'}</td><td class="amount">${pc(m.qty,A.cases)}</td><td class="amount">${m.per!=null?fmt(m.std):'—'}</td><td class="amount">${m.per!=null?(m.waste>0?'+'+fmt(m.waste):(m.short>0?'−'+fmt(m.short)+' short':'0')):'—'}</td><td class="amount">${m.batches.size}</td></tr>`).join('')||'<tr><td colspan="8">—</td></tr>'}</tbody></table>`; }).join(''); };
   const body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Raw material consumption report · ${esc(R.label)}${C.brand?' · '+esc(C.brand):''}</h2>
     <table style="max-width:860px;margin-bottom:10px;"><tbody><tr><td><b>Cases produced</b><br>${fmt(T.cases)}</td><td><b>Batches counted</b><br>${T.batches}${T.failed?' ('+T.failed+' failed not counted)':''}</td><td><b>Materials consumed</b><br>${T.mats.length}</td><td><b>Blend drawn for bottling</b><br>${fmt(T.blendL)} L</td><td><b>Wastage (above standard)</b><br>${fmt(T.waste)} units</td></tr></tbody></table>
-    <p style="font-size:11px;color:#555;">Wastage = material consumed above the standard for the cases produced (standard per case from the SKU's materials, else the item's figure: 180 ml → 48, 750 ml → 12, 90 ml → 100, box → 1).</p>
+    <p style="font-size:11px;color:#555;">Wastage = material consumed above the standard for the cases produced (standard per case from the SKU's materials; else a box is 1 and a bottle / cap / label is one per bottle — 48, 12 or 100 by pack size).</p>
     <h3>Batch-wise</h3><table><thead><tr><th>Date</th><th>Product batch no.</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th>Raw material consumed</th><th>Blend drawn</th><th>QC</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td>${r.production_date}</td><td><b>${esc(r.product_batch_no||'—')}</b> <span style="color:#777">${esc(r.batch_no||'')}</span></td><td>${esc(r.brand)}</td><td>${esc(r.sku_code)}</td><td class="amount">${fmt(r.cases)}</td><td style="font-size:11px;">${matList(r.lines)}</td><td>${r.blend_tank&&Number(r.blend_litres)>0?esc(tankLabel(r.blend_tank))+' · '+fmt(r.blend_litres)+' L':'—'}</td><td>${esc(r.qc_status||'')}</td></tr>`).join('') || '<tr><td colspan="8">No production in this period.</td></tr>'}
     ${rows.length?`<tr class="tot"><td colspan="4">Total</td><td class="amount">${fmt(T.cases)}</td><td style="font-size:11px;">${T.mats.map(m=>esc(m.item.code)+' × '+fmt(m.qty)+' '+esc(m.item.unit||'')).join(', ')}</td><td>${fmt(T.blendL)} L</td><td></td></tr>`:''}
