@@ -472,6 +472,7 @@
       <button class="chip" id="pu-grn" onclick="purchaseTab('grn')">Receipts &amp; QC</button>
       <button class="chip" id="pu-store" onclick="purchaseTab('store')">RM store</button>
       <button class="chip" id="pu-hist" onclick="purchaseTab('hist')">PO history</button>
+      <button class="chip" id="pu-rmcons" onclick="purchaseTab('rmcons')">📊 RM consumption report</button>
     </div>
     <div id="purchase-body"></div>
   </section>
@@ -789,7 +790,7 @@ const SECTIONS = {
   tasks:    [['kt-my','My tasks'],['kt-all','All tasks'],['kt-duties','Duties']],
   mkt:      [['mk-budget','Budget & utilisation'],['mk-spend','Spends'],['mk-requests','Budget requests']],
   purchase: [['pu-pos','Purchase orders'],['pu-new','New PO'],['pu-req','Material requests'],
-             ['pu-grn','Receipts & QC'],['pu-store','RM store'],['pu-hist','PO history']],
+             ['pu-grn','Receipts & QC'],['pu-store','RM store'],['pu-hist','PO history'],['pu-rmcons','RM consumption report']],
   acct:     [['ac-banks','Banks'],['ac-newe','New entry'],['ac-ledger','Ledger'],
              ['ac-tax','Purchase tax'],['ac-vdues','Vendor dues'],['ac-recv','Distributor dues'],
              ['ac-exp','Expenses'],['ac-salary','Salary'],
@@ -7218,7 +7219,7 @@ async function poDispatchSave(id){
 const PO_COL = { PENDING_APPROVAL:'#b3261e', PLACED:'#b8860b', DISPATCHED:'#0b57d0', PARTIAL:'#b8860b', RECEIVED:'#1a7f37', CANCELLED:'#777' };
 const PO_LABEL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 async function purchaseTab(t){
-  for (const k of ['pos','new','req','grn','store','hist']) $('pu-'+k).classList.toggle('on', k === t);
+  for (const k of ['pos','new','req','grn','store','hist','rmcons']) $('pu-'+k).classList.toggle('on', k === t);
   const B = $('purchase-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const G = db.schema('mfg');
   // once the tab has drawn, show the full name of the material currently chosen under its dropdown
@@ -7535,6 +7536,7 @@ async function purchaseTab(t){
     return;
   }
 
+  if (t === 'rmcons'){ await rmConsRender(B); return; }
   if (t === 'hist'){
     const { data: allVen } = await db.schema('sales').from('vendors').select('id, code, name').order('name');
     B.innerHTML = `
@@ -8289,6 +8291,144 @@ function rmSkuPrint(){
       </tbody></table>`; });
   body += '<p style="font-size:11px;color:#555;margin-top:10px;">Cases possible = the smallest of (material at MMC ÷ quantity needed per case) across the SKU’s materials; the highlighted material is the one running short. Materials shared by several SKUs are counted in full for each.</p>';
   printHtml('RM by SKU — ' + calFmt(new Date()), body);
+}
+/* ---- RM consumption report (Purchases & RM Store → RM consumption report) ----
+   What raw material went into production and how many cases came out of it: batch-wise (the production report, one line per
+   batch with its materials), brand-wise and SKU-wise (materials consumed, cases produced, material per case), material-wise
+   (each material: total consumed, batches, cases made with it), plus the blend-wise (tank) consumption of the period. ---- */
+window.rmCons = window.rmCons || { mode: 'month', month: monthLabelJS(), from: '', to: '', view: 'batch', brand: '' };
+function rmConsRange(){
+  const C = window.rmCons; let from, to, label;
+  if (C.mode === 'all'){ from = '2000-01-01'; to = '2999-12-31'; label = 'all time'; }
+  else if (C.mode === 'range'){ from = C.from || calFmt(new Date()); to = C.to || calFmt(new Date()); label = from + ' to ' + to; }
+  else { const m = C.month || monthLabelJS(); const [y, mm] = m.split('-').map(Number); const nx = new Date(y, mm, 0); from = m + '-01'; to = m + '-' + String(nx.getDate()).padStart(2,'0'); label = (typeof ptMonthName === 'function' ? ptMonthName(m) : m); }
+  return { from, to, label };
+}
+async function rmConsLoad(){
+  const MF = db.schema('mfg'); const { from, to } = rmConsRange();
+  if (!M.skus || !M.skus.length){ try { await loadMasters(); } catch(e){} }
+  const [{ data: batches, error: e1 }, { data: items }, { data: blends }] = await Promise.all([
+    MF.from('batches').select('id, batch_no, product_batch_no, sku_id, cases, production_date, qc_status, blend_tank, blend_litres, created_by').gte('production_date', from).lte('production_date', to).order('production_date').order('created_at'),
+    MF.from('rm_items').select('id, code, name, unit, rm_category, rm_subcat'),
+    MF.from('blends').select('id, blend_no, blend_date, tank, blend_name, litres').gte('blend_date', from).lte('blend_date', to).order('blend_date')
+  ]);
+  if (e1) throw new Error(e1.message);
+  const itemBy = {}; (items||[]).forEach(i => itemBy[i.id] = i);
+  let rm = [], brm = [];
+  if ((batches||[]).length){ const ids = batches.map(b=>b.id); for (let i = 0; i < ids.length; i += 200){ const { data } = await MF.from('batch_rm').select('batch_id, rm_item_id, qty').in('batch_id', ids.slice(i, i+200)); rm.push(...(data||[])); } }
+  if ((blends||[]).length){ const { data } = await MF.from('blend_rm').select('blend_id, rm_item_id, qty').in('blend_id', blends.map(b=>b.id)); brm = data || []; }
+  const rmBy = {}; rm.forEach(l => (rmBy[l.batch_id] = rmBy[l.batch_id] || []).push(l));
+  const brmBy = {}; brm.forEach(l => (brmBy[l.blend_id] = brmBy[l.blend_id] || []).push(l));
+  const skuOf = id => (M.skus||[]).find(s => s.id === id) || {}; const brandOf = sku => ((M.brands||[]).find(b => b.id === sku.brand_id) || {}).name || '—';
+  const rows = (batches||[]).map(b => { const sku = skuOf(b.sku_id); return { ...b, sku_code: sku.sku_code || '—', brand: brandOf(sku), good: b.qc_status !== 'FAILED', lines: (rmBy[b.id]||[]).map(l => ({ ...l, item: itemBy[l.rm_item_id] || { code:'?', name:'', unit:'' } })) }; });
+  const blendRows = (blends||[]).map(b => ({ ...b, lines: (brmBy[b.id]||[]).map(l => ({ ...l, item: itemBy[l.rm_item_id] || { code:'?', name:'', unit:'' } })) }));
+  try { await loadUserNames(); } catch(e){}
+  return { rows, blendRows, itemBy };
+}
+// roll up a set of batches: cases, batch count, materials consumed (total + per case)
+function rmConsAgg(rows){
+  const good = rows.filter(r => r.good); const cases = good.reduce((s,r)=>s+Number(r.cases||0),0);
+  const mats = {}; good.forEach(r => r.lines.forEach(l => { const k = l.rm_item_id; (mats[k] = mats[k] || { item: l.item, qty: 0, batches: new Set() }); mats[k].qty += Number(l.qty||0); mats[k].batches.add(r.id); }));
+  const blendL = good.reduce((s,r)=>s+Number(r.blend_litres||0),0);
+  return { cases, batches: good.length, failed: rows.length - good.length, mats: Object.values(mats).sort((a,b)=>String(a.item.code).localeCompare(String(b.item.code))), blendL };
+}
+async function rmConsRender(B){
+  B.innerHTML = '<p style="color:#777">Loading…</p>';
+  let D; try { D = await rmConsLoad(); } catch(e){ B.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+  window.__rmConsData = D; const C = window.rmCons; const R = rmConsRange();
+  const brands = [...new Set(D.rows.map(r => r.brand))].sort(); if (C.brand && !brands.includes(C.brand)) C.brand = '';
+  const rows = C.brand ? D.rows.filter(r => r.brand === C.brand) : D.rows;
+  const fmt = v => v == null ? '—' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 3 });
+  const perCase = (q, c) => c > 0 ? fmt(Math.round(q / c * 1000) / 1000) : '—';
+  const T = rmConsAgg(rows);
+  const chip = (k, l) => `<button class="chip ${C.view===k?'on':''}" onclick="window.rmCons.view='${k}';purchaseTab('rmcons')">${l}</button>`;
+  let html = `<h4 class="sec">Raw material consumption report</h4>
+    <p style="font-size:12px;color:#555;margin:4px 0 10px;">What went into production and what came out of it, from the production reports at MMC: every batch with the materials it consumed; the roll-up brand-wise and SKU-wise with material per case; each material with the cases made from it; and the blends (tank) of the period. QC-failed batches are listed but not counted in the roll-ups.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:0 0 10px;padding:8px 10px;background:#faf6ea;border-radius:8px;">
+      <div><label style="font-size:11.5px;">Period</label><select onchange="window.rmCons.mode=this.value;purchaseTab('rmcons')" style="width:auto;display:inline-block;"><option value="month" ${C.mode==='month'?'selected':''}>A month</option><option value="range" ${C.mode==='range'?'selected':''}>Date range</option><option value="all" ${C.mode==='all'?'selected':''}>All time</option></select></div>
+      ${C.mode==='month' ? `<div><label style="font-size:11.5px;">Month</label><input type="month" value="${esc(C.month||monthLabelJS())}" onchange="window.rmCons.month=this.value;purchaseTab('rmcons')" style="width:auto;display:inline-block;"></div>` : ''}
+      ${C.mode==='range' ? `<div><label style="font-size:11.5px;">From</label><input type="date" value="${esc(C.from||'')}" onchange="window.rmCons.from=this.value;purchaseTab('rmcons')" style="width:auto;display:inline-block;"></div><div><label style="font-size:11.5px;">To</label><input type="date" value="${esc(C.to||'')}" onchange="window.rmCons.to=this.value;purchaseTab('rmcons')" style="width:auto;display:inline-block;"></div>` : ''}
+      <div><label style="font-size:11.5px;">Brand</label><select onchange="window.rmCons.brand=this.value;purchaseTab('rmcons')" style="width:auto;min-width:160px;display:inline-block;"><option value="">— all brands —</option>${brands.map(b=>`<option value="${esc(b)}" ${C.brand===b?'selected':''}>${esc(b)}</option>`).join('')}</select></div>
+      <div style="margin-left:auto;display:flex;gap:8px;"><button class="btn ghost sm" onclick="rmConsXlsx()">⬇ Download Excel</button><button class="btn ghost sm" onclick="rmConsPrint()">🖨 Print</button></div>
+    </div>
+    <div class="statgrid">
+      <div class="stat"><div class="n">${fmt(T.cases)}</div><div class="l">Cases produced · ${esc(R.label)}${C.brand?' · '+esc(C.brand):''}</div></div>
+      <div class="stat"><div class="n">${T.batches}</div><div class="l">Batches (QC passed / pending)${T.failed?' · '+T.failed+' failed':''}</div></div>
+      <div class="stat"><div class="n">${T.mats.length}</div><div class="l">Materials consumed</div></div>
+      <div class="stat"><div class="n">${fmt(T.blendL)} L</div><div class="l">Blend drawn from tanks for bottling</div></div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px;">${chip('batch','🧾 Batch-wise')}${chip('brand','🏷 Brand-wise')}${chip('sku','📦 SKU-wise')}${chip('material','🧪 Material-wise')}${chip('blend','🧴 Blend-wise (tanks)')}</div>`;
+  const matList = lines => lines.map(l => esc(l.item.code) + ' × ' + fmt(l.qty) + ' ' + esc(l.item.unit||'')).join(', ') || '—';
+  if (C.view === 'batch'){
+    html += `<div class="table-scroll"><table class="fit"><colgroup><col style="width:9%"><col style="width:13%"><col style="width:11%"><col style="width:13%"><col style="width:6%"><col style="width:34%"><col style="width:8%"><col style="width:6%"></colgroup><thead><tr><th>Date</th><th>Product batch no. / record</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th>Raw material consumed</th><th>Blend drawn</th><th>QC</th></tr></thead><tbody>
+      ${rows.map(r => `<tr style="${r.good?'':'opacity:.55;'}"><td>${r.production_date}</td><td><b>${esc(r.product_batch_no||'—')}</b><br><span style="color:#777;font-size:10.5px;">${esc(r.batch_no||'')} · ${esc(userNameOf(r.created_by))}</span></td><td>${esc(r.brand)}</td><td>${esc(r.sku_code)}</td><td class="amount"><b>${fmt(r.cases)}</b></td><td style="font-size:11.5px;">${matList(r.lines)}</td><td style="font-size:11.5px;">${r.blend_tank && Number(r.blend_litres)>0 ? esc(tankLabel(r.blend_tank)) + ' · ' + fmt(r.blend_litres) + ' L' : '—'}</td><td><span class="pill ${r.qc_status==='PASSED'?'DELIVERED':(r.qc_status==='FAILED'?'CANCELLED':'RECEIVED')}">${esc(r.qc_status||'')}</span></td></tr>`).join('') || '<tr><td colspan="8" style="color:#777">No production recorded in this period.</td></tr>'}
+      ${rows.length ? `<tr style="font-weight:700;background:#f3eee0;"><td colspan="4">Total · ${T.batches} batch(es) counted</td><td class="amount">${fmt(T.cases)}</td><td style="font-size:11.5px;">${T.mats.map(m => esc(m.item.code) + ' × ' + fmt(m.qty) + ' ' + esc(m.item.unit||'')).join(', ')}</td><td>${fmt(T.blendL)} L</td><td></td></tr>` : ''}
+    </tbody></table></div>`;
+  }
+  if (C.view === 'brand' || C.view === 'sku'){
+    const key = C.view === 'brand' ? (r => r.brand) : (r => r.sku_code); const groups = {}; rows.forEach(r => (groups[key(r)] = groups[key(r)] || []).push(r));
+    const names = Object.keys(groups).sort();
+    html += names.map(nm => { const A = rmConsAgg(groups[nm]); const g = groups[nm];
+      return `<h4 class="sec" style="margin-top:14px;">${C.view==='brand'?'🏷':'📦'} ${esc(nm)}${C.view==='sku'?' <span style="font-weight:normal;color:#777;font-size:12px;">· '+esc(g[0].brand)+'</span>':''} <span style="float:right;font-size:13px;">Cases produced: <b style="color:#1a7f37">${fmt(A.cases)}</b> <span style="font-weight:normal;color:#777;font-size:11.5px;">from ${A.batches} batch(es)${A.failed?' · '+A.failed+' failed not counted':''}${A.blendL?' · blend '+fmt(A.blendL)+' L':''}</span></span></h4>
+        <div class="table-scroll"><table class="fit"><colgroup><col style="width:40%"><col style="width:8%"><col style="width:17%"><col style="width:17%"><col style="width:18%"></colgroup><thead><tr><th>Raw material consumed</th><th>Unit</th><th class="amount">Total consumed</th><th class="amount">Per case produced</th><th class="amount">Used in batches</th></tr></thead><tbody>
+        ${A.mats.map(m => `<tr><td><b>${esc(m.item.code)}</b> <span style="color:#555;font-size:11px;">${esc(m.item.name||'')}</span></td><td>${esc(m.item.unit||'')}</td><td class="amount"><b>${fmt(m.qty)}</b></td><td class="amount">${perCase(m.qty, A.cases)}</td><td class="amount">${m.batches.size} of ${A.batches}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#777">No material recorded against these batches.</td></tr>'}
+        </tbody></table></div>`; }).join('') || '<div class="card" style="padding:14px;color:#777;">No production recorded in this period.</div>';
+  }
+  if (C.view === 'material'){
+    const mats = {}; rows.filter(r=>r.good).forEach(r => r.lines.forEach(l => { const k = l.rm_item_id; (mats[k] = mats[k] || { item: l.item, qty: 0, batches: 0, cases: 0, skus: new Set(), brands: new Set() }); mats[k].qty += Number(l.qty||0); mats[k].batches++; mats[k].cases += Number(r.cases||0); mats[k].skus.add(r.sku_code); mats[k].brands.add(r.brand); }));
+    const list = Object.values(mats).sort((a,b)=>String(a.item.code).localeCompare(String(b.item.code)));
+    html += `<div class="table-scroll"><table class="fit"><colgroup><col style="width:34%"><col style="width:6%"><col style="width:12%"><col style="width:12%"><col style="width:10%"><col style="width:26%"></colgroup><thead><tr><th>Raw material</th><th>Unit</th><th class="amount">Total consumed</th><th class="amount">Cases produced with it</th><th class="amount">Batches</th><th>Used for (brands · SKUs)</th></tr></thead><tbody>
+      ${list.map(m => `<tr><td><b>${esc(m.item.code)}</b> <span style="color:#555;font-size:11px;">${esc(m.item.name||'')}</span></td><td>${esc(m.item.unit||'')}</td><td class="amount"><b>${fmt(m.qty)}</b></td><td class="amount">${fmt(m.cases)} <span style="font-size:10.5px;color:#777">(${perCase(m.qty, m.cases)}/case)</span></td><td class="amount">${m.batches}</td><td style="font-size:11.5px;">${[...m.brands].map(esc).join(', ')} · ${[...m.skus].map(esc).join(', ')}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">No material consumption recorded in this period.</td></tr>'}
+    </tbody></table></div>`;
+  }
+  if (C.view === 'blend'){
+    const bl = D.blendRows; const totL = bl.reduce((s,b)=>s+Number(b.litres||0),0);
+    html += `<p style="font-size:12px;color:#555;">Blends prepared in the period and the blend-wise materials consumed in them; the tank tiles on MMC → FG stock show what remains in each tank.</p>
+      <div class="table-scroll"><table class="fit"><colgroup><col style="width:9%"><col style="width:12%"><col style="width:8%"><col style="width:20%"><col style="width:9%"><col style="width:42%"></colgroup><thead><tr><th>Date</th><th>Blend no.</th><th>Tank</th><th>Blend</th><th class="amount">Litres</th><th>Raw material consumed</th></tr></thead><tbody>
+      ${bl.map(b => `<tr><td>${b.blend_date}</td><td><b>${esc(b.blend_no||'')}</b></td><td>${esc(tankLabel(b.tank))}</td><td>${esc(b.blend_name||'')}</td><td class="amount"><b>${fmt(b.litres)}</b></td><td style="font-size:11.5px;">${matList(b.lines)}</td></tr>`).join('') || '<tr><td colspan="6" style="color:#777">No blend recorded in this period.</td></tr>'}
+      ${bl.length ? `<tr style="font-weight:700;background:#f3eee0;"><td colspan="4">Total · ${bl.length} blend(s)</td><td class="amount">${fmt(totL)}</td><td></td></tr>` : ''}
+    </tbody></table></div>
+    <p style="font-size:11.5px;color:#777;margin-top:6px;">Blend drawn from the tanks for bottling in this period: <b>${fmt(T.blendL)} L</b> (shown batch-wise under Batch-wise).</p>`;
+  }
+  B.innerHTML = html;
+}
+function rmConsXlsx(){
+  const D = window.__rmConsData; if (!D){ alert('Nothing to download.'); return; } const C = window.rmCons; const R = rmConsRange();
+  const rows = C.brand ? D.rows.filter(r => r.brand === C.brand) : D.rows; const T = rmConsAgg(rows);
+  const batch = [['RM consumption — batch-wise · ' + R.label + (C.brand?' · '+C.brand:'')], [], ['Date','Product batch no.','Record','Brand','SKU','Cases','QC','Material code','Material','Unit','Qty consumed','Blend tank','Blend litres','Entered by']];
+  rows.forEach(r => { if (!r.lines.length) batch.push([r.production_date, r.product_batch_no||'', r.batch_no||'', r.brand, r.sku_code, Number(r.cases||0), r.qc_status||'', '', '', '', null, r.blend_tank?tankLabel(r.blend_tank):'', r.blend_litres!=null?Number(r.blend_litres):null, userNameOf(r.created_by)]);
+    r.lines.forEach(l => batch.push([r.production_date, r.product_batch_no||'', r.batch_no||'', r.brand, r.sku_code, Number(r.cases||0), r.qc_status||'', l.item.code, l.item.name||'', l.item.unit||'', Number(l.qty||0), r.blend_tank?tankLabel(r.blend_tank):'', r.blend_litres!=null?Number(r.blend_litres):null, userNameOf(r.created_by)])); });
+  const roll = (keyFn, title) => { const g = {}; rows.forEach(r => (g[keyFn(r)] = g[keyFn(r)] || []).push(r)); const out = [[title + ' · ' + R.label], [], ['Group','Cases produced','Batches counted','Material code','Material','Unit','Total consumed','Per case','Used in batches']];
+    Object.keys(g).sort().forEach(k => { const A = rmConsAgg(g[k]); A.mats.forEach(m => out.push([k, A.cases, A.batches, m.item.code, m.item.name||'', m.item.unit||'', m.qty, A.cases>0?Math.round(m.qty/A.cases*1000)/1000:null, m.batches.size])); }); return out; };
+  const mats = {}; rows.filter(r=>r.good).forEach(r => r.lines.forEach(l => { const k = l.rm_item_id; (mats[k] = mats[k] || { item: l.item, qty: 0, batches: 0, cases: 0, skus: new Set() }); mats[k].qty += Number(l.qty||0); mats[k].batches++; mats[k].cases += Number(r.cases||0); mats[k].skus.add(r.sku_code); }));
+  const mat = [['RM consumption — material-wise · ' + R.label], [], ['Material code','Material','Unit','Total consumed','Cases produced with it','Per case','Batches','SKUs']];
+  Object.values(mats).sort((a,b)=>String(a.item.code).localeCompare(String(b.item.code))).forEach(m => mat.push([m.item.code, m.item.name||'', m.item.unit||'', m.qty, m.cases, m.cases>0?Math.round(m.qty/m.cases*1000)/1000:null, m.batches, [...m.skus].join(', ')]));
+  const bl = [['Blend-wise (tanks) · ' + R.label], [], ['Date','Blend no.','Tank','Blend','Litres','Material code','Material','Unit','Qty consumed']];
+  D.blendRows.forEach(b => { if (!b.lines.length) bl.push([b.blend_date, b.blend_no||'', tankLabel(b.tank), b.blend_name||'', Number(b.litres||0), '', '', '', null]); b.lines.forEach(l => bl.push([b.blend_date, b.blend_no||'', tankLabel(b.tank), b.blend_name||'', Number(b.litres||0), l.item.code, l.item.name||'', l.item.unit||'', Number(l.qty||0)])); });
+  xlsxDownload('rm-consumption-' + R.label.replace(/[^A-Za-z0-9]+/g,'-'), [
+    { name: 'Batch-wise', rows: batch, widths: [11, 18, 14, 16, 22, 8, 9, 30, 36, 6, 12, 9, 11, 16] },
+    { name: 'Brand-wise', rows: roll(r => r.brand, 'RM consumption — brand-wise'), widths: [22, 12, 12, 30, 36, 6, 14, 10, 12] },
+    { name: 'SKU-wise', rows: roll(r => r.sku_code, 'RM consumption — SKU-wise'), widths: [28, 12, 12, 30, 36, 6, 14, 10, 12] },
+    { name: 'Material-wise', rows: mat, widths: [30, 36, 6, 14, 16, 10, 9, 40] },
+    { name: 'Blend-wise', rows: bl, widths: [11, 14, 8, 24, 9, 30, 36, 6, 12] }]);
+}
+function rmConsPrint(){
+  const D = window.__rmConsData; if (!D){ alert('Nothing to print.'); return; } const C = window.rmCons; const R = rmConsRange();
+  const rows = C.brand ? D.rows.filter(r => r.brand === C.brand) : D.rows; const T = rmConsAgg(rows);
+  const fmt = v => v == null ? '—' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 3 }); const pc = (q,c) => c>0 ? fmt(Math.round(q/c*1000)/1000) : '—';
+  const matList = lines => lines.map(l => esc(l.item.code) + ' × ' + fmt(l.qty) + ' ' + esc(l.item.unit||'')).join(', ') || '—';
+  const roll = (keyFn, icon) => { const g = {}; rows.forEach(r => (g[keyFn(r)] = g[keyFn(r)] || []).push(r)); return Object.keys(g).sort().map(k => { const A = rmConsAgg(g[k]); return `<h3 style="margin-top:12px;">${icon} ${esc(k)} — cases produced ${fmt(A.cases)} from ${A.batches} batch(es)</h3><table><thead><tr><th>Raw material</th><th>Unit</th><th class="amount">Total consumed</th><th class="amount">Per case</th><th class="amount">Batches</th></tr></thead><tbody>${A.mats.map(m=>`<tr><td><b>${esc(m.item.code)}</b> ${esc(m.item.name||'')}</td><td>${esc(m.item.unit||'')}</td><td class="amount">${fmt(m.qty)}</td><td class="amount">${pc(m.qty,A.cases)}</td><td class="amount">${m.batches.size}</td></tr>`).join('')||'<tr><td colspan="5">—</td></tr>'}</tbody></table>`; }).join(''); };
+  const body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Raw material consumption report · ${esc(R.label)}${C.brand?' · '+esc(C.brand):''}</h2>
+    <table style="max-width:760px;margin-bottom:10px;"><tbody><tr><td><b>Cases produced</b><br>${fmt(T.cases)}</td><td><b>Batches counted</b><br>${T.batches}${T.failed?' ('+T.failed+' failed not counted)':''}</td><td><b>Materials consumed</b><br>${T.mats.length}</td><td><b>Blend drawn for bottling</b><br>${fmt(T.blendL)} L</td></tr></tbody></table>
+    <h3>Batch-wise</h3><table><thead><tr><th>Date</th><th>Product batch no.</th><th>Brand</th><th>SKU</th><th class="amount">Cases</th><th>Raw material consumed</th><th>Blend drawn</th><th>QC</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td>${r.production_date}</td><td><b>${esc(r.product_batch_no||'—')}</b> <span style="color:#777">${esc(r.batch_no||'')}</span></td><td>${esc(r.brand)}</td><td>${esc(r.sku_code)}</td><td class="amount">${fmt(r.cases)}</td><td style="font-size:11px;">${matList(r.lines)}</td><td>${r.blend_tank&&Number(r.blend_litres)>0?esc(tankLabel(r.blend_tank))+' · '+fmt(r.blend_litres)+' L':'—'}</td><td>${esc(r.qc_status||'')}</td></tr>`).join('') || '<tr><td colspan="8">No production in this period.</td></tr>'}
+    ${rows.length?`<tr class="tot"><td colspan="4">Total</td><td class="amount">${fmt(T.cases)}</td><td style="font-size:11px;">${T.mats.map(m=>esc(m.item.code)+' × '+fmt(m.qty)+' '+esc(m.item.unit||'')).join(', ')}</td><td>${fmt(T.blendL)} L</td><td></td></tr>`:''}
+    </tbody></table>
+    <h3 style="margin-top:14px;">Brand-wise</h3>${roll(r => r.brand, '🏷')}
+    <h3 style="margin-top:14px;">SKU-wise</h3>${roll(r => r.sku_code, '📦')}
+    <h3 style="margin-top:14px;">Blend-wise (tanks) — ${D.blendRows.length} blend(s)</h3><table><thead><tr><th>Date</th><th>Blend no.</th><th>Tank</th><th>Blend</th><th class="amount">Litres</th><th>Raw material consumed</th></tr></thead><tbody>${D.blendRows.map(b=>`<tr><td>${b.blend_date}</td><td>${esc(b.blend_no||'')}</td><td>${esc(tankLabel(b.tank))}</td><td>${esc(b.blend_name||'')}</td><td class="amount">${fmt(b.litres)}</td><td style="font-size:11px;">${matList(b.lines)}</td></tr>`).join('')||'<tr><td colspan="6">No blend in this period.</td></tr>'}</tbody></table>
+    <p style="font-size:11px;color:#666;margin-top:12px;">From the production reports at MMC (batch book, blend book). QC-failed batches are listed but not counted in the roll-ups. Generated by Aurum Nexus on ${new Date().toLocaleString('en-IN')}.</p>`;
+  printHtml('RM consumption — ' + R.label, body);
 }
 // ---- Excel (.xlsx) download: SheetJS is fetched on first use; falls back to CSV if it cannot be loaded ----
 async function xlsxLib(){
