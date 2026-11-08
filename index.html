@@ -8006,6 +8006,20 @@ function rmSkuCalc(sku){
   // production needs all five components: with any of them missing, nothing can be bottled
   return { lines, cases: lines.length ? (missing.length ? 0 : min) : null, casesByItems: min, limiting: withQty.filter(l => l.cases === min).map(l => l.item.code), missingQty: lines.filter(l => l.cases == null).length, missing, complete: lines.length > 0 && !missing.length };
 }
+// Note for one material line of a SKU: why it is flagged, what it limits, and what would lift it
+function rmLineNote(l, c, fmt){
+  const notes = [];
+  if (l.cases == null){ notes.push('<span style="color:#b26a00;font-weight:600;">Units per case not set — cannot work out the cases; set it with ✏️ Edit on the material or in Edit materials.</span>'); }
+  else if (l.cases === c.casesByItems){
+    const others = c.lines.filter(x => x !== l && x.cases != null && x.cases > l.cases).map(x => x.cases); const next = others.length ? Math.min(...others) : null;
+    if (l.mmc <= 0) notes.push(`<span style="color:#b3261e;font-weight:700;">⚠ Running short — nothing at MMC, so no case can be bottled until this material is received / issued to MMC.</span>`);
+    else notes.push(`<span style="color:#b3261e;font-weight:700;">⚠ Running short — ${fmt(l.mmc)} at MMC ÷ ${l.qty} per case = ${fmt(l.cases)} case(s); this material limits the SKU${next != null ? ' (the next material allows ' + fmt(next) + ')' : ''}.</span>`);
+    if (next != null && next > l.cases) notes.push(`<span style="color:#b3261e;">Need ${fmt((next - l.cases) * l.qty)} more ${esc(l.item.unit||'')} at MMC to reach ${fmt(next)} case(s).</span>`);
+  }
+  if (l.shared > 1) notes.push('shared by ' + l.shared + ' SKUs');
+  if (l.store > 0 && l.cases != null && l.qty) notes.push('+' + fmt(Math.floor((l.mmc + l.store) / l.qty) - l.cases) + ' case(s) more if the ' + fmt(l.store) + ' in the company store is sent to MMC');
+  return notes.join('<br>');
+}
 function rmCompBadges(c){ const have = new Set(c.lines.map(l => l.role)); return RM_COMPONENTS.map(([k,l]) => have.has(k) ? `<span style="display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:10px;background:#e6f4ea;color:#1a7f37;margin:1px 2px 1px 0;">✓ ${l}</span>` : `<span style="display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:10px;background:#fdecea;color:#b3261e;font-weight:700;margin:1px 2px 1px 0;" title="This component is missing from the SKU's materials">✗ ${l} missing</span>`).join(''); }
 async function rmBrandPlanning(brandId, active){
   const { error } = await db.schema('sales').rpc('set_brand_planning', { p_brand: brandId, p_active: !!active });
@@ -8059,8 +8073,8 @@ function rmSkuViewHtml(){
       ${c.lines.map(l => `<tr style="${c.complete && l.cases != null && l.cases === c.cases ? 'background:#fff3f0;' : ''}"><td style="font-size:12px;${l.role==='OTHER'?'color:#999':''}">${esc(RM_COMP_LABEL[l.role]||l.role)}${l.roleSet?'':' <span style="font-size:10px;color:#aaa">(auto)</span>'}</td><td><b>${esc(l.item.code)}</b> <span style="color:#555">${esc(l.item.name||'')}</span></td><td>${esc(l.item.unit||'')}</td>
           <td class="amount">${l.qty ? l.qty + (l.qtySrc==='set' ? '' : ' <span style="font-size:10.5px;color:#999">(' + (l.qtySrc==='auto' ? 'auto' : l.qtySrc==='item' ? 'item' : l.qtySrc==='sku' ? 'bottles/case' : 'default') + ')</span>') : '<span style="color:#b26a00">not set</span>'}</td>
           <td class="amount">${fmt(l.mmc)}</td><td class="amount" style="color:#777">${fmt(l.store)}</td>
-          <td class="amount" style="font-weight:700;color:${l.cases==null?'#999':(l.cases===c.casesByItems?'#b3261e':'#1a7f37')}">${fmt(l.cases)}${l.cases != null && l.cases === c.casesByItems ? ' ⚠' : ''}</td>
-          <td style="font-size:11.5px;color:#777;">${l.shared > 1 ? 'shared by ' + l.shared + ' SKUs' : ''}${l.store > 0 && l.cases != null ? (l.shared > 1 ? ' · ' : '') + '+' + fmt(Math.floor((l.mmc + l.store) / l.qty) - l.cases) + ' case(s) more if the store stock is sent to MMC' : ''}</td></tr>`).join('')}
+          <td class="amount" style="font-weight:700;color:${l.cases==null?'#999':(l.cases===c.casesByItems?'#b3261e':'#1a7f37')}">${fmt(l.cases)}${l.cases != null && l.cases === c.casesByItems ? ' <span title="Running short — this material limits the SKU">⚠</span>' : ''}</td>
+          <td style="font-size:11.5px;color:#777;">${rmLineNote(l, c, fmt)}</td></tr>`).join('')}
       </tbody></table></div>`; });
   if (unassigned.length) html += `<h4 class="sec" style="margin-top:18px;">Case-wise materials not yet assigned to any SKU <span style="font-weight:normal;font-size:12px;color:#777">— ${unassigned.length} item(s)</span></h4>
       <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">At MMC (custody)</th><th class="amount">In company store</th><th class="amount">Tentative cases (own figure)</th><th>Suggested for</th></tr></thead><tbody>
