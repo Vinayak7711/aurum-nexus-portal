@@ -8096,11 +8096,12 @@ function rmBomSuggest(sku){
 // only for anything else the pack size read from the material's name (180 → 48, 750 → 12, 90 → 100).
 function rmBomQty(line, item, sku){
   if (line && Number(line.qty_per_case) > 0) return { q: Number(line.qty_per_case), src: 'set' };
-  if (Number(item && item.units_per_case) > 0) return { q: Number(item.units_per_case), src: 'item' };
+  // a component follows the SKU it is used on (a cap shared by 180 ml and 90 ml SKUs is 48/case on one and 100/case on the other) — before any single per-item figure
   const role = (line && line.component) || (typeof rmItemRoleAuto === 'function' ? rmItemRoleAuto(item) : 'OTHER');
   if (role === 'BOX') return { q: 1, src: 'default' };
   const upc = Number(sku && sku.units_per_case || 0);
   if (['BOTTLE','CAP','FRONT_LABEL','BACK_LABEL'].includes(role) && upc > 0) return { q: upc, src: 'sku' };
+  if (Number(item && item.units_per_case) > 0) return { q: Number(item.units_per_case), src: 'item' };
   const pc = rmPerCase(item); if (pc.upc) return { q: pc.upc, src: 'auto' };
   return { q: upc || null, src: 'sku' }; }
 // The five components every SKU needs for a case: bottle, cap, box, front label, back label — read from the material's code / name unless set on the line
