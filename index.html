@@ -4622,11 +4622,12 @@ async function mfgTab(which){
     // Dropdown labels: the item's full description is kept short enough for the native list to show whole
     // (very long "CODE — description (at MMC …)" lines were being cut off on narrow screens); the full name
     // shows under the box once an item is chosen, and on hover.
-    const [{ data: stock }, { data: batches, error: bErr }, { data: skusFG }, { data: blends }] = await Promise.all([
+    const [{ data: stock }, { data: batches, error: bErr }, { data: skusFG }, { data: blends }, { data: bomAll }] = await Promise.all([
       MF.from('v_rm_stock').select('*').order('code'),
       MF.from('batches').select('*').order('created_at',{ascending:false}).limit(60),
       MF.from('v_fg_stock').select('*'),
-      MF.from('blends').select('*').order('blend_date',{ascending:false}).order('created_at',{ascending:false}).limit(60)
+      MF.from('blends').select('*').order('blend_date',{ascending:false}).order('created_at',{ascending:false}).limit(60),
+      MF.from('sku_bom').select('sku_id, rm_item_id, qty_per_case, component')
     ]);
     let blendRmBy = {};
     if ((blends||[]).length){
@@ -4640,7 +4641,7 @@ async function mfgTab(which){
     window.__prTankBal = tankBal;
     const tankNow = t => tankBal[t] ? Number(tankBal[t].balance) : 0;
     (batches||[]).forEach(b => { b.sku = { sku_code: skuCodeOf(b.sku_id) }; });
-    window.__prStock = stock || []; window.__prBatches = batches || [];
+    window.__prStock = stock || []; window.__prBatches = batches || []; window.__prBom = bomAll || [];
     // only consumables are consumed in production — spare parts & plant machinery (Raw material tab category) stay out of this list
     const consumable = (stock||[]).filter(r => Number(r.balance) > 0 && (r.rm_category||'CONSUMABLE') === 'CONSUMABLE');
     const prOpt = i => `<option value="${i.rm_item_id}" title="${esc(rmFullLabel(i))}">${esc(rmShortLabel(i, 'at MMC: ' + Number(i.balance) + ' ' + (i.unit||'')))}</option>`;
@@ -4668,8 +4669,8 @@ async function mfgTab(which){
           <label style="display:flex;gap:6px;align-items:center;font-weight:600;margin:0;cursor:pointer;"><input type="radio" name="pr-mode" value="blend" style="width:auto;margin:0;" ${window.prMode==='blend'?'checked':''} onchange="prModeSet('blend')">🧴 Blend-wise production <span style="font-weight:normal;color:#777;font-size:11.5px;">(tank, blend name, litres, blend-wise materials)</span></label>
         </div>
         <div id="pr-case-sec" class="${window.prMode==='case'?'':'hidden'}">
-        <div class="row2c"><div><label>SKU produced *</label><select id="pr-sku">${skuOpts}</select></div>
-          <div class="row2c"><div><label>Cases *</label><input type="number" id="pr-cases" min="1"></div>
+        <div class="row2c"><div><label>SKU produced *</label><select id="pr-sku" onchange="prSkuMaterials()">${skuOpts}</select></div>
+          <div class="row2c"><div><label>Cases *</label><input type="number" id="pr-cases" min="1" oninput="prQtyHint()"></div>
           <div><label>Date</label><input type="date" id="pr-date" value="${calFmt(new Date())}"></div></div></div>
         <div style="margin-top:8px;"><label>Batch number of the product <span style="font-weight:normal;color:#888;font-size:11px;">— the batch number printed on the product / MMC’s batch; used to track these cases in Batches &amp; QC, FG stock and Targets</span></label><input type="text" id="pr-batchno" placeholder="e.g. MMC/FR/1026-01" list="pr-batchno-list"><datalist id="pr-batchno-list">${[...new Set((batches||[]).map(b=>b.product_batch_no).filter(Boolean))].map(x=>`<option value="${esc(x)}">`).join('')}</datalist></div>
         <div style="margin-top:10px;padding:8px 10px;background:#f4f7fb;border-radius:8px;">
@@ -4679,9 +4680,10 @@ async function mfgTab(which){
           <div id="pr-tank-hint" style="font-size:11.5px;color:#555;margin-top:4px;"></div>
         </div>
         <h4 class="sec" style="margin-top:12px;">Raw material consumed</h4>
-        <div><label>Material (at MMC) <span style="font-weight:normal;color:#888;font-size:11px;">— consumables only; spare parts &amp; plant machinery are not consumed in a batch</span></label><select id="pr-item" style="width:100%;max-width:100%;" onchange="rmShowFull('pr-item','pr-item-full')">${iopts || '<option value="">— no consumable material at MMC — send material from the store first —</option>'}</select>
-          <div id="pr-item-full" style="font-size:11.5px;color:#555;margin:4px 0 0;"></div></div>
-        <div class="row2c" style="margin-top:8px;"><div><label>Qty consumed</label><input type="number" id="pr-qty" min="0.001" step="any"></div>
+        <div><label>Material (at MMC) <span id="pr-item-note" style="font-weight:normal;color:#888;font-size:11px;">— the materials set for this SKU (Purchases → RM store → By brand SKU)</span></label><select id="pr-item" style="width:100%;max-width:100%;" onchange="rmShowFull('pr-item','pr-item-full');prQtyHint()">${iopts || '<option value="">— no consumable material at MMC — send material from the store first —</option>'}</select>
+          <div id="pr-item-full" style="font-size:11.5px;color:#555;margin:4px 0 0;"></div>
+          <div id="pr-item-tools" style="font-size:11.5px;color:#555;margin:4px 0 0;"></div></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Qty consumed <span id="pr-qty-hint" style="font-weight:normal;color:#888;font-size:11px;"></span></label><input type="number" id="pr-qty" min="0.001" step="any"></div>
           <div><label>&nbsp;</label><button class="btn ghost sm" style="display:block;" onclick="prodRepAddLine()">+ Add material</button></div></div>
         <div id="pr-lines" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
         <div class="switch" style="margin:10px 0;"><input type="checkbox" id="pr-qc" checked><span>QC passed — put the cases straight into FG stock</span></div>
@@ -4724,7 +4726,7 @@ async function mfgTab(which){
         || `<tr><td colspan="${isDir()?8:7}" style="color:#777">No blend recorded yet.</td></tr>`}
       </tbody></table></div>
       <p style="font-size:11.5px;color:#777;margin-top:6px;">In the tanks now (all blends in − all blend drawn by case-wise production): ${['TANK1','TANK2','TANK3'].map(t=>'<b>'+tankLabel(t)+'</b> '+tankNow(t)+' L' + (tankBal[t] ? ' (blended ' + Number(tankBal[t].blended) + ' − drawn ' + Number(tankBal[t].drawn) + ')' : '')).join(' · ')}.</p>`;
-    prodRepRender(); blendRender(); rmShowFull('pr-item','pr-item-full'); rmShowFull('bl-item','bl-item-full');
+    prodRepRender(); blendRender(); prSkuMaterials(); rmShowFull('bl-item','bl-item-full');
     return;
   }
   if (which === 'incoming'){
@@ -5643,6 +5645,52 @@ async function blendEditSave(id){
   const m = $('pr-msg'); if (m) say('pr-msg','Blend updated.', true);
 }
 let prodRepLines = [];
+// Case-wise production: the material list follows the SKU chosen — only the materials set for that SKU (its bill of materials), grouped by component
+window.prAllMats = false;
+function prSkuBom(skuId){ return (window.__prBom||[]).filter(b => b.sku_id === skuId); }
+function prBomQtyPerCase(b, item, sku){ if (b && Number(b.qty_per_case) > 0) return Number(b.qty_per_case); if (typeof rmPerCase === 'function'){ const pc = rmPerCase(item); if (pc.upc) return pc.upc; } return (/\bBOX\b|CARTON|\bCTN\b|SHIPPER/i.test((item.code||'')+' '+(item.name||''))) ? 1 : (Number(sku && sku.units_per_case || 0) || null); }
+function prSkuMaterials(){
+  const sel = $('pr-item'), skuSel = $('pr-sku'); if (!sel || !skuSel) return;
+  const sku = (M.skus||[]).find(s => s.id === skuSel.value) || {}; const stock = window.__prStock || [];
+  const consumable = stock.filter(r => Number(r.balance) > 0 && (r.rm_category||'CONSUMABLE') === 'CONSUMABLE');
+  const prOpt = i => `<option value="${i.rm_item_id}" title="${esc(rmFullLabel(i))}">${esc(rmShortLabel(i, 'at MMC: ' + Number(i.balance) + ' ' + (i.unit||'')))}</option>`;
+  const bom = prSkuBom(sku.id); const note = $('pr-item-note'), tools = $('pr-item-tools');
+  const allHtml = () => { const grp = (sb, l) => { const g = consumable.filter(i => (i.rm_subcat||'') === sb); return g.length ? `<optgroup label="${l}">${g.map(prOpt).join('')}</optgroup>` : ''; }; return grp('CASE','📦 Case-wise consumables') + grp('', 'Consumables not yet sorted (case-wise / blend-wise)'); };
+  if (!bom.length || window.prAllMats){
+    sel.innerHTML = allHtml() || '<option value="">— no consumable material at MMC — send material from the store first —</option>';
+    if (note) note.textContent = bom.length ? '— all case-wise consumables at MMC' : '— no materials set for ' + (sku.sku_code||'this SKU') + ' yet (Purchases → RM store → By brand SKU → Edit materials); showing all case-wise consumables';
+    if (tools) tools.innerHTML = bom.length ? `<a href="#" onclick="window.prAllMats=false;prSkuMaterials();return false;">Show only ${esc(sku.sku_code||'this SKU')}’s materials</a>` : '';
+  } else {
+    const order = ['BOTTLE','CAP','BOX','FRONT_LABEL','BACK_LABEL','OTHER']; const label = { BOTTLE:'Bottle', CAP:'Cap', BOX:'Box', FRONT_LABEL:'Front label', BACK_LABEL:'Back label', OTHER:'Other' };
+    const lines = bom.map(b => { const st = stock.find(x => x.rm_item_id === b.rm_item_id); const it = st || (rmItems||[]).find(x => x.id === b.rm_item_id); if (!it) return null; const role = b.component || (typeof rmItemRoleAuto === 'function' ? rmItemRoleAuto(it) : 'OTHER'); return { b, it: st ? st : { rm_item_id: it.id, code: it.code, name: it.name, unit: it.unit, balance: 0 }, role, atMmc: st ? Number(st.balance) : 0 }; }).filter(Boolean)
+      .sort((a,b) => order.indexOf(a.role) - order.indexOf(b.role) || String(a.it.code).localeCompare(String(b.it.code)));
+    sel.innerHTML = order.map(r => { const g = lines.filter(l => l.role === r); return g.length ? `<optgroup label="${label[r]}">${g.map(l => l.atMmc > 0 ? prOpt(l.it) : `<option value="${l.it.rm_item_id}" disabled title="Nothing at MMC">${esc(rmShortLabel(l.it, 'nothing at MMC'))}</option>`).join('')}</optgroup>` : ''; }).join('');
+    const first = [...sel.options].find(o => !o.disabled && o.value); if (first) sel.value = first.value;
+    if (note) note.textContent = '— the ' + lines.length + ' material(s) set for ' + (sku.sku_code||'this SKU') + ', by component';
+    if (tools) tools.innerHTML = `<button class="mini" onclick="prAddAllMaterials()" title="Add every material of this SKU with quantity = cases × per-case figure">＋ Add all ${lines.length} materials for the cases entered</button> <a href="#" style="margin-left:8px;" onclick="window.prAllMats=true;prSkuMaterials();return false;">Show all materials</a>`;
+    window.__prSkuLines = lines;
+  }
+  rmShowFull('pr-item','pr-item-full'); prQtyHint();
+}
+function prQtyHint(){
+  const h = $('pr-qty-hint'), sel = $('pr-item'), skuSel = $('pr-sku'); if (!h || !sel) return;
+  const sku = (M.skus||[]).find(s => s.id === (skuSel||{}).value) || {}; const cases = Number(($('pr-cases')||{}).value) || 0;
+  const b = prSkuBom(sku.id).find(x => x.rm_item_id === sel.value); const st = (window.__prStock||[]).find(x => x.rm_item_id === sel.value);
+  if (!st){ h.textContent = ''; return; }
+  const per = prBomQtyPerCase(b, st, sku);
+  if (per && cases > 0){ const need = Math.round(per * cases * 1000) / 1000; h.textContent = '— ' + cases + ' case(s) × ' + per + ' = ' + need + ' ' + (st.unit||''); const q = $('pr-qty'); if (q && !q.value) q.placeholder = need; }
+  else if (per) h.textContent = '— ' + per + ' per case'; else h.textContent = '';
+}
+function prAddAllMaterials(){
+  const cases = Number(($('pr-cases')||{}).value) || 0; if (!(cases > 0)){ say('pr-msg','Enter the cases produced first — the quantities are worked out from them.',false); return; }
+  const skuSel = $('pr-sku'); const sku = (M.skus||[]).find(s => s.id === (skuSel||{}).value) || {}; const lines = window.__prSkuLines || []; let added = 0, short = [];
+  lines.forEach(l => { const per = prBomQtyPerCase(l.b, l.it, sku); if (!per) return; const need = Math.round(per * cases * 1000) / 1000;
+    const already = prodRepLines.filter(x => x.rm_item_id === l.it.rm_item_id).reduce((s,x)=>s+x.qty,0);
+    if (need + already > l.atMmc){ short.push(l.it.code + ' (need ' + need + ', at MMC ' + l.atMmc + ')'); return; }
+    const ex = prodRepLines.find(x => x.rm_item_id === l.it.rm_item_id); if (ex) ex.qty = need; else prodRepLines.push({ rm_item_id: l.it.rm_item_id, qty: need, label: (l.it.code||'?') + ' ' + (l.it.name||'') }); added++; });
+  prodRepRender();
+  say('pr-msg', added + ' material(s) added for ' + cases + ' case(s)' + (short.length ? ' — not enough at MMC for: ' + short.join('; ') + '. Adjust the quantity or send material from the store.' : '.'), !short.length);
+}
 function prodRepRender(){
   const out = $('pr-lines'); if (!out) return;
   out.innerHTML = prodRepLines.length
