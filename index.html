@@ -4750,7 +4750,7 @@ async function mfgTab(which){
     });
     const sendable = live.filter(i => Number((storeBy[i.rm_item_id]||{}).store_balance||0) > 0);
     const optOf = i => `<option value="${i.rm_item_id}" title="${esc(rmFullLabel(i))}">${esc(rmShortLabel(i, 'store: ' + Number((storeBy[i.rm_item_id]||{}).store_balance||0)))}</option>`;
-    const iopts = ['CONSUMABLE','SPARES'].map(c => { const g = sendable.filter(i => (i.rm_category||'CONSUMABLE') === c); return g.length ? `<optgroup label="${RM_CAT_LABEL[c]}">${g.map(optOf).join('')}</optgroup>` : ''; }).join('');
+    const iopts = ['CONSUMABLE','SPARES','SERVICES'].map(c => { const g = sendable.filter(i => (i.rm_category||'CONSUMABLE') === c); return g.length ? `<optgroup label="${RM_CAT_LABEL[c]}">${g.map(optOf).join('')}</optgroup>` : ''; }).join('');
     let html = `<div class="card" style="margin-bottom:14px;max-width:560px;"><h2 style="font-size:15px;">Record material sent to MMC</h2>
       <p style="font-size:11.5px;color:#777;margin:4px 0 0;">Only materials with balance in the company store can be sent.</p>
       <div class="row2c" style="margin-top:8px;"><select id="ri-item">${iopts || '<option value="">— nothing in the company store —</option>'}</select>
@@ -4805,7 +4805,8 @@ function rmRows(k){
   list = list.slice().sort((a,b) => (RM_CAT_ORDER[a.rm_category||'CONSUMABLE'] - RM_CAT_ORDER[b.rm_category||'CONSUMABLE']) || (RM_SUB_ORDER[rmSubOf(a)] - RM_SUB_ORDER[rmSubOf(b)]) || String(a.code).localeCompare(String(b.code)));
   return q ? list.filter(r => (String(r.code)+' '+String(r.name)).toLowerCase().includes(q)) : list;
 }
-const RM_CAT_LABEL = { CONSUMABLE: '🧪 Consumables', SPARES: '🔧 Spare parts & plant machinery' };
+const RM_CAT_LABEL = { CONSUMABLE: '🧪 Consumables', SPARES: '🔧 Spare parts & plant machinery', SERVICES: '🧾 Services & expenses' };
+const RM_CAT_SHORT = { CONSUMABLE: 'Consumable', SPARES: 'Spare parts & plant machinery', SERVICES: 'Services & expenses' };
 const RM_CAT_ORDER = { CONSUMABLE: 0, SPARES: 1 };
 const RM_SUB_LABEL = { CASE: '📦 Case-wise', BLEND: '🧴 Blend-wise', '': '— not yet sorted' };
 const RM_SUB_ORDER = { CASE: 0, BLEND: 1, '': 2 };
@@ -4817,17 +4818,17 @@ function rmChipsDraw(k){
   const cat = window.rmCat[k] || '', sub = window.rmSub[k] || '';
   const chip = (on, js, label) => `<button class="chip ${on?'on':''}" onclick="${js}">${label}</button>`;
   let h = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;"><span style="font-size:12px;color:#555;">Category:</span>` +
-    [['','All'],['CONSUMABLE',RM_CAT_LABEL.CONSUMABLE],['SPARES',RM_CAT_LABEL.SPARES]].map(([v,l]) => chip(cat===v, `window.rmCat['${k}']='${v}';window.rmSub['${k}']='';rmPosDraw('${k}')`, l)).join('') +
+    [['','All'],['CONSUMABLE',RM_CAT_LABEL.CONSUMABLE],['SPARES',RM_CAT_LABEL.SPARES],['SERVICES',RM_CAT_LABEL.SERVICES]].map(([v,l]) => chip(cat===v, `window.rmCat['${k}']='${v}';window.rmSub['${k}']='';rmPosDraw('${k}')`, l)).join('') +
     (rmCanSetCat() ? '<span style="font-size:11px;color:#777;margin-left:6px;">— change an item\'s category and, for consumables, case-wise / blend-wise from the boxes beside its name</span>' : '') + '</div>';
-  if (cat !== 'SPARES') h += `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 2px 14px;"><span style="font-size:12px;color:#555;">Consumables:</span>` +
+  if (cat !== 'SPARES' && cat !== 'SERVICES') h += `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 2px 14px;"><span style="font-size:12px;color:#555;">Consumables:</span>` +
     [['','All'],['CASE',RM_SUB_LABEL.CASE],['BLEND',RM_SUB_LABEL.BLEND],['NONE','not yet sorted']].map(([v,l]) => chip(sub===v, `window.rmSub['${k}']='${v}';if('${v}')window.rmCat['${k}']='CONSUMABLE';rmPosDraw('${k}')`, l)).join('') + '</div>';
   box.innerHTML = h;
 }
 function rmCanSetCat(){ const pj = (me && me.permissions_json) || {}; return isDir() || !!((pj.mfg||{}).edit || (pj.mfg||{}).admin || (pj.purchase||{}).edit || (pj.purchase||{}).approve); }
 function rmCatPick(r){
   const c = r.rm_category || 'CONSUMABLE', sb = c === 'CONSUMABLE' ? (r.rm_subcat || '') : '';
-  if (!rmCanSetCat()) return `<span style="font-size:10.5px;color:#777;">${c==='SPARES'?'🔧 spare / machinery':'🧪 consumable · ' + (sb ? RM_SUB_LABEL[sb].replace(/^.. /,'').toLowerCase() : 'not yet sorted')}</span>`;
-  return `<select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;" onchange="rmSetCat('${r.rm_item_id}', this.value, null)"><option value="CONSUMABLE" ${c==='CONSUMABLE'?'selected':''}>🧪 consumable</option><option value="SPARES" ${c==='SPARES'?'selected':''}>🔧 spare / machinery</option></select>` +
+  if (!rmCanSetCat()) return `<span style="font-size:10.5px;color:#777;">${c==='SPARES'?'🔧 spare / machinery':c==='SERVICES'?'🧾 service / expense':'🧪 consumable · ' + (sb ? RM_SUB_LABEL[sb].replace(/^.. /,'').toLowerCase() : 'not yet sorted')}</span>`;
+  return `<select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;" onchange="rmSetCat('${r.rm_item_id}', this.value, null)"><option value="CONSUMABLE" ${c==='CONSUMABLE'?'selected':''}>🧪 consumable</option><option value="SPARES" ${c==='SPARES'?'selected':''}>🔧 spare / machinery</option><option value="SERVICES" ${c==='SERVICES'?'selected':''}>🧾 service / expense</option></select>` +
     (c === 'CONSUMABLE' ? ` <select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;${sb?'':'border-color:#b26a00;'}" onchange="rmSetCat('${r.rm_item_id}', 'CONSUMABLE', this.value||null)"><option value="" ${!sb?'selected':''}>— case-wise or blend-wise? —</option><option value="CASE" ${sb==='CASE'?'selected':''}>📦 case-wise</option><option value="BLEND" ${sb==='BLEND'?'selected':''}>🧴 blend-wise</option></select>` : '');
 }
 async function rmSetCat(id, cat, sub){
@@ -4914,11 +4915,11 @@ function rmSheet(k){
   const V = rmValOn(k), vh = V ? ['Landed cost / unit (Rs)','Value (Rs)'] : [];
   const vc = (r, b) => { if (!V) return []; const c = rmCostOf(r); return c == null ? ['', ''] : [Math.round(c*100)/100, Math.round(b*c*100)/100]; };
   let S;
-  const catT = (window.rmCat||{})[k] ? ' — ' + ((window.rmCat||{})[k]==='SPARES' ? 'spare parts & plant machinery' : 'consumables') : '';
+  const catT = (window.rmCat||{})[k] ? ' — ' + ((window.rmCat||{})[k]==='SPARES' ? 'spare parts & plant machinery' : (window.rmCat||{})[k]==='SERVICES' ? 'services & expenses' : 'consumables') : '';
   if (k === 'mmc') S = { title: 'Raw material at MMC' + catT, file: 'rm-at-mmc', head: ['Category','Item code','Item','Issued to MMC','Consumed','At MMC (balance)','Unit'].concat(vh),
-      rows: rmRows('mmc').map(r=>[r.rm_category==='SPARES'?'Spare parts & plant machinery':'Consumable' + (r.rm_subcat==='CASE'?' · case-wise':r.rm_subcat==='BLEND'?' · blend-wise':''), r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||''].concat(vc(r, Number(r.balance||0)))) };
+      rows: rmRows('mmc').map(r=>[r.rm_category==='SPARES'||r.rm_category==='SERVICES'?RM_CAT_SHORT[r.rm_category]:'Consumable' + (r.rm_subcat==='CASE'?' · case-wise':r.rm_subcat==='BLEND'?' · blend-wise':''), r.code, r.name, Number(r.issued||0), Number(r.consumed||0), Number(r.balance||0), r.unit||''].concat(vc(r, Number(r.balance||0)))) };
   else S = { title: 'Raw material in company store' + catT, file: 'rm-company-store', head: ['Category','Item code','Item','Received in store','Sent to MMC','In company store (balance)','Unit'].concat(vh),
-      rows: rmRows('store').map(r=>[r.rm_category==='SPARES'?'Spare parts & plant machinery':'Consumable' + (r.rm_subcat==='CASE'?' · case-wise':r.rm_subcat==='BLEND'?' · blend-wise':''), r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||''].concat(vc(r, Number(r.store_balance||0)))) };
+      rows: rmRows('store').map(r=>[r.rm_category==='SPARES'||r.rm_category==='SERVICES'?RM_CAT_SHORT[r.rm_category]:'Consumable' + (r.rm_subcat==='CASE'?' · case-wise':r.rm_subcat==='BLEND'?' · blend-wise':''), r.code, r.name, Number(r.received||0), Number(r.issued_to_mmc||0), Number(r.store_balance||0), r.unit||''].concat(vc(r, Number(r.store_balance||0)))) };
   if (V && S.rows.length){ S.title += ' — with landed value (incl. taxes & transport)'; S.rows.push(['','','Total value','','','','','', Math.round(S.rows.reduce((t,r)=>t+(Number(r[8])||0),0)*100)/100]); }
   return S;
 }
@@ -7071,13 +7072,13 @@ async function rmQuickAdd(backTab){
   const suggested = name.replace(/[^A-Za-z0-9]/g,'').slice(0,6).toUpperCase() || 'ITEM';
   const code = (prompt('Short unique code for it:', suggested)||'').trim().toUpperCase();
   if (!code) return;
-  const catAns = (prompt('Category — type C for a consumable (used up in production) or S for a spare part / plant machinery:', 'C')||'').trim().toUpperCase();
-  const cat = catAns.startsWith('S') ? 'SPARES' : 'CONSUMABLE';
+  const catAns = (prompt('Category — type C for a consumable (used up in production), S for a spare part / plant machinery, or V for a service / expense (fees, charges, consultancy…):', 'C')||'').trim().toUpperCase();
+  const cat = catAns.startsWith('S') ? 'SPARES' : catAns.startsWith('V') ? 'SERVICES' : 'CONSUMABLE';
   const { data: newId, error } = await db.schema('mfg').rpc('add_rm_item', { p_code: code, p_name: name, p_unit: unit });
   if (error){ alert('Could not add material: ' + error.message); return; }
   let sub = null;
   if (cat === 'CONSUMABLE'){ const sa = (prompt('Consumed how? Type C for case-wise (packaging per case — bottles, caps, labels, cartons…) or B for blend-wise (per blend / batch volume — spirit, flavour, water, chemicals…). Leave blank to sort it later:', 'C')||'').trim().toUpperCase(); sub = sa.startsWith('B') ? 'BLEND' : (sa.startsWith('C') ? 'CASE' : null); }
-  if (newId && (cat === 'SPARES' || sub)){ const { error: ce } = await db.schema('mfg').rpc('set_rm_category', { p_item: newId, p_cat: cat, p_sub: sub }); if (ce) alert('Material added, but its category could not be set: ' + ce.message); }
+  if (newId && (cat === 'SPARES' || cat === 'SERVICES' || sub)){ const { error: ce } = await db.schema('mfg').rpc('set_rm_category', { p_item: newId, p_cat: cat, p_sub: sub }); if (ce) alert('Material added, but its category could not be set: ' + ce.message); }
   const { data } = await db.schema('mfg').from('rm_items').select('*').eq('is_active', true).order('code');
   rmItems = data || [];
   await purchaseTab(backTab);
@@ -7418,8 +7419,8 @@ async function purchaseTab(t){
       return Number(r.received)!==0 || Number(r.issued_to_mmc)!==0 || Number(r.store_balance)!==0 || Number(r.moved_to_asset||0)!==0 ||
              Number(m.balance||0)!==0 || Number(m.consumed||0)!==0;});
     // Order of the list: case-wise consumables first, then blend-wise, then the consumables not yet sorted, then spare parts & plant machinery — A→Z inside each group
-    const rmGroupOf = i => { const cat = (i && i.rm_category) || 'CONSUMABLE'; if (cat !== 'CONSUMABLE') return 3; return i && i.rm_subcat === 'CASE' ? 0 : (i && i.rm_subcat === 'BLEND' ? 1 : 2); };
-    const RM_GROUP_TITLE = ['📦 Case-wise consumables', '🧴 Blend-wise consumables', 'Consumables not yet sorted (case-wise / blend-wise — set under MMC → Raw material)', '🔧 Spare parts & plant machinery'];
+    const rmGroupOf = i => { const cat = (i && i.rm_category) || 'CONSUMABLE'; if (cat === 'SERVICES') return 4; if (cat !== 'CONSUMABLE') return 3; return i && i.rm_subcat === 'CASE' ? 0 : (i && i.rm_subcat === 'BLEND' ? 1 : 2); };
+    const RM_GROUP_TITLE = ['📦 Case-wise consumables', '🧴 Blend-wise consumables', 'Consumables not yet sorted (case-wise / blend-wise / spares / services — use the category box)', '🔧 Spare parts & plant machinery', '🧾 Services & expenses (not material — fees, charges, consultancy…)'];
     live.forEach(r => { r.__grp = rmGroupOf(itemBy[r.rm_item_id]); });
     live.sort((a,b) => a.__grp - b.__grp || String(a.code||'').localeCompare(String(b.code||'')));
     const nCols = 7 + (anyMoved?1:0) + (anyCaseWise?1:0) + (canMove?1:0);
@@ -7447,7 +7448,7 @@ async function purchaseTab(t){
         (anyCaseWise ? `<td class="amount">${rmTentativeCell(itemBy[r.rm_item_id], m.balance, canMove)}</td>` : '') +
         (canMove ? `<td><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button>${r.__grp !== 2 ? '' : ((Number(r.store_balance)>0 || Number(m.balance||0)>0)?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this item out of the company store or MMC custody into the asset register">→ Asset</button>`:`<span style="font-size:10px;color:#aaa;display:block;text-align:center;" title="Nothing in the store or at MMC to move${Number(r.moved_to_asset||0)>0?' — '+Number(r.moved_to_asset)+' already in the asset register':''}">${Number(r.moved_to_asset||0)>0?'in assets':'no stock'}</span>`)}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
       </tbody></table></div>
-      <p style="font-size:11.5px;color:#777;margin-top:6px;">Listed in this order: case-wise consumables, then blend-wise, then consumables not yet sorted, then spare parts &amp; plant machinery — A→Z within each group (the category is set under MMC → Raw material).</p>
+      <p style="font-size:11.5px;color:#777;margin-top:6px;">Listed in this order: case-wise consumables, then blend-wise, then consumables not yet sorted, then spare parts &amp; plant machinery, then services &amp; expenses — A→Z within each group (the category box on the row sets it; MMC → Raw material shows the same).</p>
       ${anyCaseWise ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">📦 <b>Tentative cases</b> = material at MMC (custody) ÷ units needed for one case, for case-wise consumables only (Raw material tab → Consumables → Case-wise). Units per case come from the pack size in the item’s code / name — <b>180 ml → 48</b>, <b>750 ml → 12</b>, <b>90 ml → 100</b>, a <b>box / carton → 1</b> — unless a figure is set on the item with ✏️ Edit (e.g. 1 carton per case). The figure is indicative: the smallest tentative figure across a line’s materials is what can actually be made.</p>' : ''}`;
     return;
   }
@@ -8251,22 +8252,23 @@ function rmStorePrint(){
 // ---- RM store: sort an item into its category right here (same setting as MMC → Raw material → category chips) ----
 function rmStoreCatPick(i, itemId){
   const cat = (i && i.rm_category) || 'CONSUMABLE', sub = cat === 'CONSUMABLE' ? ((i && i.rm_subcat) || '') : '';
-  const cur = cat === 'SPARES' ? 'SPARES' : (sub === 'CASE' ? 'CASE' : (sub === 'BLEND' ? 'BLEND' : ''));
+  const cur = cat === 'SPARES' ? 'SPARES' : cat === 'SERVICES' ? 'SERVICES' : (sub === 'CASE' ? 'CASE' : (sub === 'BLEND' ? 'BLEND' : ''));
   const unsorted = cur === '';
   return `<select onchange="rmStoreSetCat('${itemId}', this.value)" title="Category of this material" style="width:auto;display:inline-block;padding:3px 6px;font-size:11.5px;${unsorted ? 'border-color:#b26a00;color:#b26a00;font-weight:600;background:#fff8ee;' : ''}">
       <option value="" ${cur===''?'selected':''}>${unsorted ? '📂 assign category…' : '— not sorted —'}</option>
       <option value="CASE" ${cur==='CASE'?'selected':''}>📦 Case-wise</option>
       <option value="BLEND" ${cur==='BLEND'?'selected':''}>🧴 Blend-wise</option>
-      <option value="SPARES" ${cur==='SPARES'?'selected':''}>🔧 Spare parts / machinery</option></select>`;
+      <option value="SPARES" ${cur==='SPARES'?'selected':''}>🔧 Spare parts / machinery</option>
+      <option value="SERVICES" ${cur==='SERVICES'?'selected':''}>🧾 Services / expenses</option></select>`;
 }
 async function rmStoreSetCat(itemId, v){
-  const cat = v === 'SPARES' ? 'SPARES' : 'CONSUMABLE', sub = v === 'CASE' || v === 'BLEND' ? v : null;
+  const cat = v === 'SPARES' ? 'SPARES' : v === 'SERVICES' ? 'SERVICES' : 'CONSUMABLE', sub = v === 'CASE' || v === 'BLEND' ? v : null;
   const { error } = await db.schema('mfg').rpc('set_rm_category', { p_item: itemId, p_cat: cat, p_sub: sub });
   if (error){ alert('Could not change the category: ' + error.message); return; }
   const it = (window.__rmItemBy||{})[itemId]; if (it){ it.rm_category = cat; it.rm_subcat = sub; }
   (rmItems||[]).forEach(x => { if (x.id === itemId){ x.rm_category = cat; x.rm_subcat = sub; } });
   await purchaseTab('store');
-  const box = $('rm-name-box'); if (box) box.innerHTML = `<div class="msg ok">${esc(it ? it.code : 'Material')} sorted as ${v === 'SPARES' ? 'spare parts & plant machinery' : v === 'CASE' ? 'a case-wise consumable' : v === 'BLEND' ? 'a blend-wise consumable' : 'not yet sorted'} — it now sits in that group here and under MMC → Raw material.</div>`;
+  const box = $('rm-name-box'); if (box) box.innerHTML = `<div class="msg ok">${esc(it ? it.code : 'Material')} sorted as ${v === 'SPARES' ? 'spare parts & plant machinery' : v === 'SERVICES' ? 'a service / expense (not material)' : v === 'CASE' ? 'a case-wise consumable' : v === 'BLEND' ? 'a blend-wise consumable' : 'not yet sorted'} — it now sits in that group here and under MMC → Raw material.</div>`;
 }
 // ---- Tentative production cases from a case-wise consumable ----
 // Pack size read from the code / name: 180 ml → 48 units per case, 750 ml → 12, 90 ml → 100 (a figure set on the item wins).
