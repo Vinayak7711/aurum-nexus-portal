@@ -4967,50 +4967,62 @@ function foDetailsHtml(o){
   const cell = (b, pk) => lines.filter(l => (l.brand||l.sku_code)===b && foPackLabel(l)===pk).reduce((a,l)=>a+Number(l.cases||0),0);
   const colTot = pk => lines.filter(l => foPackLabel(l)===pk).reduce((a,l)=>a+Number(l.cases||0),0);
   const money = foShowMoney();
-  let h = `<table style="font-size:11.5px;border-collapse:collapse;min-width:260px;"><thead><tr><th style="padding:2px 6px;">Sr.</th><th style="padding:2px 6px;">Product</th>${packs.map(pk=>`<th style="padding:2px 6px;text-align:right;">${pk}</th>`).join('')}</tr></thead><tbody>`;
+  let h = `<table style="font-size:11.5px;border-collapse:collapse;width:100%;max-width:560px;"><thead><tr><th style="padding:3px 6px;">Sr.</th><th style="padding:3px 6px;">Product</th>${packs.map(pk=>`<th style="padding:3px 6px;text-align:right;">${pk}</th>`).join('')}</tr></thead><tbody>`;
   brands.forEach((b,i) => { h += `<tr><td style="padding:2px 6px;">${i+1}</td><td style="padding:2px 6px;"><b>${esc(b)}</b></td>${packs.map(pk=>`<td style="padding:2px 6px;text-align:right;">${cell(b,pk)||0}</td>`).join('')}</tr>`; });
   h += `<tr style="border-top:1px solid #ccc;"><td></td><td style="padding:2px 6px;"><b>Total cases</b></td>${packs.map(pk=>`<td style="padding:2px 6px;text-align:right;"><b>${colTot(pk)}</b></td>`).join('')}</tr>`;
   h += `</tbody></table>`;
   const row = (k,v) => `<tr><th style="text-align:left;padding:2px 6px;font-weight:600;white-space:nowrap;">${k}</th><td style="padding:2px 6px;text-align:right;">${v}</td></tr>`;
-  h += `<table style="font-size:11.5px;border-collapse:collapse;margin-top:4px;">` +
-    row('Total cases', Number(o.total_cases||0)) +
-    (money ? row('Total case amount', '₹ '+inr(o.gross_total)) + row('Gross total', '<b>₹ '+inr(o.gross_total)+'</b>') +
-      (Number(o.total_excise)>0 ? row('Total excise', '₹ '+inr(o.total_excise)) : '') + (Number(o.total_vat)>0 ? row('Total VAT', '₹ '+inr(o.total_vat)) : '') : '') +
-    `</table>`;
+  if (money) h += `<div style="font-size:11.5px;color:#555;margin-top:4px;">Case amount ₹ ${inr(o.gross_total)}${Number(o.total_excise)>0?' · excise ₹ '+inr(o.total_excise):''}${Number(o.total_vat)>0?' · VAT ₹ '+inr(o.total_vat):''}</div>`;
   return h;
 }
+function foIsDone(o){ return ['DELIVERED','CLOSED','CANCELLED'].includes(o.status) || o.factory_status === 'DISPATCHED'; }
 function foListHtml(list, err){
   const edit = foCanEdit(), money = foShowMoney();
-  const head = `<thead><tr><th>Sr.</th><th>Date</th><th>Order no.</th><th>Distributor (mobile) — district</th><th>MMC</th><th>Order details</th><th class="amount">Total case qty</th>${money?'<th class="amount">Gross total ₹</th>':''}<th>Indent no.</th><th>Status</th><th>Approved time</th><th>Transporter quotes</th><th>Action</th></tr></thead>`;
-  const rows = list.map((o,i) => {
+  // two lists: orders still with the factory (received / approved / being filled) and orders completed (dispatched, delivered, closed)
+  const open = list.filter(o => !foIsDone(o)), done = list.filter(foIsDone);
+  window.__foView = window.__foView || 'open';
+  const show = window.__foView === 'done' ? done : open;
+  const card = (o, i) => {
     const st = FO_STATUS[o.factory_status] || [o.factory_status,'#333'];
     const quotes = Array.isArray(o.quotes) ? o.quotes : [];
     const best = quotes.length ? Math.min(...quotes.map(q=>Number(q.amount||0))) : null;
-    return `<tr id="fo-row-${o.id}">
-      <td>${i+1}</td>
-      <td style="white-space:nowrap">${o.order_date}<br><span style="font-size:10.5px;color:#777">${foWhen(o.created_at).slice(11)}</span></td>
-      <td><b>${esc(o.so_no)}</b><br><span style="font-size:10.5px;color:${o.status==='DISPATCHED'||o.status==='DELIVERED'?'#1a7f37':'#0b57d0'}">${esc(o.status)}</span>${o.invoice_no?'<br><span style="font-size:10.5px;color:#777">Inv '+esc(o.invoice_no)+'</span>':''}</td>
-      <td>${esc(o.party_name)}${o.party_phone?' <span style="color:#777">('+esc(o.party_phone)+')</span>':''}${o.party_district?'<br><span style="font-size:11px;color:#555">— '+esc(o.party_district)+'</span>':''}</td>
-      <td>${esc(o.mmc_name||'—')}</td>
-      <td>${foDetailsHtml(o)}</td>
-      <td class="amount"><b>${Number(o.total_cases||0)}</b></td>
-      ${money?`<td class="amount">${inr(o.gross_total)}</td>`:''}
-      <td>${edit ? `<input type="text" value="${esc(o.indent_no||'')}" placeholder="Indent no." style="width:110px;padding:5px 7px;font-size:12px;" onchange="foSetIndent('${o.id}', this.value)">` : (esc(o.indent_no)||'—')}</td>
-      <td>${edit ? `<select style="width:auto;padding:5px 7px;font-size:12px;color:${st[1]};font-weight:600;" onchange="foSetStatus('${o.id}', this.value)">${Object.entries(FO_STATUS).map(([k,v])=>`<option value="${k}" ${k===o.factory_status?'selected':''}>${v[0]}</option>`).join('')}</select>` : `<span style="color:${st[1]};font-weight:600">${st[0]}</span>`}</td>
-      <td style="white-space:nowrap">${foWhen(o.approved_at)}${o.approved_by_name?'<br><span style="font-size:10.5px;color:#777">by '+esc(o.approved_by_name)+'</span>':''}</td>
-      <td style="text-align:center"><button class="mini" style="font-weight:700;color:${quotes.length?'#b3261e':'#777'};font-size:14px;" title="Transporter quotes" onclick="foQuotes('${o.id}')">${quotes.length}</button>${best!=null?'<br><span style="font-size:10.5px;color:#555">best ₹ '+inr(best)+'</span>':''}</td>
-      <td style="white-space:nowrap"><button class="mini" onclick="foView('${o.id}')" title="View / print the factory order">🔍 View</button> <button class="mini" onclick="foPrint('${o.id}')" title="Print">🖨</button> ${edit?`<button class="mini" onclick="foQuotes('${o.id}')" title="Transporter quotes">🚚</button>`:''}</td>
-    </tr>`;
-  }).join('');
+    const oc = o.status==='DISPATCHED'||o.status==='DELIVERED'||o.status==='CLOSED' ? '#1a7f37' : (o.status==='CANCELLED' ? '#b3261e' : '#0b57d0');
+    return `<div class="card" id="fo-row-${o.id}" style="padding:12px 14px;margin-bottom:10px;border-left:4px solid ${st[1]};">
+      <div style="display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;">
+        <div style="font-size:14px;"><span style="color:#777;font-size:12px;">${i+1}.</span> <b>${esc(o.so_no)}</b> <span class="pill ${esc(o.status)}" style="margin-left:4px;">${esc(o.status)}</span>${o.invoice_no?' <span style="font-size:11px;color:#777">Inv '+esc(o.invoice_no)+'</span>':''}</div>
+        <div style="font-size:12px;color:#555;">📅 ${o.order_date} <span style="color:#999">${foWhen(o.created_at).slice(11)}</span></div>
+        <div style="font-size:12.5px;"><b>${esc(o.party_name)}</b>${o.party_phone?' <span style="color:#777">('+esc(o.party_phone)+')</span>':''}${o.party_district?' <span style="color:#555">— '+esc(o.party_district)+'</span>':''}</div>
+        <div style="font-size:12px;color:#555;">🏭 ${esc(o.mmc_name||'—')}</div>
+        <div style="font-size:12px;color:#555;">✔ ${o.approved_at ? 'approved ' + foWhen(o.approved_at) + (o.approved_by_name?' by '+esc(o.approved_by_name):'') : 'awaiting approval'}</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px 24px;margin-top:10px;align-items:flex-start;">
+        <div style="flex:1 1 420px;min-width:0;">${foDetailsHtml(o)}</div>
+        <div style="flex:0 0 auto;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:flex-end;">
+          <div><label style="font-size:11px;">Total cases</label><div style="font-size:18px;font-weight:800;">${Number(o.total_cases||0)}</div></div>
+          ${money?`<div><label style="font-size:11px;">Gross total ₹</label><div style="font-size:15px;font-weight:700;">${inr(o.gross_total)}</div></div>`:''}
+          <div><label style="font-size:11px;">Indent no.</label>${edit ? `<input type="text" value="${esc(o.indent_no||'')}" placeholder="Indent no." style="width:130px;padding:5px 7px;font-size:12px;" onchange="foSetIndent('${o.id}', this.value)">` : `<div>${esc(o.indent_no)||'—'}</div>`}</div>
+          <div><label style="font-size:11px;">Factory status</label>${edit ? `<select style="width:auto;padding:5px 7px;font-size:12px;color:${st[1]};font-weight:600;" onchange="foSetStatus('${o.id}', this.value)">${Object.entries(FO_STATUS).map(([k,v])=>`<option value="${k}" ${k===o.factory_status?'selected':''}>${v[0]}</option>`).join('')}</select>` : `<div style="color:${st[1]};font-weight:600">${st[0]}</div>`}</div>
+          <div><label style="font-size:11px;">Transporter quotes</label><div><button class="mini" style="font-weight:700;color:${quotes.length?'#b3261e':'#777'};" title="Transporter quotes" onclick="foQuotes('${o.id}')">🚚 ${quotes.length} quote${quotes.length===1?'':'s'}</button>${best!=null?' <span style="font-size:10.5px;color:#555">best ₹ '+inr(best)+'</span>':''}</div></div>
+          <div><label style="font-size:11px;">&nbsp;</label><div><button class="mini" onclick="foView('${o.id}')" title="View / print the factory order">🔍 View</button> <button class="mini" onclick="foPrint('${o.id}')" title="Print">🖨 Print</button></div></div>
+        </div>
+      </div>
+    </div>`;
+  };
   window.__foRows = list;
+  const chip = (k, label, cnt) => `<button class="chip ${window.__foView===k?'on':''}" onclick="window.__foView='${k}';prodTab('log')">${label} <span style="opacity:.8">(${cnt})</span></button>`;
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <h4 class="sec" style="margin:0;">Factory order list</h4>
       <label style="font-size:12px;color:#555;display:flex;gap:6px;align-items:center;font-weight:normal;"><input type="checkbox" ${window.__foAll?'checked':''} onchange="window.__foAll=this.checked;prodTab('log')"> also show orders awaiting approval / cancelled</label>
     </div>
     <p style="font-size:12px;color:#555;margin:4px 0 8px;">Every approved distributor order, as the factory needs it: quantities by pack size, the MMC that fills it, the indent number, the factory status and the transporter quotes collected for it. Indent no. and status are saved as you type or change them.</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px;">
+      ${chip('open', '📥 Orders received — to be filled', open.length)}
+      ${chip('done', '✅ Orders completed — dispatched / closed', done.length)}
+      <span style="font-size:11.5px;color:#777;margin-left:6px;">${window.__foView==='done' ? 'Dispatched, delivered or closed orders.' : 'Orders still with the factory: received, approved, being filled or ready — an order moves to Completed once it is dispatched.'}</span>
+    </div>
     ${err ? `<div class="msg err">${esc(err)}</div>` : ''}
-    <div class="table-scroll"><table>${head}<tbody>${rows || `<tr><td colspan="13" style="color:#777">No approved orders yet — orders appear here the moment they are approved in Sales &amp; Orders.</td></tr>`}</tbody></table></div>
+    ${show.map(card).join('') || `<div class="card" style="padding:14px;color:#777;font-size:13px;">${window.__foView==='done' ? 'No completed orders yet.' : 'No orders waiting with the factory — orders appear here the moment they are approved in Sales &amp; Orders.'}</div>`}
     <div id="fo-panel"></div><div id="fo-msg"></div>`;
 }
 async function foSetIndent(id, v){
