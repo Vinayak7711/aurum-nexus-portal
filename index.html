@@ -102,6 +102,13 @@
   #rm-store-table select{max-width:100%; font-size:10.5px; padding:2px 4px; margin-top:2px;}
   #rm-store-table td .mini{font-size:10.5px; padding:3px 6px; display:block; width:100%; margin:0 0 3px; text-align:center;}
   #rm-store-table .rm-name{font-size:11px; color:#555;}
+  /* Purchases: tables that must fit the viewing area without sideways scrolling */
+  table.fit{table-layout:fixed; font-size:12px;}
+  table.fit th{padding:7px 6px; font-size:10px; letter-spacing:.2px; white-space:normal; line-height:1.25;}
+  table.fit td{padding:6px 6px; word-wrap:break-word; overflow-wrap:anywhere; line-height:1.3; white-space:normal !important;}
+  table.fit td.amount{white-space:nowrap !important; overflow-wrap:normal;}
+  table.fit td.pre{white-space:pre-wrap !important;}
+  table.fit td .mini{font-size:10.5px; padding:3px 6px; display:block; width:100%; margin:0 0 3px; text-align:center;}
   /* RM store → by brand SKU: summary table fits the viewing area */
   #rm-sku-table{table-layout:fixed; font-size:12px;}
   #rm-sku-table th{padding:7px 6px; font-size:10px; letter-spacing:.2px; white-space:normal; line-height:1.25;}
@@ -7090,7 +7097,7 @@ async function incomingRmHtml(afterJs){
   const placed = all.filter(r => r.status === 'PLACED');
   const q = v => { const n = Number(v||0); return Number.isInteger(n) ? n : n.toFixed(2); };
   const recvBtn = r => canRecvRm() ? `<button class="mini" style="font-weight:700;color:#0b57d0" onclick="poReceiveForm('${r.id}','${esc(r.po_no)}', ${esc(JSON.stringify(afterJs||''))})">Receive…</button>` : '';
-  const row = r => `<tr><td><b>${esc(r.po_no)}</b>${r.bill_to_mmc?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;">→ MMC</span>':''}</td>` +
+  const row = r => `<tr><td><b>${esc(r.po_no)}</b>${r.bill_to_mmc?'<br><span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">→ MMC</span>':''}</td>` +
     `<td>${esc(r.vendor_name||'—')}</td>` +
     `<td style="white-space:nowrap">${r.last_dispatch_date || (r.dispatched_at ? String(r.dispatched_at).slice(0,10) : '—')}${r.dispatch_refs?'<br><span style="font-size:11px;color:#777">'+esc(r.dispatch_refs)+'</span>':''}</td>` +
     `<td class="amount">${q(r.ordered_qty)}</td>` +
@@ -7100,13 +7107,13 @@ async function incomingRmHtml(afterJs){
     `<td class="amount">${q(r.received_qty)}</td>` +
     `<td><span style="color:${PO_COL[r.status]||'#333'};font-weight:600">${PO_LABEL[r.status]||r.status}</span></td>` +
     `<td style="white-space:nowrap"><button class="mini" onclick="poView('${r.id}')">👁 View</button> ${recvBtn(r)}</td></tr>`;
-  const head = `<thead><tr><th>PO</th><th>Vendor</th><th>Dispatched on / LR</th><th class="amount">Ordered</th><th class="amount">Dispatched</th><th class="amount">To receive (in transit)</th><th class="amount">Pending at vendor</th><th class="amount">Received</th><th>Status</th><th></th></tr></thead>`;
+  const head = `<colgroup><col style="width:11%"><col style="width:15%"><col style="width:13%"><col style="width:8%"><col style="width:8%"><col style="width:9%"><col style="width:9%"><col style="width:8%"><col style="width:9%"><col style="width:10%"></colgroup><thead><tr><th>PO</th><th>Vendor</th><th>Dispatched on / LR</th><th class="amount">Ordered</th><th class="amount">Dispatched</th><th class="amount">To receive (in transit)</th><th class="amount">Pending at vendor</th><th class="amount">Received</th><th>Status</th><th></th></tr></thead>`;
   return `
     <h4 class="sec">Incoming raw material — dispatched by vendor, to be received &amp; inspected</h4>
     <p style="font-size:12px;color:#555;margin:4px 0 8px;">Every purchase order the vendor has marked as dispatched (fully or partly). <b>To receive</b> is what is on the way; <b>Pending at vendor</b> is what the vendor has not yet dispatched. Click <b>Receive…</b> to record the material that actually arrived and its quality inspection — an order can be received in as many lots as the vendor sends.</p>
-    <div class="table-scroll"><table>${head}<tbody>${disp.map(row).join('') || '<tr><td colspan="10" style="color:#777">Nothing dispatched and waiting — when Accounts marks a PO as dispatched it appears here.</td></tr>'}</tbody></table></div>
+    <div class="table-scroll"><table class="fit">${head}<tbody>${disp.map(row).join('') || '<tr><td colspan="10" style="color:#777">Nothing dispatched and waiting — when Accounts marks a PO as dispatched it appears here.</td></tr>'}</tbody></table></div>
     <details style="margin:10px 0 14px;"><summary style="cursor:pointer;font-size:12.5px;color:#555;">Ordered but not yet dispatched by the vendor (${placed.length})</summary>
-    <div class="table-scroll" style="margin-top:6px;"><table>${head}<tbody>${placed.map(row).join('') || '<tr><td colspan="10" style="color:#777">None.</td></tr>'}</tbody></table></div></details>`;
+    <div class="table-scroll" style="margin-top:6px;"><table class="fit">${head}<tbody>${placed.map(row).join('') || '<tr><td colspan="10" style="color:#777">None.</td></tr>'}</tbody></table></div></details>`;
 }
 // Vendor dispatch — full or part of the order. Accounts / Director.
 async function poDispatchForm(id, poNo){
@@ -7366,17 +7373,17 @@ async function purchaseTab(t){
     B.innerHTML = incoming + `<div id="po-recv"></div><div id="po-msg"></div>${orphHtml}
       <h4 class="sec">Receipts recorded &amp; quality inspections</h4>
       <p style="font-size:12px;color:#555;">Every receipt recorded against a PO, with the receiver's inspection: whether the material and quantity match the PO, the inspection report, and quality remarks. Recorded from a PO's “Receive…” action.</p>
-      <div class="table-scroll"><table><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>As per PO</th><th>Qty OK</th><th>Inspection report</th><th>Quality remarks</th><th>Received by</th><th></th></tr></thead><tbody>
+      <div class="table-scroll"><table class="fit"><colgroup><col style="width:9%"><col style="width:10%"><col style="width:15%"><col style="width:12%"><col style="width:9%"><col style="width:6%"><col style="width:14%"><col style="width:14%"><col style="width:7%"><col style="width:4%"></colgroup><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>As per PO</th><th>Qty OK</th><th>Inspection report</th><th>Quality remarks</th><th>Received by</th><th></th></tr></thead><tbody>
       ${(insp||[]).map(r=>{const po=poBy[r.po_id]||{};const ap=AP[r.as_per_po]||[r.as_per_po,'#333'];
         return `<tr><td style="white-space:nowrap">${r.inspected_on||(r.created_at||'').slice(0,10)}</td>`+
           `<td><b>${esc(po.po_no||'—')}</b></td><td>${esc(po.vendor_name||'—')}</td>`+
           `<td>${esc(r.challan_no||'—')}${r.invoice_no?'<br><span style="font-size:11px;color:#777">Inv: '+esc(r.invoice_no)+'</span>':''}</td>`+
           `<td><span style="color:${ap[1]};font-weight:600">${esc(ap[0])}</span></td>`+
           `<td>${r.qty_as_per_po===true?'<span style="color:#1a7f37">Yes</span>':(r.qty_as_per_po===false?'<span style="color:#b3261e">No</span>':'—')}</td>`+
-          `<td style="max-width:260px;white-space:pre-wrap">${esc(r.inspection_report||'—')}</td>`+
-          `<td style="max-width:200px;white-space:pre-wrap">${esc(r.quality_remarks||'—')}</td>`+
+          `<td class="pre">${esc(r.inspection_report||'—')}</td>`+
+          `<td class="pre">${esc(r.quality_remarks||'—')}</td>`+
           `<td style="white-space:nowrap">${esc(uName(r.received_by))}</td>`+
-          `<td>${isDir()?`<button class="mini" title="Delete this receipt (Director) — stock comes out and the PO goes back to open" style="color:#b3261e;border-color:#b3261e;" onclick="grnDelAsk('${r.id}','','${esc(po.po_no||'')}')">🗑</button>`:''}</td></tr>`;}).join('')
+          `<td style="padding:6px 2px;">${isDir()?`<button class="mini" title="Delete this receipt (Director) — stock comes out and the PO goes back to open" style="color:#b3261e;border-color:#b3261e;padding:3px 2px;" onclick="grnDelAsk('${r.id}','','${esc(po.po_no||'')}')">🗑</button>`:''}</td></tr>`;}).join('')
         || '<tr><td colspan="10" style="color:#777">No receipts inspected yet — record one from a PO’s “Receive…” button.</td></tr>'}
       </tbody></table></div>`;
     return;
