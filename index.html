@@ -4641,6 +4641,9 @@ async function mfgTab(which){
     let tankBal = {}; try { const { data: tb } = await MF.rpc('tank_balances'); (tb||[]).forEach(t => tankBal[t.tank] = t); } catch(e){}
     window.__prTankBal = tankBal;
     const tankNow = t => tankBal[t] ? Number(tankBal[t].balance) : 0;
+    // which blend each tank holds: the latest blend recorded into that tank (blends come newest first)
+    const tankBlend = {}; (blends||[]).forEach(b => { if (b.tank && !tankBlend[b.tank]) tankBlend[b.tank] = b; });
+    window.__prTankBlend = tankBlend;
     (batches||[]).forEach(b => { b.sku = { sku_code: skuCodeOf(b.sku_id) }; });
     window.__prStock = stock || []; window.__prBatches = batches || []; window.__prBom = bomAll || [];
     // only consumables are consumed in production — spare parts & plant machinery (Raw material tab category) stay out of this list
@@ -4676,7 +4679,7 @@ async function mfgTab(which){
         <div style="margin-top:8px;"><label>Batch number of the product <span style="font-weight:normal;color:#888;font-size:11px;">— the batch number printed on the product / MMC’s batch; used to track these cases in Batches &amp; QC, FG stock and Targets</span></label><input type="text" id="pr-batchno" placeholder="e.g. MMC/FR/1026-01" list="pr-batchno-list"><datalist id="pr-batchno-list">${[...new Set((batches||[]).map(b=>b.product_batch_no).filter(Boolean))].map(x=>`<option value="${esc(x)}">`).join('')}</datalist></div>
         <div style="margin-top:10px;padding:8px 10px;background:#f4f7fb;border-radius:8px;">
           <div style="font-weight:600;font-size:12.5px;margin-bottom:4px;">🧴 Blend used for bottling <span style="font-weight:normal;color:#777;font-size:11px;">— the litres drawn are minused from that tank (FG stock tab shows what is left)</span></div>
-          <div class="row2c"><div><label>Blend drawn from tank</label><select id="pr-tank" onchange="prTankHint()"><option value="">— none / not from a tank —</option>${['TANK1','TANK2','TANK3'].map(t=>`<option value="${t}">${tankLabel(t)} — ${tankNow(t)} L in tank</option>`).join('')}</select></div>
+          <div class="row2c"><div><label>Blend drawn from tank</label><select id="pr-tank" onchange="prTankHint()"><option value="">— none / not from a tank —</option>${['TANK1','TANK2','TANK3'].map(t=>`<option value="${t}">${esc(prTankOptionLabel(t, tankNow(t)))}</option>`).join('')}</select></div>
             <div><label>Blend consumed (litres)</label><input type="number" id="pr-blend-litres" min="0" step="any" placeholder="litres" oninput="prTankHint()"></div></div>
           <div id="pr-tank-hint" style="font-size:11.5px;color:#555;margin-top:4px;"></div>
         </div>
@@ -5506,7 +5509,7 @@ function prodRepEdit(id){
       <div style="margin-top:8px;"><label>Batch number of the product</label><input type="text" id="pe-batchno" value="${esc(b.product_batch_no||'')}" placeholder="e.g. MMC/FR/1026-01"></div>
       <div style="margin-top:10px;padding:8px 10px;background:#f4f7fb;border-radius:8px;">
         <div style="font-weight:600;font-size:12.5px;margin-bottom:4px;">🧴 Blend used for bottling <span style="font-weight:normal;color:#777;font-size:11px;">— this report's own litres count as available again while editing</span></div>
-        <div class="row2c"><div><label>Blend drawn from tank</label><select id="pe-tank" onchange="prTankHint('pe')"><option value="">— none / not from a tank —</option>${['TANK1','TANK2','TANK3'].map(t=>{ const tb = (window.__prTankBal||{})[t]; const avail = (tb ? Number(tb.balance) : 0) + (b.blend_tank===t ? Number(b.blend_litres||0) : 0); return `<option value="${t}" data-avail="${avail}" ${b.blend_tank===t?'selected':''}>${tankLabel(t)} — ${avail} L available</option>`; }).join('')}</select></div>
+        <div class="row2c"><div><label>Blend drawn from tank</label><select id="pe-tank" onchange="prTankHint('pe')"><option value="">— none / not from a tank —</option>${['TANK1','TANK2','TANK3'].map(t=>{ const tb = (window.__prTankBal||{})[t]; const avail = (tb ? Number(tb.balance) : 0) + (b.blend_tank===t ? Number(b.blend_litres||0) : 0); return `<option value="${t}" data-avail="${avail}" ${b.blend_tank===t?'selected':''}>${esc(prTankOptionLabel(t, avail))}</option>`; }).join('')}</select></div>
           <div><label>Blend consumed (litres)</label><input type="number" id="pe-blend-litres" min="0" step="any" value="${b.blend_litres != null ? Number(b.blend_litres) : ''}" placeholder="litres" oninput="prTankHint('pe')"></div></div>
         <div id="pe-tank-hint" style="font-size:11.5px;color:#555;margin-top:4px;"></div>
       </div>
@@ -5523,6 +5526,9 @@ function prodRepEdit(id){
   prodRepEditRender(); rmShowFull('pe-item','pe-item-full'); prTankHint('pe');
   box.scrollIntoView({behavior:'smooth', block:'start'});
 }
+// "Tank 1 — Frost 91 blend (BLD/26-27/0002) — 3828.03 L available": the tank, the blend it holds, the litres in it
+function prTankBlendName(t){ const b = (window.__prTankBlend||{})[t]; if (!b) return ''; return (b.blend_name || 'blend') + (b.blend_no ? ' (' + b.blend_no + ')' : ''); }
+function prTankOptionLabel(t, litres){ const nm = prTankBlendName(t); const L = Math.round(Number(litres||0) * 1000) / 1000; return tankLabel(t) + ' — ' + (nm ? nm : (L > 0 ? 'blend' : 'empty — no blend recorded')) + ' — ' + L + ' L available'; }
 // Blend drawn from a tank on a case-wise report: reads the chosen tank + litres, validates against what the tank holds.
 function prBlendPick(prefix){
   const sel = $(prefix + '-tank'), inp = $(prefix + '-blend-litres');
@@ -5540,8 +5546,9 @@ function prTankHint(prefix){
   const h = $(prefix + '-tank-hint'); if (!h) return;
   const p = prBlendPick(prefix);
   if (p.err){ h.innerHTML = '<span style="color:#b3261e;font-weight:600;">' + esc(p.err) + '</span>'; return; }
-  if (p.tank && p.litres) h.innerHTML = esc(tankLabel(p.tank)) + ': ' + p.avail + ' L − ' + p.litres + ' L = <b>' + (Math.round((p.avail - p.litres) * 1000) / 1000) + ' L</b> left after this report.';
-  else if (p.tank) h.innerHTML = esc(tankLabel(p.tank)) + ' holds ' + p.avail + ' L — enter the litres consumed.';
+  const nm = prTankBlendName(p.tank); const who = esc(tankLabel(p.tank)) + (nm ? ' · ' + esc(nm) : '');
+  if (p.tank && p.litres) h.innerHTML = who + ': ' + p.avail + ' L − ' + p.litres + ' L = <b>' + (Math.round((p.avail - p.litres) * 1000) / 1000) + ' L</b> left after this report.';
+  else if (p.tank) h.innerHTML = who + ' holds ' + p.avail + ' L — enter the litres consumed.';
   else h.innerHTML = '';
 }
 function prodRepEditRender(){
