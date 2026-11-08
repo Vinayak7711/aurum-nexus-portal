@@ -7373,7 +7373,7 @@ async function purchaseTab(t){
       G.from('v_rm_store').select('*').order('code'),
       G.from('v_rm_stock').select('*').order('code'),
       G.from('rm_items').select('id, code, name, unit, rm_category, rm_subcat, units_per_case'),
-      G.from('sku_bom').select('sku_id, rm_item_id, qty_per_case')
+      G.from('sku_bom').select('sku_id, rm_item_id, qty_per_case, component')
     ]);
     const mmcBy = {}; (mmc.data||[]).forEach(r => mmcBy[r.rm_item_id] = r);
     const itemBy = {}; (itm.data||[]).forEach(i => itemBy[i.id] = i); window.__rmItemBy = itemBy;
@@ -7986,23 +7986,55 @@ function rmBomSuggest(sku){
 // default qty of a material per case of a SKU: the figure set on the BOM line, else the item's own per-case figure, else the SKU's bottles per case (boxes/cartons default to 1)
 function rmBomQty(line, item, sku){ if (line && Number(line.qty_per_case) > 0) return { q: Number(line.qty_per_case), src: 'set' }; const pc = rmPerCase(item); if (pc.upc) return { q: pc.upc, src: pc.auto ? 'auto' : 'item' };
   if (/\bBOX\b|CARTON|CTN|SHIPPER/i.test((item.code||'')+' '+(item.name||''))) return { q: 1, src: 'default' }; return { q: Number(sku.units_per_case||0) || null, src: 'sku' }; }
+// The five components every SKU needs for a case: bottle, cap, box, front label, back label — read from the material's code / name unless set on the line
+const RM_COMPONENTS = [['BOTTLE','Bottle'],['CAP','Cap'],['BOX','Box'],['FRONT_LABEL','Front label'],['BACK_LABEL','Back label']];
+const RM_COMP_LABEL = Object.fromEntries(RM_COMPONENTS.concat([['OTHER','Other']]));
+function rmItemRoleAuto(i){ const t = ((i.code||'') + ' ' + (i.name||'')).toUpperCase();
+  if (/\bBOX\b|CARTON|\bCTN\b|SHIPPER/.test(t)) return 'BOX';
+  if (/\bCAPS?\b|CLOSURE|\bROPP\b|\bPP\s*CAP/.test(t)) return 'CAP';
+  if (/LABLE|LABEL/.test(t)){ if (/\bBACK\b/.test(t)) return 'BACK_LABEL'; if (/\bFRONT\b/.test(t)) return 'FRONT_LABEL'; return 'OTHER'; }
+  if (/BOTTLE|\bBTL\b/.test(t)) return 'BOTTLE';
+  return 'OTHER'; }
+function rmLineRole(line, item){ return (line && line.component) || rmItemRoleAuto(item); }
 function rmSkuCalc(sku){
   const C = window.__rmStoreCtx || { bom:[], itemBy:{}, mmcBy:{}, storeBy:{} };
   const lines = C.bom.filter(b => b.sku_id === sku.id).map(b => { const it = C.itemBy[b.rm_item_id]; if (!it) return null; const q = rmBomQty(b, it, sku); const mmc = Number((C.mmcBy[b.rm_item_id]||{}).balance||0), store = Number((C.storeBy[b.rm_item_id]||{}).store_balance||0);
-    return { item: it, qty: q.q, qtySrc: q.src, mmc, store, cases: q.q ? Math.floor(mmc / q.q) : null, shared: C.bom.filter(x => x.rm_item_id === b.rm_item_id).length }; }).filter(Boolean)
-    .sort((a,b) => String(a.item.code).localeCompare(String(b.item.code)));
+    return { item: it, qty: q.q, qtySrc: q.src, mmc, store, cases: q.q ? Math.floor(mmc / q.q) : null, shared: C.bom.filter(x => x.rm_item_id === b.rm_item_id).length, role: rmLineRole(b, it), roleSet: !!b.component }; }).filter(Boolean)
+    .sort((a,b) => RM_COMPONENTS.findIndex(c=>c[0]===a.role) - RM_COMPONENTS.findIndex(c=>c[0]===b.role) || String(a.item.code).localeCompare(String(b.item.code)));
   const withQty = lines.filter(l => l.cases != null); const min = withQty.length ? Math.min(...withQty.map(l => l.cases)) : null;
-  return { lines, cases: min, limiting: withQty.filter(l => l.cases === min).map(l => l.item.code), missingQty: lines.filter(l => l.cases == null).length };
+  const have = new Set(lines.map(l => l.role)); const missing = RM_COMPONENTS.filter(([k]) => !have.has(k)).map(([k,l]) => l);
+  // production needs all five components: with any of them missing, nothing can be bottled
+  return { lines, cases: lines.length ? (missing.length ? 0 : min) : null, casesByItems: min, limiting: withQty.filter(l => l.cases === min).map(l => l.item.code), missingQty: lines.filter(l => l.cases == null).length, missing, complete: lines.length > 0 && !missing.length };
+}
+function rmCompBadges(c){ const have = new Set(c.lines.map(l => l.role)); return RM_COMPONENTS.map(([k,l]) => have.has(k) ? `<span style="display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:10px;background:#e6f4ea;color:#1a7f37;margin:1px 2px 1px 0;">✓ ${l}</span>` : `<span style="display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:10px;background:#fdecea;color:#b3261e;font-weight:700;margin:1px 2px 1px 0;" title="This component is missing from the SKU's materials">✗ ${l} missing</span>`).join(''); }
+async function rmBrandPlanning(brandId, active){
+  const { error } = await db.schema('sales').rpc('set_brand_planning', { p_brand: brandId, p_active: !!active });
+  if (error){ alert('Could not change the brand: ' + error.message); return; }
+  try { await loadMasters(); } catch(e){}
+  window.rmStoreView = 'sku'; await purchaseTab('store');
 }
 function rmSkuViewHtml(){
   const C = window.__rmStoreCtx; const canEdit = isDir() || canFinEdit() || canPurEdit() || canPurApprove();
-  const skus = (M.skus||[]).filter(s => s.is_active).slice().sort((a,b) => { const ba = ((M.brands||[]).find(x=>x.id===a.brand_id)||{}).name||'', bb = ((M.brands||[]).find(x=>x.id===b.brand_id)||{}).name||''; return ba.localeCompare(bb) || String(a.sku_code).localeCompare(String(b.sku_code)); });
+  const brandOf = s => (M.brands||[]).find(x=>x.id===s.brand_id) || {};
+  const allSkus = (M.skus||[]).filter(s => s.is_active).slice().sort((a,b) => (brandOf(a).name||'').localeCompare(brandOf(b).name||'') || String(a.sku_code).localeCompare(String(b.sku_code)));
+  // brands active for planning here (deactivating a brand only hides it from this view — sales, orders and stock are untouched)
+  const brandsHere = (M.brands||[]).filter(b => allSkus.some(s => s.brand_id === b.id)).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  const activeBrands = brandsHere.filter(b => b.rm_planning_active !== false), offBrands = brandsHere.filter(b => b.rm_planning_active === false);
+  const sel = window.rmSkuBrand || '';
+  if (sel && !activeBrands.some(b => b.id === sel)) window.rmSkuBrand = '';
+  const skus = allSkus.filter(s => brandOf(s).rm_planning_active !== false && (!window.rmSkuBrand || s.brand_id === window.rmSkuBrand));
   const calc = {}; skus.forEach(s => calc[s.id] = rmSkuCalc(s)); window.__rmSkuCalc = calc; window.__rmSkuList = skus;
+  const brandBar = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 10px;padding:8px 10px;background:#faf6ea;border-radius:8px;">
+      <div><label style="font-size:11.5px;">Brand</label><select onchange="window.rmSkuBrand=this.value;window.rmStoreView='sku';purchaseTab('store')" style="width:auto;min-width:220px;display:inline-block;"><option value="">— all active brands (${activeBrands.length}) —</option>${activeBrands.map(b=>`<option value="${b.id}" ${window.rmSkuBrand===b.id?'selected':''}>${esc(b.name)} (${allSkus.filter(s=>s.brand_id===b.id).length} SKUs)</option>`).join('')}</select></div>
+      ${canEdit && window.rmSkuBrand ? `<div><button class="btn ghost sm" style="color:#b3261e;border-color:#b3261e;" onclick="rmBrandPlanning('${window.rmSkuBrand}', false)" title="Move this brand to the deactivated list below (only in this view — sales and stock are untouched)">⏸ Deactivate ${esc((activeBrands.find(b=>b.id===window.rmSkuBrand)||{}).name||'brand')}</button></div>` : ''}
+      <div style="font-size:11.5px;color:#777;">${offBrands.length ? offBrands.length + ' brand(s) deactivated — see the list at the bottom.' : 'All brands active.'}${canEdit && !window.rmSkuBrand ? ' Pick a brand to deactivate it.' : ''}</div>
+    </div>`;
   const inBom = new Set(C.bom.map(b => b.rm_item_id));
   const unassigned = Object.values(C.itemBy).filter(i => rmIsCaseWise(i) && !inBom.has(i.id)).sort((a,b)=>String(a.code).localeCompare(String(b.code)));
   const skusWithBom = skus.filter(s => calc[s.id].lines.length);
   const fmt = v => v == null ? '—' : Number(v).toLocaleString('en-IN');
-  let html = `<p style="font-size:12px;color:#555">Each brand SKU with all the raw material it needs for one case, the stock of each at MMC, and <b>how many cases can be produced</b> — the smallest figure across its materials (that material is the one running short). Materials shared by several SKUs are counted in full for each SKU, so running one SKU reduces what the others can make.${canEdit ? ' Use <b>Edit materials</b> on a SKU to set its material list and the quantity per case; <b>Suggest from names</b> fills it from the brand, pack size and bottle type in the material names for you to confirm.' : ''}</p>
+  let html = `<p style="font-size:12px;color:#555">Each brand SKU with all the raw material it needs for one case, the stock of each at MMC, and <b>how many cases can be produced</b> — the smallest figure across its materials (that material is the one running short). Every SKU needs its <b>five components — bottle, cap, box, front label, back label</b>; a SKU missing any of them cannot be bottled, so it shows 0 and the missing component is highlighted. Materials shared by several SKUs are counted in full for each SKU, so running one SKU reduces what the others can make.${canEdit ? ' Use <b>Edit materials</b> on a SKU to set its material list and the quantity per case; <b>Suggest from names</b> fills it from the brand, pack size and bottle type in the material names for you to confirm.' : ''}</p>
+    ${brandBar}
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;">
       <button class="btn ghost sm" onclick="rmSkuXlsx()" title="Download the SKU-wise materials and cases possible as Excel">⬇ Download Excel</button>
       <button class="btn ghost sm" onclick="rmSkuPrint()" title="Print the SKU-wise view">🖨 Print</button>
@@ -8010,22 +8042,24 @@ function rmSkuViewHtml(){
     </div>
     <div id="rm-bom-box"></div>
     <h4 class="sec" style="margin-top:4px;">Cases possible — SKU-wise summary</h4>
-    <div class="table-scroll"><table><thead><tr><th>Brand</th><th>SKU</th><th class="amount">Materials</th><th class="amount">Cases possible now</th><th>Running short (limiting material)</th>${canEdit?'<th></th>':''}</tr></thead><tbody>
+    <div class="table-scroll"><table><thead><tr><th>Brand</th><th>SKU</th><th>Components (5 needed)</th><th class="amount">Cases possible now</th><th>Running short (limiting material)</th>${canEdit?'<th></th>':''}</tr></thead><tbody>
     ${skus.map(s => { const c = calc[s.id]; const bn = ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||'';
-      return `<tr><td>${esc(bn)}</td><td><b>${esc(s.sku_code)}</b></td><td class="amount">${c.lines.length || '<span style="color:#b26a00">none set</span>'}</td>
-        <td class="amount" style="font-weight:700;color:${c.cases==null?'#999':(c.cases>0?'#1a7f37':'#b3261e')}">${c.lines.length ? fmt(c.cases) : '—'}</td>
-        <td style="font-size:12px;">${c.lines.length ? (c.limiting.map(esc).join(', ') + (c.missingQty ? ' <span style="color:#b26a00">· ' + c.missingQty + ' material(s) without a per-case qty</span>' : '')) : (canEdit ? '<a href="#" onclick="rmBomEdit(\'' + s.id + '\');return false;" style="color:#b26a00;">set materials ✎</a>' : '—')}</td>
+      return `<tr style="${c.lines.length && !c.complete ? 'background:#fff7f5;' : ''}"><td>${esc(bn)}</td><td><b>${esc(s.sku_code)}</b></td><td style="font-size:12px;">${c.lines.length ? `<b style="color:${c.complete?'#1a7f37':'#b3261e'}">${5 - c.missing.length}/5</b> ${c.complete ? '<span style="color:#1a7f37">complete</span>' : '<span style="color:#b3261e;font-weight:600;">missing: ' + c.missing.map(esc).join(', ') + '</span>'}` : '<span style="color:#b26a00">none set</span>'}</td>
+        <td class="amount" style="font-weight:700;color:${c.cases==null?'#999':(c.cases>0?'#1a7f37':'#b3261e')}">${c.lines.length ? fmt(c.cases) + (!c.complete && c.casesByItems != null ? ' <span style="font-weight:normal;font-size:10.5px;color:#999" title="What the materials already set would allow, once the missing component is added">(' + fmt(c.casesByItems) + ' by items set)</span>' : '') : '—'}</td>
+        <td style="font-size:12px;">${c.lines.length ? ((!c.complete ? '<span style="color:#b3261e;font-weight:600;">incomplete — add the missing component</span>' : c.limiting.map(esc).join(', ')) + (c.missingQty ? ' <span style="color:#b26a00">· ' + c.missingQty + ' material(s) without a per-case qty</span>' : '')) : (canEdit ? '<a href="#" onclick="rmBomEdit(\'' + s.id + '\');return false;" style="color:#b26a00;">set materials ✎</a>' : '—')}</td>
         ${canEdit ? `<td style="white-space:nowrap"><button class="mini" onclick="rmBomEdit('${s.id}')">✏️ Edit materials</button></td>` : ''}</tr>`; }).join('')}
     </tbody></table></div>`;
   // SKU-wise detail: one block per SKU that has materials
   skusWithBom.forEach(s => { const c = calc[s.id]; const bn = ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||'';
     html += `<h4 class="sec" style="margin-top:18px;">${esc(bn)} · <b>${esc(s.sku_code)}</b> <span style="font-weight:normal;font-size:12px;color:#777">— ${s.units_per_case} bottles/case · ${esc(s.material||'')}</span>
-        <span style="float:right;font-size:13px;color:${c.cases>0?'#1a7f37':'#b3261e'}">Cases possible: <b>${fmt(c.cases)}</b>${c.limiting.length?' <span style="font-weight:normal;color:#777;font-size:11.5px;">limited by ' + c.limiting.map(esc).join(', ') + '</span>':''}</span></h4>
-      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Needed per case</th><th class="amount">At MMC (custody)</th><th class="amount">In company store</th><th class="amount">Cases possible</th><th>Note</th></tr></thead><tbody>
-      ${c.lines.map(l => `<tr style="${l.cases != null && l.cases === c.cases ? 'background:#fff3f0;' : ''}"><td><b>${esc(l.item.code)}</b> <span style="color:#555">${esc(l.item.name||'')}</span></td><td>${esc(l.item.unit||'')}</td>
+        <span style="float:right;font-size:13px;color:${c.cases>0?'#1a7f37':'#b3261e'}">Cases possible: <b>${fmt(c.cases)}</b>${c.complete && c.limiting.length?' <span style="font-weight:normal;color:#777;font-size:11.5px;">limited by ' + c.limiting.map(esc).join(', ') + '</span>':''}${!c.complete?' <span style="font-weight:normal;font-size:11.5px;">— incomplete</span>':''}</span></h4>
+      <div style="margin:2px 0 6px;">${rmCompBadges(c)}${!c.complete && canEdit ? ` <button class="mini" style="margin-left:6px;border-color:#b3261e;color:#b3261e;" onclick="rmBomEdit('${s.id}')">+ add the missing component</button>` : ''}</div>
+      <div class="table-scroll"><table><thead><tr><th>Component</th><th>Material</th><th>Unit</th><th class="amount">Needed per case</th><th class="amount">At MMC (custody)</th><th class="amount">In company store</th><th class="amount">Cases possible</th><th>Note</th></tr></thead><tbody>
+      ${c.missing.map(mname => `<tr style="background:#fdecea;"><td style="color:#b3261e;font-weight:700;">✗ ${esc(mname)}</td><td colspan="7" style="color:#b3261e;">Missing — no ${esc(mname.toLowerCase())} is set for this SKU, so no case can be completed.${canEdit ? ' Use Edit materials to add it.' : ''}</td></tr>`).join('')}
+      ${c.lines.map(l => `<tr style="${c.complete && l.cases != null && l.cases === c.cases ? 'background:#fff3f0;' : ''}"><td style="font-size:12px;${l.role==='OTHER'?'color:#999':''}">${esc(RM_COMP_LABEL[l.role]||l.role)}${l.roleSet?'':' <span style="font-size:10px;color:#aaa">(auto)</span>'}</td><td><b>${esc(l.item.code)}</b> <span style="color:#555">${esc(l.item.name||'')}</span></td><td>${esc(l.item.unit||'')}</td>
           <td class="amount">${l.qty ? l.qty + (l.qtySrc==='set' ? '' : ' <span style="font-size:10.5px;color:#999">(' + (l.qtySrc==='auto' ? 'auto' : l.qtySrc==='item' ? 'item' : l.qtySrc==='sku' ? 'bottles/case' : 'default') + ')</span>') : '<span style="color:#b26a00">not set</span>'}</td>
           <td class="amount">${fmt(l.mmc)}</td><td class="amount" style="color:#777">${fmt(l.store)}</td>
-          <td class="amount" style="font-weight:700;color:${l.cases==null?'#999':(l.cases===c.cases?'#b3261e':'#1a7f37')}">${fmt(l.cases)}${l.cases != null && l.cases === c.cases ? ' ⚠' : ''}</td>
+          <td class="amount" style="font-weight:700;color:${l.cases==null?'#999':(l.cases===c.casesByItems?'#b3261e':'#1a7f37')}">${fmt(l.cases)}${l.cases != null && l.cases === c.casesByItems ? ' ⚠' : ''}</td>
           <td style="font-size:11.5px;color:#777;">${l.shared > 1 ? 'shared by ' + l.shared + ' SKUs' : ''}${l.store > 0 && l.cases != null ? (l.shared > 1 ? ' · ' : '') + '+' + fmt(Math.floor((l.mmc + l.store) / l.qty) - l.cases) + ' case(s) more if the store stock is sent to MMC' : ''}</td></tr>`).join('')}
       </tbody></table></div>`; });
   if (unassigned.length) html += `<h4 class="sec" style="margin-top:18px;">Case-wise materials not yet assigned to any SKU <span style="font-weight:normal;font-size:12px;color:#777">— ${unassigned.length} item(s)</span></h4>
@@ -8033,16 +8067,23 @@ function rmSkuViewHtml(){
       ${unassigned.map(i => { const mmc = Number((C.mmcBy[i.id]||{}).balance||0), store = Number((C.storeBy[i.id]||{}).store_balance||0); const pc = rmPerCase(i); const fits = skus.filter(s => rmBomSuggest(s).includes(i.id)).map(s=>s.sku_code);
         return `<tr><td><b>${esc(i.code)}</b> <span style="color:#555">${esc(i.name||'')}</span></td><td>${esc(i.unit||'')}</td><td class="amount">${fmt(mmc)}</td><td class="amount" style="color:#777">${fmt(store)}</td><td class="amount">${pc.upc ? fmt(Math.floor(mmc / pc.upc)) + ' <span style="font-size:10.5px;color:#999">@ ' + pc.upc + '</span>' : '—'}</td><td style="font-size:11.5px;color:#555;">${fits.length ? fits.map(esc).join(', ') : '<span style="color:#999">no match from the name — add it to a SKU with Edit materials</span>'}</td></tr>`; }).join('')}
       </tbody></table></div>`;
+  if (offBrands.length) html += `<h4 class="sec" style="margin-top:18px;">⏸ Deactivated brands <span style="font-weight:normal;font-size:12px;color:#777">— hidden from this view only; sales, orders and stock are untouched</span></h4>
+      <div class="table-scroll"><table><thead><tr><th>Brand</th><th class="amount">SKUs</th><th>Materials set</th>${canEdit?'<th></th>':''}</tr></thead><tbody>
+      ${offBrands.map(b => { const bs = allSkus.filter(s => s.brand_id === b.id); const withBom = bs.filter(s => C.bom.some(x => x.sku_id === s.id)).length;
+        return `<tr style="color:#777;"><td><b>${esc(b.name)}</b></td><td class="amount">${bs.length}</td><td>${withBom} of ${bs.length} SKUs</td>${canEdit ? `<td style="white-space:nowrap"><button class="mini" onclick="rmBrandPlanning('${b.id}', true)">▶ Activate</button></td>` : ''}</tr>`; }).join('')}
+      </tbody></table></div>`;
   return html;
 }
 let rmBomSel = {};   // rm_item_id → qty (null = default) while editing a SKU's materials
+let rmBomComp = {};  // rm_item_id → component override (BOTTLE/CAP/BOX/FRONT_LABEL/BACK_LABEL/OTHER); absent = read from the name
 function rmBomEdit(skuId){
   const sku = (M.skus||[]).find(s => s.id === skuId); const box = $('rm-bom-box'); if (!sku || !box) return;
-  const C = window.__rmStoreCtx; rmBomSel = {}; C.bom.filter(b => b.sku_id === skuId).forEach(b => rmBomSel[b.rm_item_id] = b.qty_per_case != null ? Number(b.qty_per_case) : null);
+  const C = window.__rmStoreCtx; rmBomSel = {}; rmBomComp = {}; C.bom.filter(b => b.sku_id === skuId).forEach(b => { rmBomSel[b.rm_item_id] = b.qty_per_case != null ? Number(b.qty_per_case) : null; if (b.component) rmBomComp[b.rm_item_id] = b.component; });
   window.__rmBomSku = skuId; window.__rmBomFilter = '';
   const bn = ((M.brands||[]).find(x=>x.id===sku.brand_id)||{}).name||'';
   box.innerHTML = `<div class="card" style="margin:0 0 14px;border:1px solid #b8860b;"><h3 style="font-size:15px;">✏️ Materials for ${esc(bn)} · ${esc(sku.sku_code)} <span style="font-weight:normal;font-size:12px;color:#777">— ${sku.units_per_case} bottles/case · ${esc(sku.material||'')}</span></h3>
-      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Tick every case-wise material this SKU needs and give the quantity for one case (blank = the item's own figure: 180 ml → 48, 750 ml → 12, 90 ml → 100, boxes 1). <b>Suggest from names</b> ticks the materials whose brand, pack size and bottle type match this SKU — check the list, then Save.</p>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Tick every case-wise material this SKU needs and give the quantity for one case (blank = the item's own figure: 180 ml → 48, 750 ml → 12, 90 ml → 100, boxes 1). Each material's <b>component</b> (bottle, cap, box, front label, back label) is read from its name — change it in the Component column if it is read wrongly. <b>Suggest from names</b> ticks the materials whose brand, pack size and bottle type match this SKU — check the list, then Save.</p>
+      <div id="rm-bom-comps" style="margin:0 0 8px;"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
         <button class="btn ghost sm" onclick="rmBomSuggestApply()">✨ Suggest from names</button>
         <button class="btn ghost sm" onclick="rmBomSel={};rmBomRender()">Clear all</button>
@@ -8059,17 +8100,21 @@ function rmBomRender(){
   const items = Object.values(C.itemBy).filter(rmIsCaseWise).filter(i => !q || ((i.code||'')+' '+(i.name||'')).toUpperCase().includes(q))
     .sort((a,b) => ((b.id in rmBomSel) - (a.id in rmBomSel)) || String(a.code).localeCompare(String(b.code)));
   const sugg = new Set(rmBomSuggest(sku));
-  out.innerHTML = `<table style="font-size:12.5px;"><thead><tr><th style="width:30px;"></th><th>Material</th><th class="amount">At MMC</th><th class="amount">Qty per case</th></tr></thead><tbody>` +
-    items.map(i => { const on = i.id in rmBomSel; const def = rmBomQty(null, i, sku); const mmc = Number((C.mmcBy[i.id]||{}).balance||0);
+  const roleOf = i => rmBomComp[i.id] || rmItemRoleAuto(i);
+  const have = new Set(Object.keys(rmBomSel).map(id => roleOf(C.itemBy[id] || {})));
+  const compBox = $('rm-bom-comps'); if (compBox) compBox.innerHTML = RM_COMPONENTS.map(([k,l]) => have.has(k) ? `<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;background:#e6f4ea;color:#1a7f37;margin:1px 3px 1px 0;">✓ ${l}</span>` : `<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;background:#fdecea;color:#b3261e;font-weight:700;margin:1px 3px 1px 0;">✗ ${l} — not ticked yet</span>`).join('');
+  out.innerHTML = `<table style="font-size:12.5px;"><thead><tr><th style="width:30px;"></th><th>Material</th><th>Component</th><th class="amount">At MMC</th><th class="amount">Qty per case</th></tr></thead><tbody>` +
+    items.map(i => { const on = i.id in rmBomSel; const def = rmBomQty(null, i, sku); const mmc = Number((C.mmcBy[i.id]||{}).balance||0); const role = roleOf(i);
       return `<tr style="${on?'background:#fbf7ec;':''}"><td><input type="checkbox" style="width:auto;margin:0;" ${on?'checked':''} onchange="if(this.checked) rmBomSel['${i.id}']=rmBomSel['${i.id}']??null; else delete rmBomSel['${i.id}']; rmBomRender()"></td>
         <td><b>${esc(i.code)}</b> <span style="color:#555">${esc(i.name||'')}</span>${sugg.has(i.id)?' <span style="font-size:10.5px;color:#7a5c10" title="Matches this SKU by brand, size and bottle type">✨ suggested</span>':''}</td>
+        <td>${on ? `<select style="width:auto;padding:3px 6px;display:inline-block;font-size:12px;" onchange="if(this.value===rmItemRoleAuto(window.__rmItemBy['${i.id}'])) delete rmBomComp['${i.id}']; else rmBomComp['${i.id}']=this.value; rmBomRender()">${RM_COMPONENTS.concat([['OTHER','Other']]).map(([k,l])=>`<option value="${k}" ${role===k?'selected':''}>${l}</option>`).join('')}</select>${rmBomComp[i.id]?'':' <span style="font-size:10px;color:#aaa">(auto)</span>'}` : `<span style="color:#aaa;font-size:12px;">${esc(RM_COMP_LABEL[role]||role)}</span>`}</td>
         <td class="amount">${mmc.toLocaleString('en-IN')}</td>
         <td class="amount">${on ? `<input type="number" min="0.001" step="any" value="${rmBomSel[i.id]!=null?rmBomSel[i.id]:''}" placeholder="${def.q ? def.q + ' (' + (def.src==='auto'?'auto':def.src==='item'?'item':def.src==='sku'?'bottles/case':'default') + ')' : 'qty'}" style="width:120px;padding:3px 6px;display:inline-block;" onchange="rmBomSel['${i.id}']=this.value===''?null:Number(this.value)">` : `<span style="color:#aaa">${def.q||''}</span>`}</td></tr>`; }).join('') + `</tbody></table>`;
   const cnt = $('rm-bom-count'); if (cnt) cnt.textContent = Object.keys(rmBomSel).length + ' material(s) ticked';
 }
 function rmBomSuggestApply(){ const sku = (M.skus||[]).find(s => s.id === window.__rmBomSku); const ids = rmBomSuggest(sku); if (!ids.length){ say('rm-bom-msg','No material name matches this SKU’s brand, pack size and bottle type — tick them by hand.',false); return; } ids.forEach(id => { if (!(id in rmBomSel)) rmBomSel[id] = null; }); say('rm-bom-msg', ids.length + ' material(s) suggested from the names — check and Save.', true); rmBomRender(); }
 async function rmBomSave(){
-  const skuId = window.__rmBomSku; const items = Object.entries(rmBomSel).map(([id, q]) => ({ rm_item_id: id, qty: q != null && q > 0 ? q : null }));
+  const skuId = window.__rmBomSku; const items = Object.entries(rmBomSel).map(([id, q]) => ({ rm_item_id: id, qty: q != null && q > 0 ? q : null, component: rmBomComp[id] || null }));
   if (Object.values(rmBomSel).some(q => q != null && !(q > 0))){ say('rm-bom-msg','Quantity per case must be above zero — or leave it blank.',false); return; }
   const { error } = await db.schema('mfg').rpc('bom_set', { p_sku: skuId, p_items: items });
   if (error){ say('rm-bom-msg','Could not save: ' + error.message, false); return; }
@@ -8079,23 +8124,24 @@ async function rmBomSave(){
 function rmSkuXlsx(){
   const skus = window.__rmSkuList || [], calc = window.__rmSkuCalc || {}; if (!skus.length){ alert('Nothing to download.'); return; }
   const bn = s => ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||'';
-  const sum = [['Cases possible — SKU-wise · as on ' + calFmt(new Date())], [], ['Brand','SKU','Bottles/case','Materials set','Cases possible now','Limiting material(s)']];
-  skus.forEach(s => { const c = calc[s.id]; sum.push([bn(s), s.sku_code, s.units_per_case, c.lines.length, c.lines.length ? c.cases : null, c.limiting.join(', ')]); });
-  const det = [['Brand','SKU','Material code','Material','Unit','Needed per case','At MMC (custody)','In company store','Cases possible','Limiting?','Shared by (SKUs)']];
-  skus.forEach(s => { const c = calc[s.id]; c.lines.forEach(l => det.push([bn(s), s.sku_code, l.item.code, l.item.name, l.item.unit, l.qty, l.mmc, l.store, l.cases, (l.cases != null && l.cases === c.cases) ? 'yes' : '', l.shared])); });
-  xlsxDownload('rm-store-by-sku-' + calFmt(new Date()), [{ name: 'Cases possible', rows: sum, widths: [22, 30, 12, 13, 18, 48] }, { name: 'Materials by SKU', rows: det, widths: [22, 30, 36, 44, 6, 14, 16, 16, 14, 10, 14] }]);
+  const sum = [['Cases possible — SKU-wise · as on ' + calFmt(new Date())], [], ['Brand','SKU','Bottles/case','Materials set','Components (of 5)','Missing components','Cases possible now','Limiting material(s)']];
+  skus.forEach(s => { const c = calc[s.id]; sum.push([bn(s), s.sku_code, s.units_per_case, c.lines.length, c.lines.length ? 5 - c.missing.length : null, c.missing.join(', '), c.lines.length ? c.cases : null, c.complete ? c.limiting.join(', ') : (c.lines.length ? 'incomplete' : '')]); });
+  const det = [['Brand','SKU','Component','Material code','Material','Unit','Needed per case','At MMC (custody)','In company store','Cases possible','Limiting?','Shared by (SKUs)']];
+  skus.forEach(s => { const c = calc[s.id]; c.missing.forEach(m => det.push([bn(s), s.sku_code, m, 'MISSING', '', '', null, null, null, null, '', null])); c.lines.forEach(l => det.push([bn(s), s.sku_code, RM_COMP_LABEL[l.role]||l.role, l.item.code, l.item.name, l.item.unit, l.qty, l.mmc, l.store, l.cases, (l.cases != null && l.cases === c.casesByItems) ? 'yes' : '', l.shared])); });
+  xlsxDownload('rm-store-by-sku-' + calFmt(new Date()), [{ name: 'Cases possible', rows: sum, widths: [22, 30, 12, 13, 15, 30, 18, 48] }, { name: 'Materials by SKU', rows: det, widths: [22, 30, 14, 36, 44, 6, 14, 16, 16, 14, 10, 14] }]);
 }
 function rmSkuPrint(){
   const skus = window.__rmSkuList || [], calc = window.__rmSkuCalc || {}; if (!skus.length){ alert('Nothing to print.'); return; }
   const bn = s => ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||''; const fmt = v => v == null ? '—' : Number(v).toLocaleString('en-IN');
   let body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Raw material by brand SKU — cases possible · as on ${calFmt(new Date())}</h2>
-    <table><thead><tr><th>Brand</th><th>SKU</th><th class="amount">Materials</th><th class="amount">Cases possible now</th><th>Limiting material(s)</th></tr></thead><tbody>
-    ${skus.map(s => { const c = calc[s.id]; return `<tr><td>${esc(bn(s))}</td><td><b>${esc(s.sku_code)}</b></td><td class="amount">${c.lines.length||'—'}</td><td class="amount"><b>${c.lines.length?fmt(c.cases):'—'}</b></td><td>${esc(c.limiting.join(', '))}</td></tr>`; }).join('')}
+    <table><thead><tr><th>Brand</th><th>SKU</th><th>Components (5 needed)</th><th class="amount">Cases possible now</th><th>Limiting material(s)</th></tr></thead><tbody>
+    ${skus.map(s => { const c = calc[s.id]; return `<tr><td>${esc(bn(s))}</td><td><b>${esc(s.sku_code)}</b></td><td>${c.lines.length ? (5 - c.missing.length) + '/5' + (c.missing.length ? ' — missing: ' + esc(c.missing.join(', ')) : '') : '—'}</td><td class="amount"><b>${c.lines.length?fmt(c.cases):'—'}</b></td><td>${c.complete ? esc(c.limiting.join(', ')) : (c.lines.length ? 'incomplete' : '')}</td></tr>`; }).join('')}
     </tbody></table>`;
   skus.filter(s => calc[s.id].lines.length).forEach(s => { const c = calc[s.id];
     body += `<h3 style="margin-top:14px;">${esc(bn(s))} · ${esc(s.sku_code)} — cases possible: ${fmt(c.cases)}${c.limiting.length?' (limited by '+esc(c.limiting.join(', '))+')':''}</h3>
-      <table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Needed per case</th><th class="amount">At MMC</th><th class="amount">In store</th><th class="amount">Cases possible</th></tr></thead><tbody>
-      ${c.lines.map(l => `<tr class="${l.cases!=null && l.cases===c.cases?'tot':''}"><td><b>${esc(l.item.code)}</b> ${esc(l.item.name||'')}</td><td>${esc(l.item.unit||'')}</td><td class="amount">${l.qty||'—'}</td><td class="amount">${fmt(l.mmc)}</td><td class="amount">${fmt(l.store)}</td><td class="amount"><b>${fmt(l.cases)}</b></td></tr>`).join('')}
+      <table><thead><tr><th>Component</th><th>Material</th><th>Unit</th><th class="amount">Needed per case</th><th class="amount">At MMC</th><th class="amount">In store</th><th class="amount">Cases possible</th></tr></thead><tbody>
+      ${c.missing.map(m => `<tr class="tot"><td><b>✗ ${esc(m)}</b></td><td colspan="6">MISSING — not set for this SKU; production cannot be completed</td></tr>`).join('')}
+      ${c.lines.map(l => `<tr class="${c.complete && l.cases!=null && l.cases===c.cases?'tot':''}"><td>${esc(RM_COMP_LABEL[l.role]||l.role)}</td><td><b>${esc(l.item.code)}</b> ${esc(l.item.name||'')}</td><td>${esc(l.item.unit||'')}</td><td class="amount">${l.qty||'—'}</td><td class="amount">${fmt(l.mmc)}</td><td class="amount">${fmt(l.store)}</td><td class="amount"><b>${fmt(l.cases)}</b></td></tr>`).join('')}
       </tbody></table>`; });
   body += '<p style="font-size:11px;color:#555;margin-top:10px;">Cases possible = the smallest of (material at MMC ÷ quantity needed per case) across the SKU’s materials; the highlighted material is the one running short. Materials shared by several SKUs are counted in full for each.</p>';
   printHtml('RM by SKU — ' + calFmt(new Date()), body);
