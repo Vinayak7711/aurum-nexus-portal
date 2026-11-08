@@ -7378,16 +7378,18 @@ async function purchaseTab(t){
   }
 
   if (t === 'store'){
-    const [st, mmc, itm, bomQ] = await Promise.all([
+    const [st, mmc, itm, bomQ, tgtQ] = await Promise.all([
       G.from('v_rm_store').select('*').order('code'),
       G.from('v_rm_stock').select('*').order('code'),
       G.from('rm_items').select('id, code, name, unit, rm_category, rm_subcat, units_per_case'),
-      G.from('sku_bom').select('sku_id, rm_item_id, qty_per_case, component')
+      G.from('sku_bom').select('sku_id, rm_item_id, qty_per_case, component'),
+      G.from('v_prod_targets').select('sku_id, sku_code, target_cases, carry_in, eff_target, produced_cases, reported_cases').eq('period', monthLabelJS())
     ]);
     const mmcBy = {}; (mmc.data||[]).forEach(r => mmcBy[r.rm_item_id] = r);
     const itemBy = {}; (itm.data||[]).forEach(i => itemBy[i.id] = i); window.__rmItemBy = itemBy;
     if (!M.skus || !M.skus.length){ try { await loadMasters(); } catch(e){} }
-    window.__rmStoreCtx = { storeBy: Object.fromEntries((st.data||[]).map(r=>[r.rm_item_id, r])), mmcBy, itemBy, bom: bomQ.data || [] };
+    // this month's production targets (Targets & completion) — target incl. carry-forward, what is achieved, what is still to be made
+    window.__rmStoreCtx = { storeBy: Object.fromEntries((st.data||[]).map(r=>[r.rm_item_id, r])), mmcBy, itemBy, bom: bomQ.data || [], targets: tgtQ.data || [], targetsErr: tgtQ.error ? tgtQ.error.message : null, month: monthLabelJS() };
     window.rmStoreView = window.rmStoreView || 'cat';
     const viewChips = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;"><span style="font-size:12px;color:#777;margin-right:4px;">Show:</span>
         <button class="chip ${window.rmStoreView==='cat'?'on':''}" onclick="window.rmStoreView='cat';purchaseTab('store')">By material category</button>
@@ -8029,6 +8031,25 @@ function rmLineNote(l, c, fmt){
   if (l.store > 0 && l.cases != null && l.qty) notes.push('+' + fmt(Math.floor((l.mmc + l.store) / l.qty) - l.cases) + ' case(s) more if the ' + fmt(l.store) + ' in the company store is sent to MMC');
   return notes.join('<br>');
 }
+// Required this month for a SKU, from Targets & completion: target incl. carry-forward − achieved so far = balance still to produce
+function rmSkuTarget(sku){
+  const C = window.__rmStoreCtx || {}; const rows = (C.targets||[]).filter(t => t.sku_id === sku.id || t.sku_code === sku.sku_code);
+  if (!rows.length) return null;
+  const tgt = rows.reduce((s,t)=>s+Number(t.eff_target||0),0), own = rows.reduce((s,t)=>s+Number(t.target_cases||0),0), carry = rows.reduce((s,t)=>s+Number(t.carry_in||0),0);
+  const ach = rows.reduce((s,t)=>s+Math.max(Number(t.produced_cases||0), Number(t.reported_cases||0)),0);
+  return { tgt, own, carry, ach, balance: Math.max(0, tgt - ach) };
+}
+function rmSkuTargetCell(sku, c, fmt){
+  const C = window.__rmStoreCtx || {}; const t = rmSkuTarget(sku);
+  if (!t) return `<span style="color:#999" title="No target set for ${esc(ptMonthName ? ptMonthName(C.month) : C.month)} in MMC → Targets & completion">no target</span>`;
+  const have = c.lines.length ? c.cases : null; const need = t.balance;
+  let verdict = '';
+  if (need <= 0) verdict = '<span style="color:#1a7f37;">✓ target already met</span>';
+  else if (have == null) verdict = '<span style="color:#999;">materials not set</span>';
+  else if (have >= need) verdict = `<span style="color:#1a7f37;">✓ material enough (${fmt(have)} possible)</span>`;
+  else verdict = `<span style="color:#b3261e;font-weight:700;">⚠ short by ${fmt(need - have)} case(s) — material for ${fmt(have)} only</span>`;
+  return `<b style="color:${need>0?'#1c2455':'#1a7f37'}">${fmt(need)}</b> <span style="font-size:10.5px;color:#777;">still to make</span><br><span style="font-size:10.5px;color:#777;">target ${fmt(t.tgt)}${t.carry ? ' (' + fmt(t.own) + (t.carry>0?' + ':' − ') + fmt(Math.abs(t.carry)) + ' carried)' : ''} · achieved ${fmt(t.ach)}</span><br><span style="font-size:11px;">${verdict}</span>`;
+}
 function rmCompBadges(c){ const have = new Set(c.lines.map(l => l.role)); return RM_COMPONENTS.map(([k,l]) => have.has(k) ? `<span style="display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:10px;background:#e6f4ea;color:#1a7f37;margin:1px 2px 1px 0;">✓ ${l}</span>` : `<span style="display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:10px;background:#fdecea;color:#b3261e;font-weight:700;margin:1px 2px 1px 0;" title="This component is missing from the SKU's materials">✗ ${l} missing</span>`).join(''); }
 async function rmBrandPlanning(brandId, active){
   const { error } = await db.schema('sales').rpc('set_brand_planning', { p_brand: brandId, p_active: !!active });
@@ -8065,10 +8086,12 @@ function rmSkuViewHtml(){
     </div>
     <div id="rm-bom-box"></div>
     <h4 class="sec" style="margin-top:4px;">Cases possible — SKU-wise summary</h4>
-    <div class="table-scroll"><table><thead><tr><th>Brand</th><th>SKU</th><th>Components (5 needed)</th><th class="amount">Cases possible now</th><th>Running short (limiting material)</th>${canEdit?'<th></th>':''}</tr></thead><tbody>
+    ${C.targetsErr ? `<p style="font-size:11.5px;color:#b26a00;">Targets for this month could not be read (${esc(C.targetsErr)}).</p>` : ''}
+    <div class="table-scroll"><table><thead><tr><th>Brand</th><th>SKU</th><th>Components (5 needed)</th><th class="amount">Cases possible now</th><th title="From MMC → Targets & completion: this month's target (incl. carry-forward) less what is already produced / marked complete">Required this month <span style="font-weight:normal;font-size:9.5px;">(target ${esc(typeof ptMonthName==='function' ? ptMonthName(C.month) : C.month)})</span></th><th>Running short (limiting material)</th>${canEdit?'<th></th>':''}</tr></thead><tbody>
     ${skus.map(s => { const c = calc[s.id]; const bn = ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||'';
       return `<tr style="${c.lines.length && !c.complete ? 'background:#fff7f5;' : ''}"><td>${esc(bn)}</td><td><b>${esc(s.sku_code)}</b></td><td style="font-size:12px;">${c.lines.length ? `<b style="color:${c.complete?'#1a7f37':'#b3261e'}">${5 - c.missing.length}/5</b> ${c.complete ? '<span style="color:#1a7f37">complete</span>' : '<span style="color:#b3261e;font-weight:600;">missing: ' + c.missing.map(esc).join(', ') + '</span>'}` : '<span style="color:#b26a00">none set</span>'}</td>
         <td class="amount" style="font-weight:700;color:${c.cases==null?'#999':(c.cases>0?'#1a7f37':'#b3261e')}">${c.lines.length ? fmt(c.cases) + (!c.complete && c.casesByItems != null ? ' <span style="font-weight:normal;font-size:10.5px;color:#999" title="What the materials already set would allow, once the missing component is added">(' + fmt(c.casesByItems) + ' by items set)</span>' : '') : '—'}</td>
+        <td style="font-size:12px;line-height:1.3;">${rmSkuTargetCell(s, c, fmt)}</td>
         <td style="font-size:12px;">${c.lines.length ? ((!c.complete ? '<span style="color:#b3261e;font-weight:600;">incomplete — add the missing component</span>' : c.limiting.map(esc).join(', ')) + (c.missingQty ? ' <span style="color:#b26a00">· ' + c.missingQty + ' material(s) without a per-case qty</span>' : '')) : (canEdit ? '<a href="#" onclick="rmBomEdit(\'' + s.id + '\');return false;" style="color:#b26a00;">set materials ✎</a>' : '—')}</td>
         ${canEdit ? `<td style="white-space:nowrap"><button class="mini" onclick="rmBomEdit('${s.id}')">✏️ Edit materials</button></td>` : ''}</tr>`; }).join('')}
     </tbody></table></div>`;
@@ -8147,18 +8170,21 @@ async function rmBomSave(){
 function rmSkuXlsx(){
   const skus = window.__rmSkuList || [], calc = window.__rmSkuCalc || {}; if (!skus.length){ alert('Nothing to download.'); return; }
   const bn = s => ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||'';
-  const sum = [['Cases possible — SKU-wise · as on ' + calFmt(new Date())], [], ['Brand','SKU','Bottles/case','Materials set','Components (of 5)','Missing components','Cases possible now','Limiting material(s)']];
-  skus.forEach(s => { const c = calc[s.id]; sum.push([bn(s), s.sku_code, s.units_per_case, c.lines.length, c.lines.length ? 5 - c.missing.length : null, c.missing.join(', '), c.lines.length ? c.cases : null, c.complete ? c.limiting.join(', ') : (c.lines.length ? 'incomplete' : '')]); });
+  const sum = [['Cases possible — SKU-wise · as on ' + calFmt(new Date())], [], ['Brand','SKU','Bottles/case','Materials set','Components (of 5)','Missing components','Cases possible now','Target this month (incl. carry)','Achieved so far','Still to make','Material vs target','Limiting material(s)']];
+  skus.forEach(s => { const c = calc[s.id]; const t = rmSkuTarget(s); const have = c.lines.length ? c.cases : null;
+    sum.push([bn(s), s.sku_code, s.units_per_case, c.lines.length, c.lines.length ? 5 - c.missing.length : null, c.missing.join(', '), have, t ? t.tgt : null, t ? t.ach : null, t ? t.balance : null,
+      !t ? 'no target' : t.balance <= 0 ? 'target met' : have == null ? 'materials not set' : have >= t.balance ? 'enough' : 'short by ' + (t.balance - have), c.complete ? c.limiting.join(', ') : (c.lines.length ? 'incomplete' : '')]); });
   const det = [['Brand','SKU','Component','Material code','Material','Unit','Needed per case','At MMC (custody)','In company store','Cases possible','Limiting?','Shared by (SKUs)']];
   skus.forEach(s => { const c = calc[s.id]; c.missing.forEach(m => det.push([bn(s), s.sku_code, m, 'MISSING', '', '', null, null, null, null, '', null])); c.lines.forEach(l => det.push([bn(s), s.sku_code, RM_COMP_LABEL[l.role]||l.role, l.item.code, l.item.name, l.item.unit, l.qty, l.mmc, l.store, l.cases, (l.cases != null && l.cases === c.casesByItems) ? 'yes' : '', l.shared])); });
-  xlsxDownload('rm-store-by-sku-' + calFmt(new Date()), [{ name: 'Cases possible', rows: sum, widths: [22, 30, 12, 13, 15, 30, 18, 48] }, { name: 'Materials by SKU', rows: det, widths: [22, 30, 14, 36, 44, 6, 14, 16, 16, 14, 10, 14] }]);
+  xlsxDownload('rm-store-by-sku-' + calFmt(new Date()), [{ name: 'Cases possible', rows: sum, widths: [22, 30, 12, 13, 15, 30, 18, 16, 14, 13, 22, 48] }, { name: 'Materials by SKU', rows: det, widths: [22, 30, 14, 36, 44, 6, 14, 16, 16, 14, 10, 14] }]);
 }
 function rmSkuPrint(){
   const skus = window.__rmSkuList || [], calc = window.__rmSkuCalc || {}; if (!skus.length){ alert('Nothing to print.'); return; }
   const bn = s => ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||''; const fmt = v => v == null ? '—' : Number(v).toLocaleString('en-IN');
   let body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Raw material by brand SKU — cases possible · as on ${calFmt(new Date())}</h2>
-    <table><thead><tr><th>Brand</th><th>SKU</th><th>Components (5 needed)</th><th class="amount">Cases possible now</th><th>Limiting material(s)</th></tr></thead><tbody>
-    ${skus.map(s => { const c = calc[s.id]; return `<tr><td>${esc(bn(s))}</td><td><b>${esc(s.sku_code)}</b></td><td>${c.lines.length ? (5 - c.missing.length) + '/5' + (c.missing.length ? ' — missing: ' + esc(c.missing.join(', ')) : '') : '—'}</td><td class="amount"><b>${c.lines.length?fmt(c.cases):'—'}</b></td><td>${c.complete ? esc(c.limiting.join(', ')) : (c.lines.length ? 'incomplete' : '')}</td></tr>`; }).join('')}
+    <table><thead><tr><th>Brand</th><th>SKU</th><th>Components (5 needed)</th><th class="amount">Cases possible now</th><th class="amount">Target this month</th><th class="amount">Achieved</th><th class="amount">Still to make</th><th>Material vs target</th><th>Limiting material(s)</th></tr></thead><tbody>
+    ${skus.map(s => { const c = calc[s.id]; const t = rmSkuTarget(s); const have = c.lines.length ? c.cases : null; const v = !t ? 'no target' : t.balance <= 0 ? 'target met' : have == null ? 'materials not set' : have >= t.balance ? 'enough' : 'short by ' + fmt(t.balance - have);
+      return `<tr><td>${esc(bn(s))}</td><td><b>${esc(s.sku_code)}</b></td><td>${c.lines.length ? (5 - c.missing.length) + '/5' + (c.missing.length ? ' — missing: ' + esc(c.missing.join(', ')) : '') : '—'}</td><td class="amount"><b>${c.lines.length?fmt(c.cases):'—'}</b></td><td class="amount">${t?fmt(t.tgt):'—'}</td><td class="amount">${t?fmt(t.ach):'—'}</td><td class="amount"><b>${t?fmt(t.balance):'—'}</b></td><td>${v}</td><td>${c.complete ? esc(c.limiting.join(', ')) : (c.lines.length ? 'incomplete' : '')}</td></tr>`; }).join('')}
     </tbody></table>`;
   skus.filter(s => calc[s.id].lines.length).forEach(s => { const c = calc[s.id];
     body += `<h3 style="margin-top:14px;">${esc(bn(s))} · ${esc(s.sku_code)} — cases possible: ${fmt(c.cases)}${c.limiting.length?' (limited by '+esc(c.limiting.join(', '))+')':''}</h3>
