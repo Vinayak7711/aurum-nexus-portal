@@ -4799,6 +4799,8 @@ async function mfgTab(which){
 function rmRows(k){
   const q = String((window.rmQ||{})[k]||'').trim().toLowerCase();
   let list = (window.__rm||{})[k] || [];
+  // items moved entirely to the asset register (nothing left here) belong to Accounting → Assets, not to the material lists
+  list = list.filter(r => !(Number(r.moved_to_asset||0) > 0 && Number(k==='mmc' ? r.balance : r.store_balance) <= 0));
   if (!(window.rmZero||{})[k]) list = list.filter(r => Number(k==='mmc' ? r.balance : r.store_balance) !== 0);
   const cat = (window.rmCat||{})[k]; if (cat) list = list.filter(r => (r.rm_category||'CONSUMABLE') === cat);
   const sub = (window.rmSub||{})[k]; if (sub) list = list.filter(r => (r.rm_category||'CONSUMABLE') === 'CONSUMABLE' && (sub === 'NONE' ? !r.rm_subcat : r.rm_subcat === sub));
@@ -4807,7 +4809,7 @@ function rmRows(k){
 }
 const RM_CAT_LABEL = { CONSUMABLE: '🧪 Consumables', SPARES: '🔧 Spare parts & plant machinery', SERVICES: '🧾 Services & expenses' };
 const RM_CAT_SHORT = { CONSUMABLE: 'Consumable', SPARES: 'Spare parts & plant machinery', SERVICES: 'Services & expenses' };
-const RM_CAT_ORDER = { CONSUMABLE: 0, SPARES: 1 };
+const RM_CAT_ORDER = { CONSUMABLE: 0, SPARES: 1, SERVICES: 2 };
 const RM_SUB_LABEL = { CASE: '📦 Case-wise', BLEND: '🧴 Blend-wise', '': '— not yet sorted' };
 const RM_SUB_ORDER = { CASE: 0, BLEND: 1, '': 2 };
 const rmSubOf = r => (r.rm_category||'CONSUMABLE') === 'CONSUMABLE' ? (r.rm_subcat || '') : '';
@@ -7415,7 +7417,11 @@ async function purchaseTab(t){
     const anyMoved = (st.data||[]).some(r=>Number(r.moved_to_asset||0)>0);
     window.__rmStoreRows = {}; (st.data||[]).forEach(r=>{ r.mmc_balance = Number((mmcBy[r.rm_item_id]||{}).balance||0); window.__rmStoreRows[r.rm_item_id] = r; });
     // Hide materials with nothing anywhere — they join the list the moment a receipt (or issue) touches them.
+    // Items that have gone entirely to the asset register (nothing left in the store or at MMC) are not material any more — they live in Accounting → Assets
+    const inAssets = (st.data||[]).filter(r=>{const m=mmcBy[r.rm_item_id]||{}; return (Number(r.moved_to_asset||0) + Number(m.moved_to_asset||0)) > 0 && Number(r.store_balance||0) <= 0 && Number(m.balance||0) <= 0;});
+    const inAssetIds = new Set(inAssets.map(r=>r.rm_item_id));
     const live = (st.data||[]).filter(r=>{const m=mmcBy[r.rm_item_id]||{};
+      if (inAssetIds.has(r.rm_item_id)) return false;
       return Number(r.received)!==0 || Number(r.issued_to_mmc)!==0 || Number(r.store_balance)!==0 || Number(r.moved_to_asset||0)!==0 ||
              Number(m.balance||0)!==0 || Number(m.consumed||0)!==0;});
     // Order of the list: case-wise consumables first, then blend-wise, then the consumables not yet sorted, then spare parts & plant machinery — A→Z inside each group
@@ -7449,6 +7455,7 @@ async function purchaseTab(t){
         (canMove ? `<td><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button>${r.__grp !== 2 ? '' : ((Number(r.store_balance)>0 || Number(m.balance||0)>0)?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this item out of the company store or MMC custody into the asset register">→ Asset</button>`:`<span style="font-size:10px;color:#aaa;display:block;text-align:center;" title="Nothing in the store or at MMC to move${Number(r.moved_to_asset||0)>0?' — '+Number(r.moved_to_asset)+' already in the asset register':''}">${Number(r.moved_to_asset||0)>0?'in assets':'no stock'}</span>`)}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
       </tbody></table></div>
       <p style="font-size:11.5px;color:#777;margin-top:6px;">Listed in this order: case-wise consumables, then blend-wise, then consumables not yet sorted, then spare parts &amp; plant machinery, then services &amp; expenses — A→Z within each group (the category box on the row sets it; MMC → Raw material shows the same).</p>
+      ${inAssets.length ? `<details style="margin-top:6px;font-size:11.5px;color:#777;"><summary style="cursor:pointer;">🏷 ${inAssets.length} item(s) moved entirely to the asset register are not listed here — they are in <b>Accounting → Assets</b></summary><div style="margin:6px 0 0 14px;">${inAssets.map(r=>`<div><b>${esc(r.code)}</b> ${esc(r.name||'')} — ${Number(r.moved_to_asset||0) + Number((mmcBy[r.rm_item_id]||{}).moved_to_asset||0)} ${esc(r.unit||'')} in assets</div>`).join('')}</div></details>` : ''}
       ${anyCaseWise ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">📦 <b>Tentative cases</b> = material at MMC (custody) ÷ units needed for one case, for case-wise consumables only (Raw material tab → Consumables → Case-wise). Units per case come from the pack size in the item’s code / name — <b>180 ml → 48</b>, <b>750 ml → 12</b>, <b>90 ml → 100</b>, a <b>box / carton → 1</b> — unless a figure is set on the item with ✏️ Edit (e.g. 1 carton per case). The figure is indicative: the smallest tentative figure across a line’s materials is what can actually be made.</p>' : ''}`;
     return;
   }
