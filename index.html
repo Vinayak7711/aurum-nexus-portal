@@ -4750,9 +4750,9 @@ async function mfgTab(which){
     });
     const sendable = live.filter(i => Number((storeBy[i.rm_item_id]||{}).store_balance||0) > 0);
     const optOf = i => `<option value="${i.rm_item_id}" title="${esc(rmFullLabel(i))}">${esc(rmShortLabel(i, 'store: ' + Number((storeBy[i.rm_item_id]||{}).store_balance||0)))}</option>`;
-    const iopts = RM_CAT_ALL.map(c => { const g = sendable.filter(i => (i.rm_category||'CONSUMABLE') === c); return g.length ? `<optgroup label="${RM_CAT_LABEL[c]}">${g.map(optOf).join('')}</optgroup>` : ''; }).join('');
+    const iopts = RM_MMC_CATS.map(c => { const g = sendable.filter(i => (i.rm_category||'CONSUMABLE') === c); return g.length ? `<optgroup label="${RM_CAT_LABEL[c]}">${g.map(optOf).join('')}</optgroup>` : ''; }).join('');
     let html = `<div class="card" style="margin-bottom:14px;max-width:560px;"><h2 style="font-size:15px;">Record material sent to MMC</h2>
-      <p style="font-size:11.5px;color:#777;margin:4px 0 0;">Only materials with balance in the company store can be sent.</p>
+      <p style="font-size:11.5px;color:#777;margin:4px 0 0;">Only consumables and spare parts &amp; plant machinery with balance in the company store can be sent — office and marketing consumables and services stay under Purchases &amp; RM Store.</p>
       <div class="row2c" style="margin-top:8px;"><select id="ri-item">${iopts || '<option value="">— nothing in the company store —</option>'}</select>
       <input type="number" id="ri-qty" placeholder="Quantity"></div>
       <div class="row2c" style="margin-top:8px;"><input type="text" id="ri-challan" placeholder="Challan no.">
@@ -4777,7 +4777,7 @@ async function mfgTab(which){
         <label style="font-size:12px;display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" style="width:auto;" ${(window.rmZero||{})[k]?'checked':''} onchange="window.rmZero=window.rmZero||{};window.rmZero['${k}']=this.checked;rmPosDraw('${k}')"> show items with zero balance</label>
         ${canPurView()?`<label style="font-size:12px;display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" style="width:auto;" ${(window.rmVal||{})[k]?'checked':''} onchange="window.rmVal=window.rmVal||{};window.rmVal['${k}']=this.checked;rmPosDraw('${k}')"> show item with value</label>`:''}
         <span style="flex:1"></span><button class="btn ghost sm" onclick="rmCsv('${k}')">⬇ Download (CSV / Excel)</button> <button class="btn ghost sm" onclick="rmPrint('${k}')">🖨 Print / save PDF</button></div>`;
-    html += `<h4 class="sec">Raw material at MMC</h4><p style="font-size:12px;color:#777;margin:4px 0 0;">What has been sent to MMC, what the batches have consumed, and the balance lying at MMC.</p>
+    html += `<h4 class="sec">Raw material at MMC</h4><p style="font-size:12px;color:#777;margin:4px 0 0;">What has been sent to MMC, what the batches have consumed, and the balance lying at MMC — production material only (consumables, spare parts &amp; plant machinery).</p>
       ${tools('mmc')}<div class="table-scroll" id="rm-pos-mmc"></div>
       <h4 class="sec" style="margin-top:16px;">Raw material in company store</h4><p style="font-size:12px;color:#777;margin:4px 0 0;">Purchases received into our store, what has been sent to MMC from it, and the balance still in the store.</p>
       ${tools('store')}<div class="table-scroll" id="rm-pos-store"></div>
@@ -4801,6 +4801,8 @@ function rmRows(k){
   let list = (window.__rm||{})[k] || [];
   // items moved entirely to the asset register (nothing left here) belong to Accounting → Assets, not to the material lists
   list = list.filter(r => !(Number(r.moved_to_asset||0) > 0 && Number(k==='mmc' ? r.balance : r.store_balance) <= 0));
+  // MMC is a production site: only consumables and spare parts & plant machinery are shown here (office, marketing, services live under Purchases & RM Store)
+  list = list.filter(r => RM_MMC_CATS.includes(r.rm_category||'CONSUMABLE'));
   if (!(window.rmZero||{})[k]) list = list.filter(r => Number(k==='mmc' ? r.balance : r.store_balance) !== 0);
   const cat = (window.rmCat||{})[k]; if (cat) list = list.filter(r => (r.rm_category||'CONSUMABLE') === cat);
   const sub = (window.rmSub||{})[k]; if (sub) list = list.filter(r => (r.rm_category||'CONSUMABLE') === 'CONSUMABLE' && (sub === 'NONE' ? !r.rm_subcat : r.rm_subcat === sub));
@@ -4810,6 +4812,7 @@ function rmRows(k){
 const RM_CAT_LABEL = { CONSUMABLE: '🧪 Consumables', SPARES: '🔧 Spare parts & plant machinery', OFFICE: '🗂 Office consumables', MARKETING: '📣 Marketing consumables', SERVICES: '🧾 Services & expenses' };
 const RM_CAT_SHORT = { CONSUMABLE: 'Consumable', SPARES: 'Spare parts & plant machinery', OFFICE: 'Office consumable', MARKETING: 'Marketing consumable', SERVICES: 'Services & expenses' };
 const RM_CAT_ALL = ['CONSUMABLE','SPARES','OFFICE','MARKETING','SERVICES'];
+const RM_MMC_CATS = ['CONSUMABLE','SPARES'];   // only production material goes to / shows at MMC — office, marketing and services stay in Purchases & RM Store
 const RM_CAT_ORDER = { CONSUMABLE: 0, SPARES: 1, OFFICE: 2, MARKETING: 3, SERVICES: 4 };
 const RM_SUB_LABEL = { CASE: '📦 Case-wise', BLEND: '🧴 Blend-wise', '': '— not yet sorted' };
 const RM_SUB_ORDER = { CASE: 0, BLEND: 1, '': 2 };
@@ -4821,7 +4824,7 @@ function rmChipsDraw(k){
   const cat = window.rmCat[k] || '', sub = window.rmSub[k] || '';
   const chip = (on, js, label) => `<button class="chip ${on?'on':''}" onclick="${js}">${label}</button>`;
   let h = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0 2px;"><span style="font-size:12px;color:#555;">Category:</span>` +
-    [['','All']].concat(RM_CAT_ALL.map(c => [c, RM_CAT_LABEL[c]])).map(([v,l]) => chip(cat===v, `window.rmCat['${k}']='${v}';window.rmSub['${k}']='';rmPosDraw('${k}')`, l)).join('') +
+    [['','All']].concat(RM_MMC_CATS.map(c => [c, RM_CAT_LABEL[c]])).map(([v,l]) => chip(cat===v, `window.rmCat['${k}']='${v}';window.rmSub['${k}']='';rmPosDraw('${k}')`, l)).join('') +
     (rmCanSetCat() ? '<span style="font-size:11px;color:#777;margin-left:6px;">— change an item\'s category and, for consumables, case-wise / blend-wise from the boxes beside its name</span>' : '') + '</div>';
   if (!cat || cat === 'CONSUMABLE') h += `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 2px 14px;"><span style="font-size:12px;color:#555;">Consumables:</span>` +
     [['','All'],['CASE',RM_SUB_LABEL.CASE],['BLEND',RM_SUB_LABEL.BLEND],['NONE','not yet sorted']].map(([v,l]) => chip(sub===v, `window.rmSub['${k}']='${v}';if('${v}')window.rmCat['${k}']='CONSUMABLE';rmPosDraw('${k}')`, l)).join('') + '</div>';
@@ -4831,7 +4834,7 @@ function rmCanSetCat(){ const pj = (me && me.permissions_json) || {}; return isD
 function rmCatPick(r){
   const c = r.rm_category || 'CONSUMABLE', sb = c === 'CONSUMABLE' ? (r.rm_subcat || '') : '';
   if (!rmCanSetCat()) return `<span style="font-size:10.5px;color:#777;">${c!=='CONSUMABLE' ? RM_CAT_LABEL[c] || c : '🧪 consumable · ' + (sb ? RM_SUB_LABEL[sb].replace(/^.. /,'').toLowerCase() : 'not yet sorted')}</span>`;
-  return `<select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;" onchange="rmSetCat('${r.rm_item_id}', this.value, null)"><option value="CONSUMABLE" ${c==='CONSUMABLE'?'selected':''}>🧪 production consumable</option><option value="SPARES" ${c==='SPARES'?'selected':''}>🔧 spare / machinery</option><option value="OFFICE" ${c==='OFFICE'?'selected':''}>🗂 office consumable</option><option value="MARKETING" ${c==='MARKETING'?'selected':''}>📣 marketing consumable</option><option value="SERVICES" ${c==='SERVICES'?'selected':''}>🧾 service / expense</option></select>` +
+  return `<select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;" onchange="rmSetCat('${r.rm_item_id}', this.value, null)"><option value="CONSUMABLE" ${c==='CONSUMABLE'?'selected':''}>🧪 production consumable</option><option value="SPARES" ${c==='SPARES'?'selected':''}>🔧 spare / machinery</option></select>` +
     (c === 'CONSUMABLE' ? ` <select style="width:auto;padding:2px 4px;font-size:10.5px;margin-top:2px;${sb?'':'border-color:#b26a00;'}" onchange="rmSetCat('${r.rm_item_id}', 'CONSUMABLE', this.value||null)"><option value="" ${!sb?'selected':''}>— case-wise or blend-wise? —</option><option value="CASE" ${sb==='CASE'?'selected':''}>📦 case-wise</option><option value="BLEND" ${sb==='BLEND'?'selected':''}>🧴 blend-wise</option></select>` : '');
 }
 async function rmSetCat(id, cat, sub){
