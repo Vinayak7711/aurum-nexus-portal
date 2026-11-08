@@ -7407,7 +7407,7 @@ async function purchaseTab(t){
                store: Number(r.store_balance||0), mmc: m.balance!=null ? Number(m.balance) : null, upc: pc.upc, upcAuto: pc.auto, cases: (cw && pc.upc) ? Math.floor(Number(m.balance||0) / pc.upc) : null, caseWise: cw }; });
     B.innerHTML = `
       <h4 class="sec">Raw material inventory</h4>
-      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>. <b>✏️ Edit</b> corrects a material’s code or name — every section (purchase orders, material requests, receipts, MMC custody, production reports, targets) shows the corrected name, as they all refer to the same material record.':''}</p>
+      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>. <b>✏️ Edit</b> corrects a material’s code or name — every section (purchase orders, material requests, receipts, MMC custody, production reports, targets) shows the corrected name, as they all refer to the same material record. The <b>category box</b> on each row sorts the item — case-wise consumable, blend-wise consumable, or spare parts &amp; plant machinery — the same setting as MMC → Raw material; items under “not yet sorted” only need this to join their group.':''}</p>
       ${viewChips}
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;">
         <button class="btn ghost sm" onclick="rmStoreXlsx()" title="Download this inventory as an Excel workbook (.xlsx)">⬇ Download Excel</button>
@@ -7422,7 +7422,7 @@ async function purchaseTab(t){
         `<td class="amount" style="font-weight:700;color:${Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance)}</td>` +
         `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td>` +
         (anyCaseWise ? `<td class="amount">${rmTentativeCell(itemBy[r.rm_item_id], m.balance, canMove)}</td>` : '') +
-        (canMove ? `<td style="white-space:nowrap"><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button> ${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
+        (canMove ? `<td style="white-space:nowrap">${rmStoreCatPick(itemBy[r.rm_item_id], r.rm_item_id)} <button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button> ${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
       </tbody></table></div>
       <p style="font-size:11.5px;color:#777;margin-top:6px;">Listed in this order: case-wise consumables, then blend-wise, then consumables not yet sorted, then spare parts &amp; plant machinery — A→Z within each group (the category is set under MMC → Raw material).</p>
       ${anyCaseWise ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">📦 <b>Tentative cases</b> = material at MMC (custody) ÷ units needed for one case, for case-wise consumables only (Raw material tab → Consumables → Case-wise). Units per case come from the pack size in the item’s code / name — <b>180 ml → 48</b>, <b>750 ml → 12</b>, <b>90 ml → 100</b>, a <b>box / carton → 1</b> — unless a figure is set on the item with ✏️ Edit (e.g. 1 carton per case). The figure is indicative: the smallest tentative figure across a line’s materials is what can actually be made.</p>' : ''}`;
@@ -8187,6 +8187,26 @@ function rmStorePrint(){
     <p style="font-size:11px;color:#555;margin-top:10px;">Store balance = purchased in − issued to MMC − moved to assets. Tentative cases = material at MMC ÷ units per case, for case-wise consumables only (180 ml → 48, 750 ml → 12, 90 ml → 100 unless set on the item); the smallest figure across a line's materials is what can actually be made.</p>`;
   printHtml('RM store — ' + calFmt(new Date()), body);
 }
+// ---- RM store: sort an item into its category right here (same setting as MMC → Raw material → category chips) ----
+function rmStoreCatPick(i, itemId){
+  const cat = (i && i.rm_category) || 'CONSUMABLE', sub = cat === 'CONSUMABLE' ? ((i && i.rm_subcat) || '') : '';
+  const cur = cat === 'SPARES' ? 'SPARES' : (sub === 'CASE' ? 'CASE' : (sub === 'BLEND' ? 'BLEND' : ''));
+  const unsorted = cur === '';
+  return `<select onchange="rmStoreSetCat('${itemId}', this.value)" title="Category of this material" style="width:auto;display:inline-block;padding:3px 6px;font-size:11.5px;${unsorted ? 'border-color:#b26a00;color:#b26a00;font-weight:600;background:#fff8ee;' : ''}">
+      <option value="" ${cur===''?'selected':''}>${unsorted ? '📂 assign category…' : '— not sorted —'}</option>
+      <option value="CASE" ${cur==='CASE'?'selected':''}>📦 Case-wise consumable</option>
+      <option value="BLEND" ${cur==='BLEND'?'selected':''}>🧴 Blend-wise consumable</option>
+      <option value="SPARES" ${cur==='SPARES'?'selected':''}>🔧 Spare parts &amp; plant machinery</option></select>`;
+}
+async function rmStoreSetCat(itemId, v){
+  const cat = v === 'SPARES' ? 'SPARES' : 'CONSUMABLE', sub = v === 'CASE' || v === 'BLEND' ? v : null;
+  const { error } = await db.schema('mfg').rpc('set_rm_category', { p_item: itemId, p_cat: cat, p_sub: sub });
+  if (error){ alert('Could not change the category: ' + error.message); return; }
+  const it = (window.__rmItemBy||{})[itemId]; if (it){ it.rm_category = cat; it.rm_subcat = sub; }
+  (rmItems||[]).forEach(x => { if (x.id === itemId){ x.rm_category = cat; x.rm_subcat = sub; } });
+  await purchaseTab('store');
+  const box = $('rm-name-box'); if (box) box.innerHTML = `<div class="msg ok">${esc(it ? it.code : 'Material')} sorted as ${v === 'SPARES' ? 'spare parts & plant machinery' : v === 'CASE' ? 'a case-wise consumable' : v === 'BLEND' ? 'a blend-wise consumable' : 'not yet sorted'} — it now sits in that group here and under MMC → Raw material.</div>`;
+}
 // ---- Tentative production cases from a case-wise consumable ----
 // Pack size read from the code / name: 180 ml → 48 units per case, 750 ml → 12, 90 ml → 100 (a figure set on the item wins).
 function rmPerCaseAuto(i){
@@ -8215,6 +8235,7 @@ function rmNameEdit(itemId){
       <div class="row2c"><div><label>Code *</label><input type="text" id="rn-code" value="${esc(r.code||'')}" maxlength="40" style="text-transform:uppercase"></div>
         <div><label>Unit</label><input type="text" value="${esc(r.unit||'')}" disabled></div></div>
       <div style="margin-top:8px;"><label>Material name *</label><input type="text" id="rn-name" value="${esc(r.name||'')}" maxlength="200"></div>
+      <div style="margin-top:8px;"><label>Category <span style="font-weight:normal;color:#888;font-size:11px;">— saved at once when changed; case-wise consumables get the tentative-cases figure and appear in the SKU materials</span></label>${rmStoreCatPick((window.__rmItemBy||{})[itemId], itemId)}</div>
       ${(() => { const i = (window.__rmItemBy||{})[itemId]; if (!rmIsCaseWise(i)) return '<p style="font-size:11.5px;color:#777;margin:8px 0 0;">Units per case apply to case-wise consumables only — mark the item Case-wise under MMC → Raw material → Consumables to get a tentative-cases figure.</p>';
         const a = rmPerCaseAuto(i); const set = Number(i.units_per_case||0);
         return `<div style="margin-top:8px;"><label>Units needed for one case <span style="font-weight:normal;color:#888;font-size:11px;">— for the tentative cases column; leave blank to use the automatic figure${a ? ' (' + a + ' from the pack size in the name)' : ' (none — no 180 / 750 / 90 pack size in the name)'}</span></label><input type="number" id="rn-upc" min="0.001" step="any" value="${set>0?set:''}" placeholder="${a ? 'auto: ' + a + ' per case' : 'e.g. 1 carton per case, 48 caps per case'}"></div>`; })()}
