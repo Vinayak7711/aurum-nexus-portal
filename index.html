@@ -7369,13 +7369,21 @@ async function purchaseTab(t){
   }
 
   if (t === 'store'){
-    const [st, mmc, itm] = await Promise.all([
+    const [st, mmc, itm, bomQ] = await Promise.all([
       G.from('v_rm_store').select('*').order('code'),
       G.from('v_rm_stock').select('*').order('code'),
-      G.from('rm_items').select('id, code, name, rm_category, rm_subcat, units_per_case')
+      G.from('rm_items').select('id, code, name, unit, rm_category, rm_subcat, units_per_case'),
+      G.from('sku_bom').select('sku_id, rm_item_id, qty_per_case')
     ]);
     const mmcBy = {}; (mmc.data||[]).forEach(r => mmcBy[r.rm_item_id] = r);
     const itemBy = {}; (itm.data||[]).forEach(i => itemBy[i.id] = i); window.__rmItemBy = itemBy;
+    if (!M.skus || !M.skus.length){ try { await loadMasters(); } catch(e){} }
+    window.__rmStoreCtx = { storeBy: Object.fromEntries((st.data||[]).map(r=>[r.rm_item_id, r])), mmcBy, itemBy, bom: bomQ.data || [] };
+    window.rmStoreView = window.rmStoreView || 'cat';
+    const viewChips = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;"><span style="font-size:12px;color:#777;margin-right:4px;">Show:</span>
+        <button class="chip ${window.rmStoreView==='cat'?'on':''}" onclick="window.rmStoreView='cat';purchaseTab('store')">By material category</button>
+        <button class="chip ${window.rmStoreView==='sku'?'on':''}" onclick="window.rmStoreView='sku';purchaseTab('store')">By brand SKU — materials &amp; cases possible</button></div>`;
+    if (window.rmStoreView === 'sku'){ B.innerHTML = `<h4 class="sec">Raw material inventory</h4>` + viewChips + rmSkuViewHtml(); return; }
     // Tentative cases: how many cases of production the material at MMC can make, for case-wise consumables only
     // (units needed per case: set on the item, else read from the pack size in its code / name — 180 ml → 48, 750 ml → 12, 90 ml → 100)
     const anyCaseWise = (st.data||[]).some(r => rmIsCaseWise(itemBy[r.rm_item_id]));
@@ -7400,6 +7408,7 @@ async function purchaseTab(t){
     B.innerHTML = `
       <h4 class="sec">Raw material inventory</h4>
       <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>. <b>✏️ Edit</b> corrects a material’s code or name — every section (purchase orders, material requests, receipts, MMC custody, production reports, targets) shows the corrected name, as they all refer to the same material record.':''}</p>
+      ${viewChips}
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;">
         <button class="btn ghost sm" onclick="rmStoreXlsx()" title="Download this inventory as an Excel workbook (.xlsx)">⬇ Download Excel</button>
         <button class="btn ghost sm" onclick="rmStorePrint()" title="Print this inventory">🖨 Print</button>
@@ -7949,6 +7958,147 @@ async function grnDelGo(inspId, orphKey){
   const ac = window.__grnDelAcct; window.__grnDelAcct = null;
   apprModalClose(); alert('Deleted. ' + data + '.' + (ac && Number(ac.lot_value) ? '\n\nAccounts: ₹ ' + inr(ac.lot_value) + ' of ' + (ac.vendor||'the vendor') + '’s dues (as per material received) has been removed.' : ''));
   purchaseTab('grn');
+}
+/* ---- RM store → "By brand SKU": each SKU's materials together (bill of materials), the stock of each at MMC,
+        and how many cases the SKU can run = the smallest (material at MMC ÷ qty needed per case) across its materials. ---- */
+function rmSkuPack(sku){ return String(sku.material||'').toUpperCase().includes('GLASS') ? 'GLASS' : (String(sku.material||'').toUpperCase().includes('PET') ? 'PET' : ''); }
+function rmSkuSize(sku){ const m = String(sku.sku_code||'').match(/-(90|180|750)-/); return m ? m[1] : ''; }
+function rmItemSizes(i){ const t = ((i.code||'')+' '+(i.name||'')).toUpperCase(); return ['90','180','750'].filter(z => new RegExp('(^|[^0-9])' + z + '(?![0-9])').test(t)); }
+function rmItemPack(i){ const t = ((i.code||'')+' '+(i.name||'')).toUpperCase(); if (/\(G\)/.test(t)) return 'GLASS'; if (/\(P\)/.test(t)) return 'PET'; if (/GLASS/.test(t)) return 'GLASS'; if (/\bPET\b/.test(t)) return 'PET'; return ''; }
+// brand family of a material from its code / name: DC · Frost 91 plain · Frost 91 flavour · Frost 91 shared (bottles, boxes, caps used by every Frost 91 flavour) · unknown
+function rmItemBrandKey(i){ const t = ((i.code||'')+' '+(i.name||'')).toUpperCase();
+  if (/^DC\b|DECCAN|DECAN/.test(t)) return 'DC';
+  if (/FROST\s*91|FROST91/.test(t)){ if (/BERRY|BRRY/.test(t)) return 'F91:BRRY'; if (/CITRUS/.test(t)) return 'F91:CITRUS'; if (/GR\s*APPLE|GREEN\s*APPLE/.test(t)) return 'F91:GREENAPPLE'; if (/JAMUN|JAMMUN/.test(t)) return 'F91:JAMUN'; if (/PLAIN/.test(t)) return 'F91:PLAIN'; return 'F91:SHARED'; }
+  return ''; }
+function rmSkuBrandKey(sku){ const b = ((M.brands||[]).find(x=>x.id===sku.brand_id)||{}).name || ''; const c = String(sku.sku_code||'').toUpperCase();
+  if (/^DC\b/.test(c) || /^DC\b|DECCAN/i.test(b)) return 'DC';
+  if (/FROST91|FROST 91/.test(c) || /FROST/i.test(b)){ if (/BRRY|BERRY/.test(c)) return 'F91:BRRY'; if (/CITRUS/.test(c)) return 'F91:CITRUS'; if (/GREENAPPLE|GR\s*APPLE/.test(c)) return 'F91:GREENAPPLE'; if (/JAMUN/.test(c)) return 'F91:JAMUN'; return 'F91:PLAIN'; }
+  return ''; }
+// suggested materials for a SKU, read from the names: same brand family (or shared), same pack size, same bottle type
+function rmBomSuggest(sku){
+  const items = Object.values(window.__rmItemBy||{}).filter(rmIsCaseWise); const size = rmSkuSize(sku), pack = rmSkuPack(sku), bk = rmSkuBrandKey(sku);
+  return items.filter(i => { const ik = rmItemBrandKey(i); if (!bk || !ik) return false;
+    const brandOk = ik === bk || (bk.startsWith('F91:') && ik === 'F91:SHARED');
+    const sizes = rmItemSizes(i); const sizeOk = !size || (sizes.length ? sizes.includes(size) : false);
+    const ip = rmItemPack(i); const packOk = !pack || !ip || ip === pack;
+    return brandOk && sizeOk && packOk; }).map(i => i.id);
+}
+// default qty of a material per case of a SKU: the figure set on the BOM line, else the item's own per-case figure, else the SKU's bottles per case (boxes/cartons default to 1)
+function rmBomQty(line, item, sku){ if (line && Number(line.qty_per_case) > 0) return { q: Number(line.qty_per_case), src: 'set' }; const pc = rmPerCase(item); if (pc.upc) return { q: pc.upc, src: pc.auto ? 'auto' : 'item' };
+  if (/\bBOX\b|CARTON|CTN|SHIPPER/i.test((item.code||'')+' '+(item.name||''))) return { q: 1, src: 'default' }; return { q: Number(sku.units_per_case||0) || null, src: 'sku' }; }
+function rmSkuCalc(sku){
+  const C = window.__rmStoreCtx || { bom:[], itemBy:{}, mmcBy:{}, storeBy:{} };
+  const lines = C.bom.filter(b => b.sku_id === sku.id).map(b => { const it = C.itemBy[b.rm_item_id]; if (!it) return null; const q = rmBomQty(b, it, sku); const mmc = Number((C.mmcBy[b.rm_item_id]||{}).balance||0), store = Number((C.storeBy[b.rm_item_id]||{}).store_balance||0);
+    return { item: it, qty: q.q, qtySrc: q.src, mmc, store, cases: q.q ? Math.floor(mmc / q.q) : null, shared: C.bom.filter(x => x.rm_item_id === b.rm_item_id).length }; }).filter(Boolean)
+    .sort((a,b) => String(a.item.code).localeCompare(String(b.item.code)));
+  const withQty = lines.filter(l => l.cases != null); const min = withQty.length ? Math.min(...withQty.map(l => l.cases)) : null;
+  return { lines, cases: min, limiting: withQty.filter(l => l.cases === min).map(l => l.item.code), missingQty: lines.filter(l => l.cases == null).length };
+}
+function rmSkuViewHtml(){
+  const C = window.__rmStoreCtx; const canEdit = isDir() || canFinEdit() || canPurEdit() || canPurApprove();
+  const skus = (M.skus||[]).filter(s => s.is_active).slice().sort((a,b) => { const ba = ((M.brands||[]).find(x=>x.id===a.brand_id)||{}).name||'', bb = ((M.brands||[]).find(x=>x.id===b.brand_id)||{}).name||''; return ba.localeCompare(bb) || String(a.sku_code).localeCompare(String(b.sku_code)); });
+  const calc = {}; skus.forEach(s => calc[s.id] = rmSkuCalc(s)); window.__rmSkuCalc = calc; window.__rmSkuList = skus;
+  const inBom = new Set(C.bom.map(b => b.rm_item_id));
+  const unassigned = Object.values(C.itemBy).filter(i => rmIsCaseWise(i) && !inBom.has(i.id)).sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+  const skusWithBom = skus.filter(s => calc[s.id].lines.length);
+  const fmt = v => v == null ? '—' : Number(v).toLocaleString('en-IN');
+  let html = `<p style="font-size:12px;color:#555">Each brand SKU with all the raw material it needs for one case, the stock of each at MMC, and <b>how many cases can be produced</b> — the smallest figure across its materials (that material is the one running short). Materials shared by several SKUs are counted in full for each SKU, so running one SKU reduces what the others can make.${canEdit ? ' Use <b>Edit materials</b> on a SKU to set its material list and the quantity per case; <b>Suggest from names</b> fills it from the brand, pack size and bottle type in the material names for you to confirm.' : ''}</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;">
+      <button class="btn ghost sm" onclick="rmSkuXlsx()" title="Download the SKU-wise materials and cases possible as Excel">⬇ Download Excel</button>
+      <button class="btn ghost sm" onclick="rmSkuPrint()" title="Print the SKU-wise view">🖨 Print</button>
+      <span style="font-size:11.5px;color:#777">${skus.length} SKU(s) · ${skusWithBom.length} with materials set · as on ${calFmt(new Date())}</span>
+    </div>
+    <div id="rm-bom-box"></div>
+    <h4 class="sec" style="margin-top:4px;">Cases possible — SKU-wise summary</h4>
+    <div class="table-scroll"><table><thead><tr><th>Brand</th><th>SKU</th><th class="amount">Materials</th><th class="amount">Cases possible now</th><th>Running short (limiting material)</th>${canEdit?'<th></th>':''}</tr></thead><tbody>
+    ${skus.map(s => { const c = calc[s.id]; const bn = ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||'';
+      return `<tr><td>${esc(bn)}</td><td><b>${esc(s.sku_code)}</b></td><td class="amount">${c.lines.length || '<span style="color:#b26a00">none set</span>'}</td>
+        <td class="amount" style="font-weight:700;color:${c.cases==null?'#999':(c.cases>0?'#1a7f37':'#b3261e')}">${c.lines.length ? fmt(c.cases) : '—'}</td>
+        <td style="font-size:12px;">${c.lines.length ? (c.limiting.map(esc).join(', ') + (c.missingQty ? ' <span style="color:#b26a00">· ' + c.missingQty + ' material(s) without a per-case qty</span>' : '')) : (canEdit ? '<a href="#" onclick="rmBomEdit(\'' + s.id + '\');return false;" style="color:#b26a00;">set materials ✎</a>' : '—')}</td>
+        ${canEdit ? `<td style="white-space:nowrap"><button class="mini" onclick="rmBomEdit('${s.id}')">✏️ Edit materials</button></td>` : ''}</tr>`; }).join('')}
+    </tbody></table></div>`;
+  // SKU-wise detail: one block per SKU that has materials
+  skusWithBom.forEach(s => { const c = calc[s.id]; const bn = ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||'';
+    html += `<h4 class="sec" style="margin-top:18px;">${esc(bn)} · <b>${esc(s.sku_code)}</b> <span style="font-weight:normal;font-size:12px;color:#777">— ${s.units_per_case} bottles/case · ${esc(s.material||'')}</span>
+        <span style="float:right;font-size:13px;color:${c.cases>0?'#1a7f37':'#b3261e'}">Cases possible: <b>${fmt(c.cases)}</b>${c.limiting.length?' <span style="font-weight:normal;color:#777;font-size:11.5px;">limited by ' + c.limiting.map(esc).join(', ') + '</span>':''}</span></h4>
+      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Needed per case</th><th class="amount">At MMC (custody)</th><th class="amount">In company store</th><th class="amount">Cases possible</th><th>Note</th></tr></thead><tbody>
+      ${c.lines.map(l => `<tr style="${l.cases != null && l.cases === c.cases ? 'background:#fff3f0;' : ''}"><td><b>${esc(l.item.code)}</b> <span style="color:#555">${esc(l.item.name||'')}</span></td><td>${esc(l.item.unit||'')}</td>
+          <td class="amount">${l.qty ? l.qty + (l.qtySrc==='set' ? '' : ' <span style="font-size:10.5px;color:#999">(' + (l.qtySrc==='auto' ? 'auto' : l.qtySrc==='item' ? 'item' : l.qtySrc==='sku' ? 'bottles/case' : 'default') + ')</span>') : '<span style="color:#b26a00">not set</span>'}</td>
+          <td class="amount">${fmt(l.mmc)}</td><td class="amount" style="color:#777">${fmt(l.store)}</td>
+          <td class="amount" style="font-weight:700;color:${l.cases==null?'#999':(l.cases===c.cases?'#b3261e':'#1a7f37')}">${fmt(l.cases)}${l.cases != null && l.cases === c.cases ? ' ⚠' : ''}</td>
+          <td style="font-size:11.5px;color:#777;">${l.shared > 1 ? 'shared by ' + l.shared + ' SKUs' : ''}${l.store > 0 && l.cases != null ? (l.shared > 1 ? ' · ' : '') + '+' + fmt(Math.floor((l.mmc + l.store) / l.qty) - l.cases) + ' case(s) more if the store stock is sent to MMC' : ''}</td></tr>`).join('')}
+      </tbody></table></div>`; });
+  if (unassigned.length) html += `<h4 class="sec" style="margin-top:18px;">Case-wise materials not yet assigned to any SKU <span style="font-weight:normal;font-size:12px;color:#777">— ${unassigned.length} item(s)</span></h4>
+      <div class="table-scroll"><table><thead><tr><th>Material</th><th>Unit</th><th class="amount">At MMC (custody)</th><th class="amount">In company store</th><th class="amount">Tentative cases (own figure)</th><th>Suggested for</th></tr></thead><tbody>
+      ${unassigned.map(i => { const mmc = Number((C.mmcBy[i.id]||{}).balance||0), store = Number((C.storeBy[i.id]||{}).store_balance||0); const pc = rmPerCase(i); const fits = skus.filter(s => rmBomSuggest(s).includes(i.id)).map(s=>s.sku_code);
+        return `<tr><td><b>${esc(i.code)}</b> <span style="color:#555">${esc(i.name||'')}</span></td><td>${esc(i.unit||'')}</td><td class="amount">${fmt(mmc)}</td><td class="amount" style="color:#777">${fmt(store)}</td><td class="amount">${pc.upc ? fmt(Math.floor(mmc / pc.upc)) + ' <span style="font-size:10.5px;color:#999">@ ' + pc.upc + '</span>' : '—'}</td><td style="font-size:11.5px;color:#555;">${fits.length ? fits.map(esc).join(', ') : '<span style="color:#999">no match from the name — add it to a SKU with Edit materials</span>'}</td></tr>`; }).join('')}
+      </tbody></table></div>`;
+  return html;
+}
+let rmBomSel = {};   // rm_item_id → qty (null = default) while editing a SKU's materials
+function rmBomEdit(skuId){
+  const sku = (M.skus||[]).find(s => s.id === skuId); const box = $('rm-bom-box'); if (!sku || !box) return;
+  const C = window.__rmStoreCtx; rmBomSel = {}; C.bom.filter(b => b.sku_id === skuId).forEach(b => rmBomSel[b.rm_item_id] = b.qty_per_case != null ? Number(b.qty_per_case) : null);
+  window.__rmBomSku = skuId; window.__rmBomFilter = '';
+  const bn = ((M.brands||[]).find(x=>x.id===sku.brand_id)||{}).name||'';
+  box.innerHTML = `<div class="card" style="margin:0 0 14px;border:1px solid #b8860b;"><h3 style="font-size:15px;">✏️ Materials for ${esc(bn)} · ${esc(sku.sku_code)} <span style="font-weight:normal;font-size:12px;color:#777">— ${sku.units_per_case} bottles/case · ${esc(sku.material||'')}</span></h3>
+      <p style="font-size:12px;color:#777;margin:4px 0 8px;">Tick every case-wise material this SKU needs and give the quantity for one case (blank = the item's own figure: 180 ml → 48, 750 ml → 12, 90 ml → 100, boxes 1). <b>Suggest from names</b> ticks the materials whose brand, pack size and bottle type match this SKU — check the list, then Save.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+        <button class="btn ghost sm" onclick="rmBomSuggestApply()">✨ Suggest from names</button>
+        <button class="btn ghost sm" onclick="rmBomSel={};rmBomRender()">Clear all</button>
+        <input type="text" id="rm-bom-q" placeholder="Search material…" style="width:240px;display:inline-block;" oninput="window.__rmBomFilter=this.value;rmBomRender()">
+        <span id="rm-bom-count" style="font-size:12px;color:#555"></span></div>
+      <div id="rm-bom-list" style="max-height:420px;overflow:auto;border:1px solid #e3ddcb;border-radius:8px;"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;"><button class="btn gold sm" onclick="rmBomSave()">Save materials</button><button class="btn ghost sm" onclick="$('rm-bom-box').innerHTML=''">Cancel</button></div>
+      <div id="rm-bom-msg"></div></div>`;
+  rmBomRender(); box.scrollIntoView({behavior:'smooth', block:'start'});
+}
+function rmBomRender(){
+  const out = $('rm-bom-list'); if (!out) return; const C = window.__rmStoreCtx; const sku = (M.skus||[]).find(s => s.id === window.__rmBomSku);
+  const q = String(window.__rmBomFilter||'').trim().toUpperCase();
+  const items = Object.values(C.itemBy).filter(rmIsCaseWise).filter(i => !q || ((i.code||'')+' '+(i.name||'')).toUpperCase().includes(q))
+    .sort((a,b) => ((b.id in rmBomSel) - (a.id in rmBomSel)) || String(a.code).localeCompare(String(b.code)));
+  const sugg = new Set(rmBomSuggest(sku));
+  out.innerHTML = `<table style="font-size:12.5px;"><thead><tr><th style="width:30px;"></th><th>Material</th><th class="amount">At MMC</th><th class="amount">Qty per case</th></tr></thead><tbody>` +
+    items.map(i => { const on = i.id in rmBomSel; const def = rmBomQty(null, i, sku); const mmc = Number((C.mmcBy[i.id]||{}).balance||0);
+      return `<tr style="${on?'background:#fbf7ec;':''}"><td><input type="checkbox" style="width:auto;margin:0;" ${on?'checked':''} onchange="if(this.checked) rmBomSel['${i.id}']=rmBomSel['${i.id}']??null; else delete rmBomSel['${i.id}']; rmBomRender()"></td>
+        <td><b>${esc(i.code)}</b> <span style="color:#555">${esc(i.name||'')}</span>${sugg.has(i.id)?' <span style="font-size:10.5px;color:#7a5c10" title="Matches this SKU by brand, size and bottle type">✨ suggested</span>':''}</td>
+        <td class="amount">${mmc.toLocaleString('en-IN')}</td>
+        <td class="amount">${on ? `<input type="number" min="0.001" step="any" value="${rmBomSel[i.id]!=null?rmBomSel[i.id]:''}" placeholder="${def.q ? def.q + ' (' + (def.src==='auto'?'auto':def.src==='item'?'item':def.src==='sku'?'bottles/case':'default') + ')' : 'qty'}" style="width:120px;padding:3px 6px;display:inline-block;" onchange="rmBomSel['${i.id}']=this.value===''?null:Number(this.value)">` : `<span style="color:#aaa">${def.q||''}</span>`}</td></tr>`; }).join('') + `</tbody></table>`;
+  const cnt = $('rm-bom-count'); if (cnt) cnt.textContent = Object.keys(rmBomSel).length + ' material(s) ticked';
+}
+function rmBomSuggestApply(){ const sku = (M.skus||[]).find(s => s.id === window.__rmBomSku); const ids = rmBomSuggest(sku); if (!ids.length){ say('rm-bom-msg','No material name matches this SKU’s brand, pack size and bottle type — tick them by hand.',false); return; } ids.forEach(id => { if (!(id in rmBomSel)) rmBomSel[id] = null; }); say('rm-bom-msg', ids.length + ' material(s) suggested from the names — check and Save.', true); rmBomRender(); }
+async function rmBomSave(){
+  const skuId = window.__rmBomSku; const items = Object.entries(rmBomSel).map(([id, q]) => ({ rm_item_id: id, qty: q != null && q > 0 ? q : null }));
+  if (Object.values(rmBomSel).some(q => q != null && !(q > 0))){ say('rm-bom-msg','Quantity per case must be above zero — or leave it blank.',false); return; }
+  const { error } = await db.schema('mfg').rpc('bom_set', { p_sku: skuId, p_items: items });
+  if (error){ say('rm-bom-msg','Could not save: ' + error.message, false); return; }
+  window.rmStoreView = 'sku'; await purchaseTab('store');
+  const sku = (M.skus||[]).find(s => s.id === skuId); const box = $('rm-bom-box'); if (box) box.innerHTML = `<div class="msg ok">Materials saved for ${esc(sku ? sku.sku_code : '')} — ${items.length} material(s).</div>`;
+}
+function rmSkuXlsx(){
+  const skus = window.__rmSkuList || [], calc = window.__rmSkuCalc || {}; if (!skus.length){ alert('Nothing to download.'); return; }
+  const bn = s => ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||'';
+  const sum = [['Cases possible — SKU-wise · as on ' + calFmt(new Date())], [], ['Brand','SKU','Bottles/case','Materials set','Cases possible now','Limiting material(s)']];
+  skus.forEach(s => { const c = calc[s.id]; sum.push([bn(s), s.sku_code, s.units_per_case, c.lines.length, c.lines.length ? c.cases : null, c.limiting.join(', ')]); });
+  const det = [['Brand','SKU','Material code','Material','Unit','Needed per case','At MMC (custody)','In company store','Cases possible','Limiting?','Shared by (SKUs)']];
+  skus.forEach(s => { const c = calc[s.id]; c.lines.forEach(l => det.push([bn(s), s.sku_code, l.item.code, l.item.name, l.item.unit, l.qty, l.mmc, l.store, l.cases, (l.cases != null && l.cases === c.cases) ? 'yes' : '', l.shared])); });
+  xlsxDownload('rm-store-by-sku-' + calFmt(new Date()), [{ name: 'Cases possible', rows: sum, widths: [22, 30, 12, 13, 18, 48] }, { name: 'Materials by SKU', rows: det, widths: [22, 30, 36, 44, 6, 14, 16, 16, 14, 10, 14] }]);
+}
+function rmSkuPrint(){
+  const skus = window.__rmSkuList || [], calc = window.__rmSkuCalc || {}; if (!skus.length){ alert('Nothing to print.'); return; }
+  const bn = s => ((M.brands||[]).find(x=>x.id===s.brand_id)||{}).name||''; const fmt = v => v == null ? '—' : Number(v).toLocaleString('en-IN');
+  let body = `<h1>AURUM SPIRITS INDIA LIMITED</h1><h2>Raw material by brand SKU — cases possible · as on ${calFmt(new Date())}</h2>
+    <table><thead><tr><th>Brand</th><th>SKU</th><th class="amount">Materials</th><th class="amount">Cases possible now</th><th>Limiting material(s)</th></tr></thead><tbody>
+    ${skus.map(s => { const c = calc[s.id]; return `<tr><td>${esc(bn(s))}</td><td><b>${esc(s.sku_code)}</b></td><td class="amount">${c.lines.length||'—'}</td><td class="amount"><b>${c.lines.length?fmt(c.cases):'—'}</b></td><td>${esc(c.limiting.join(', '))}</td></tr>`; }).join('')}
+    </tbody></table>`;
+  skus.filter(s => calc[s.id].lines.length).forEach(s => { const c = calc[s.id];
+    body += `<h3 style="margin-top:14px;">${esc(bn(s))} · ${esc(s.sku_code)} — cases possible: ${fmt(c.cases)}${c.limiting.length?' (limited by '+esc(c.limiting.join(', '))+')':''}</h3>
+      <table><thead><tr><th>Material</th><th>Unit</th><th class="amount">Needed per case</th><th class="amount">At MMC</th><th class="amount">In store</th><th class="amount">Cases possible</th></tr></thead><tbody>
+      ${c.lines.map(l => `<tr class="${l.cases!=null && l.cases===c.cases?'tot':''}"><td><b>${esc(l.item.code)}</b> ${esc(l.item.name||'')}</td><td>${esc(l.item.unit||'')}</td><td class="amount">${l.qty||'—'}</td><td class="amount">${fmt(l.mmc)}</td><td class="amount">${fmt(l.store)}</td><td class="amount"><b>${fmt(l.cases)}</b></td></tr>`).join('')}
+      </tbody></table>`; });
+  body += '<p style="font-size:11px;color:#555;margin-top:10px;">Cases possible = the smallest of (material at MMC ÷ quantity needed per case) across the SKU’s materials; the highlighted material is the one running short. Materials shared by several SKUs are counted in full for each.</p>';
+  printHtml('RM by SKU — ' + calFmt(new Date()), body);
 }
 // ---- Excel (.xlsx) download: SheetJS is fetched on first use; falls back to CSV if it cannot be loaded ----
 async function xlsxLib(){
