@@ -7412,7 +7412,7 @@ async function purchaseTab(t){
     const anyCaseWise = (st.data||[]).some(r => rmIsCaseWise(itemBy[r.rm_item_id]));
     const canMove = isDir() || canFinEdit() || canPurEdit() || canPurApprove();   // Purchases & RM Store editors too
     const anyMoved = (st.data||[]).some(r=>Number(r.moved_to_asset||0)>0);
-    window.__rmStoreRows = {}; (st.data||[]).forEach(r=>{ window.__rmStoreRows[r.rm_item_id] = r; });
+    window.__rmStoreRows = {}; (st.data||[]).forEach(r=>{ r.mmc_balance = Number((mmcBy[r.rm_item_id]||{}).balance||0); window.__rmStoreRows[r.rm_item_id] = r; });
     // Hide materials with nothing anywhere — they join the list the moment a receipt (or issue) touches them.
     const live = (st.data||[]).filter(r=>{const m=mmcBy[r.rm_item_id]||{};
       return Number(r.received)!==0 || Number(r.issued_to_mmc)!==0 || Number(r.store_balance)!==0 || Number(r.moved_to_asset||0)!==0 ||
@@ -7430,7 +7430,7 @@ async function purchaseTab(t){
                store: Number(r.store_balance||0), mmc: m.balance!=null ? Number(m.balance) : null, upc: pc.upc, upcAuto: pc.auto, cases: (cw && pc.upc) ? Math.floor(Number(m.balance||0) / pc.upc) : null, caseWise: cw }; });
     B.innerHTML = `
       <h4 class="sec">Raw material inventory</h4>
-      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the store into the <b>Accounting → Assets</b> register with <b>→ Asset</b>. <b>✏️ Edit</b> corrects a material’s code or name — every section (purchase orders, material requests, receipts, MMC custody, production reports, targets) shows the corrected name, as they all refer to the same material record. The <b>category box</b> on each row sorts the item — case-wise consumable, blend-wise consumable, or spare parts &amp; plant machinery — the same setting as MMC → Raw material; items under “not yet sorted” only need this to join their group.':''}</p>
+      <p style="font-size:12px;color:#555">Company store fills from purchase receipts and empties by issues to MMC. MMC custody fills from issues and empties as batches consume it. Materials with nothing anywhere are hidden until stock arrives.${canMove?' Items that are really company assets (a phone, a laptop, a machine…) can be moved out of the company store <b>or out of MMC custody</b> into the <b>Accounting → Assets</b> register with <b>→ Asset</b>. <b>✏️ Edit</b> corrects a material’s code or name — every section (purchase orders, material requests, receipts, MMC custody, production reports, targets) shows the corrected name, as they all refer to the same material record. The <b>category box</b> on each row sorts the item — case-wise consumable, blend-wise consumable, or spare parts &amp; plant machinery — the same setting as MMC → Raw material; items under “not yet sorted” only need this to join their group.':''}</p>
       ${viewChips}
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;">
         <button class="btn ghost sm" onclick="rmStoreXlsx()" title="Download this inventory as an Excel workbook (.xlsx)">⬇ Download Excel</button>
@@ -7445,7 +7445,7 @@ async function purchaseTab(t){
         `<td class="amount" style="font-weight:700;color:${Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance)}</td>` +
         `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td>` +
         (anyCaseWise ? `<td class="amount">${rmTentativeCell(itemBy[r.rm_item_id], m.balance, canMove)}</td>` : '') +
-        (canMove ? `<td><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button>${Number(r.store_balance)>0?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this material out of the store into the asset register">→ Asset</button>`:''}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
+        (canMove ? `<td><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button>${(Number(r.store_balance)>0 || Number(m.balance||0)>0)?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this item out of the company store or MMC custody into the asset register">→ Asset</button>`:`<span style="font-size:10px;color:#aaa;display:block;text-align:center;" title="Nothing in the store or at MMC to move${Number(r.moved_to_asset||0)>0?' — '+Number(r.moved_to_asset)+' already in the asset register':''}">${Number(r.moved_to_asset||0)>0?'in assets':'no stock'}</span>`}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
       </tbody></table></div>
       <p style="font-size:11.5px;color:#777;margin-top:6px;">Listed in this order: case-wise consumables, then blend-wise, then consumables not yet sorted, then spare parts &amp; plant machinery — A→Z within each group (the category is set under MMC → Raw material).</p>
       ${anyCaseWise ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">📦 <b>Tentative cases</b> = material at MMC (custody) ÷ units needed for one case, for case-wise consumables only (Raw material tab → Consumables → Case-wise). Units per case come from the pack size in the item’s code / name — <b>180 ml → 48</b>, <b>750 ml → 12</b>, <b>90 ml → 100</b>, a <b>box / carton → 1</b> — unless a figure is set on the item with ✏️ Edit (e.g. 1 carton per case). The figure is indicative: the smallest tentative figure across a line’s materials is what can actually be made.</p>' : ''}`;
@@ -8330,14 +8330,18 @@ async function rmAssetForm(itemId){
   ]);
   const unit = lc && lc.data ? Number(lc.data.landed_per_unit||0) : 0;
   window.__rmAssetUnit = unit;
-  const bal = Number(r.store_balance||0);
+  const storeBal = Number(r.store_balance||0), mmcBal = Number(r.mmc_balance||0);
+  const src = storeBal > 0 ? 'STORE' : 'MMC'; window.__rmAssetSrc = src; window.__rmAssetItem = itemId;
+  const bal = src === 'STORE' ? storeBal : mmcBal;
   const catOpts = AC_CATS.map(c=>`<option value="${c}" ${c==='OTHER'?'selected':''}>${c.charAt(0)+c.slice(1).toLowerCase()}</option>`).join('');
   const custOpts = '<option value="">—</option>' + (ppl.data||[]).map(p=>`<option value="${p.id}">${esc(p.full_name)}</option>`).join('');
   const astOpts = (ast.data||[]).map(a=>`<option value="${a.id}">${esc(a.asset_code)} — ${esc(a.name)}</option>`).join('');
   box.innerHTML = `<div class="card" style="margin:10px 0 14px;max-width:680px;border:1px solid #1a5fb4;">
     <h3 style="font-size:15px;">→ Move to asset register — ${esc(r.code)}</h3>
-    <p style="font-size:12px;color:#555;margin:2px 0 8px;">${esc(r.name||'')} · in the company store: <b>${bal} ${esc(r.unit||'')}</b>${unit?` · landed cost ₹ ${inr(unit)} per ${esc(r.unit||'unit')}`:''}</p>
-    <div class="row2c"><div><label>Quantity to move *</label><input type="number" id="ra-qty" min="0" step="any" value="${bal<=1?bal:''}" max="${bal}" oninput="rmAssetCalc()"></div>
+    <p style="font-size:12px;color:#555;margin:2px 0 8px;">${esc(r.name||'')} · in the company store: <b>${storeBal} ${esc(r.unit||'')}</b> · at MMC (custody): <b>${mmcBal} ${esc(r.unit||'')}</b>${unit?` · landed cost ₹ ${inr(unit)} per ${esc(r.unit||'unit')}`:''}</p>
+    <div class="row2c"><div><label>Move from *</label><select id="ra-src" onchange="rmAssetSrc()"><option value="STORE" ${src==='STORE'?'selected':''} ${storeBal>0?'':'disabled'}>Company store (${storeBal} ${esc(r.unit||'')})</option><option value="MMC" ${src==='MMC'?'selected':''} ${mmcBal>0?'':'disabled'}>MMC custody (${mmcBal} ${esc(r.unit||'')})</option></select></div>
+      <div><label>Quantity to move *</label><input type="number" id="ra-qty" min="0" step="any" value="${bal<=1?bal:''}" max="${bal}" oninput="rmAssetCalc()"></div></div>
+    <div class="row2c"><div id="ra-srcnote" style="font-size:11.5px;color:#777;padding-top:4px;">${src==='MMC' ? 'The item is at MMC — moving it to the asset register takes it out of MMC custody (production stock).' : 'Taken out of the company store.'}</div>
       <div><label>Book it as</label><select id="ra-mode" onchange="rmAssetMode()"><option value="NEW">A new asset</option>${astOpts?'<option value="LINK">An asset already in the register</option>':''}</select></div></div>
     <div id="ra-new">
       <label>Asset name *</label><input type="text" id="ra-name" value="${esc(r.name||r.code)}">
@@ -8359,6 +8363,14 @@ async function rmAssetForm(itemId){
   box.scrollIntoView({behavior:'smooth'});
 }
 function rmAssetMode(){ const link = $('ra-mode').value === 'LINK'; $('ra-new').classList.toggle('hidden', link); $('ra-link').classList.toggle('hidden', !link); }
+function rmAssetSrc(){
+  const sel = $('ra-src'); if (!sel) return; const src = sel.value; window.__rmAssetSrc = src;
+  const r = (window.__rmStoreRows||{})[window.__rmAssetItem] || {};
+  const bal = src === 'MMC' ? Number(r.mmc_balance||0) : Number(r.store_balance||0);
+  const q = $('ra-qty'); if (q){ q.max = bal; if (Number(q.value) > bal) q.value = bal; if (bal <= 1) q.value = bal; }
+  const note = $('ra-srcnote'); if (note) note.textContent = src === 'MMC' ? 'The item is at MMC — moving it to the asset register takes it out of MMC custody (production stock).' : 'Taken out of the company store.';
+  rmAssetCalc();
+}
 function rmAssetCalc(){
   const q = Number($('ra-qty') && $('ra-qty').value) || 0, u = Number(window.__rmAssetUnit||0);
   if (u && q && $('ra-val')){ $('ra-val').value = (Math.round(u*q*100)/100).toFixed(2);
@@ -8367,23 +8379,24 @@ function rmAssetCalc(){
 }
 async function rmAssetSave(itemId){
   const r = (window.__rmStoreRows||{})[itemId]; if (!r) return;
-  const qty = Number($('ra-qty').value), bal = Number(r.store_balance||0);
+  const src = ($('ra-src') && $('ra-src').value) || 'STORE';
+  const qty = Number($('ra-qty').value), bal = src === 'MMC' ? Number(r.mmc_balance||0) : Number(r.store_balance||0);
   if (!(qty > 0)){ say('ra-msg','Enter the quantity to move.', false); return; }
-  if (qty > bal){ say('ra-msg','Only ' + bal + ' ' + (r.unit||'') + ' is in the store.', false); return; }
+  if (qty > bal){ say('ra-msg','Only ' + bal + ' ' + (r.unit||'') + (src === 'MMC' ? ' is at MMC.' : ' is in the store.'), false); return; }
   const btn = document.querySelector('[onclick^="rmAssetSave"]'); if (btn) btn.disabled = true;
   const M = db.schema('mfg'); let res;
   if ($('ra-mode').value === 'LINK'){
-    res = await M.rpc('rm_link_to_asset', { p_item: itemId, p_qty: qty, p_asset: $('ra-asset').value, p_date: $('ra-date').value || null });
+    res = await M.rpc('rm_link_to_asset', { p_item: itemId, p_qty: qty, p_asset: $('ra-asset').value, p_date: $('ra-date').value || null, p_source: src });
   } else {
     const name = $('ra-name').value.trim(), val = Number($('ra-val').value);
     if (!name){ if (btn) btn.disabled = false; say('ra-msg','The asset needs a name.', false); return; }
     if (!(val >= 0) || $('ra-val').value === ''){ if (btn) btn.disabled = false; say('ra-msg','Enter the asset value.', false); return; }
     res = await M.rpc('rm_move_to_asset', { p_item: itemId, p_qty: qty, p_name: name, p_class: $('ra-class').value, p_category: $('ra-cat').value,
       p_value: val, p_identifier: $('ra-ident').value.trim() || null, p_location: $('ra-loc').value.trim() || null,
-      p_custodian: $('ra-cust').value || null, p_supplier: null, p_date: $('ra-date').value || null, p_remarks: $('ra-rem').value.trim() || null });
+      p_custodian: $('ra-cust').value || null, p_supplier: null, p_date: $('ra-date').value || null, p_remarks: $('ra-rem').value.trim() || null, p_source: src });
   }
   if (res.error){ if (btn) btn.disabled = false; say('ra-msg','Could not move: ' + res.error.message, false); return; }
-  alert('Done. ' + qty + ' ' + (r.unit||'') + ' of ' + r.code + ' left the store and is booked as asset ' + res.data + ' (Accounting → Assets).');
+  alert('Done. ' + qty + ' ' + (r.unit||'') + ' of ' + r.code + (src === 'MMC' ? ' left MMC custody' : ' left the store') + ' and is booked as asset ' + res.data + ' (Accounting → Assets).');
   purchaseTab('store');
 }
 async function poReceiveSave(id){
