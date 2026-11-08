@@ -7421,7 +7421,7 @@ async function purchaseTab(t){
     // Items that have gone entirely to the asset register (nothing left in the store or at MMC) are not material any more — they live in Accounting → Assets
     const inAssets = (st.data||[]).filter(r=>{const m=mmcBy[r.rm_item_id]||{}; return (Number(r.moved_to_asset||0) + Number(m.moved_to_asset||0)) > 0 && Number(r.store_balance||0) <= 0 && Number(m.balance||0) <= 0;});
     const inAssetIds = new Set(inAssets.map(r=>r.rm_item_id));
-    const live = (st.data||[]).filter(r=>{const m=mmcBy[r.rm_item_id]||{};
+    let live = (st.data||[]).filter(r=>{const m=mmcBy[r.rm_item_id]||{};
       if (inAssetIds.has(r.rm_item_id)) return false;
       return Number(r.received)!==0 || Number(r.issued_to_mmc)!==0 || Number(r.store_balance)!==0 || Number(r.moved_to_asset||0)!==0 ||
              Number(m.balance||0)!==0 || Number(m.consumed||0)!==0;});
@@ -7430,6 +7430,16 @@ async function purchaseTab(t){
     const RM_GROUP_TITLE = ['📦 Case-wise consumables', '🧴 Blend-wise consumables', 'Consumables not yet sorted (case-wise / blend-wise / spares / office / marketing / services — use the category box)', '🔧 Spare parts & plant machinery', '🗂 Office consumables (stationery, printing, IT accessories…)', '📣 Marketing consumables (pens, diaries, gifts, display material…)', '🧾 Services & expenses (not material — fees, charges, consultancy…)'];
     live.forEach(r => { r.__grp = rmGroupOf(itemBy[r.rm_item_id]); });
     live.sort((a,b) => a.__grp - b.__grp || String(a.code||'').localeCompare(String(b.code||'')));
+    // category tick boxes: All, or any mix of the groups — only the ticked groups are listed (download / print follow the same)
+    const grpCount = {}; live.forEach(r => grpCount[r.__grp] = (grpCount[r.__grp]||0) + 1);
+    const grpSel = window.rmStoreGrps instanceof Set && window.rmStoreGrps.size ? window.rmStoreGrps : null;
+    const allLive = live; const shown = grpSel ? live.filter(r => grpSel.has(r.__grp)) : live;
+    const RM_GROUP_SHORT = ['📦 Case-wise', '🧴 Blend-wise', '📂 Not yet sorted', '🔧 Spare parts & machinery', '🗂 Office consumables', '📣 Marketing consumables', '🧾 Services & expenses'];
+    const tick = (label, on, js, cnt) => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border:1px solid ${on?'#1c2455':'#ddd'};border-radius:16px;background:${on?'#eef0fa':'#fff'};cursor:pointer;margin:0;"><input type="checkbox" ${on?'checked':''} onchange="${js}" style="width:auto;margin:0;">${label}${cnt!=null?` <span style="color:#777;font-size:11px;">(${cnt})</span>`:''}</label>`;
+    const grpTicks = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px;"><span style="font-size:12px;color:#777;margin-right:2px;">Show category:</span>
+        ${tick('All', !grpSel, "window.rmStoreGrps=null;purchaseTab('store')", allLive.length)}
+        ${RM_GROUP_SHORT.map((l,g) => grpCount[g] ? tick(l, !!(grpSel && grpSel.has(g)), `rmStoreGrpToggle(${g}, this.checked)`, grpCount[g]) : '').join('')}</div>`;
+    live = shown;
     const nCols = 7 + (anyMoved?1:0) + (anyCaseWise?1:0) + (canMove?1:0);
     let lastGrp = -1;
     // rows kept for the Excel download / print of exactly what is shown
@@ -7443,8 +7453,9 @@ async function purchaseTab(t){
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;">
         <button class="btn ghost sm" onclick="rmStoreXlsx()" title="Download this inventory as an Excel workbook (.xlsx)">⬇ Download Excel</button>
         <button class="btn ghost sm" onclick="rmStorePrint()" title="Print this inventory">🖨 Print</button>
-        <span style="font-size:11.5px;color:#777">${live.length} material(s) · as on ${calFmt(new Date())}</span>
+        <span style="font-size:11.5px;color:#777">${live.length} material(s)${grpSel ? ' of ' + allLive.length + ' shown' : ''} · as on ${calFmt(new Date())}</span>
       </div>
+      ${grpTicks}
       <div id="rm-asset-box"></div><div id="rm-name-box"></div>
       <div class="table-scroll"><table id="rm-store-table"><colgroup><col style="width:${canMove?'31%':'36%'}"><col style="width:5%"><col style="width:9%"><col style="width:9%">${anyMoved?'<col style="width:8%">':''}<col style="width:9%"><col style="width:9%">${anyCaseWise?'<col style="width:10%">':''}${canMove?'<col style="width:9%">':''}</colgroup><thead><tr><th>Material</th><th>Unit</th><th class="amount">Purchased in</th><th class="amount">Issued to MMC</th>${anyMoved?'<th class="amount">Moved to assets</th>':''}<th class="amount"><b>Store balance</b></th><th class="amount">At MMC (custody)</th>${anyCaseWise?'<th class="amount" title="Case-wise consumables only: material at MMC ÷ units needed per case">Tentative cases <span style="font-weight:normal;font-size:9.5px;">(from MMC)</span></th>':''}${canMove?'<th></th>':''}</tr></thead><tbody>
       ${live.map(r=>{const m=mmcBy[r.rm_item_id]||{}; let head = ''; if (r.__grp !== lastGrp){ lastGrp = r.__grp; head = `<tr style="background:#f3eee0;"><td colspan="${nCols}" style="font-weight:700;font-size:12px;padding:6px 10px;">${RM_GROUP_TITLE[r.__grp]} <span style="font-weight:normal;color:#777">— ${live.filter(x=>x.__grp===r.__grp).length} item(s)</span></td></tr>`; } return head + `<tr><td><b>${esc(r.code)}</b> <span class="rm-name">${esc(r.name)}</span>${canMove ? '<div>' + rmStoreCatPick(itemBy[r.rm_item_id], r.rm_item_id) + '</div>' : ''}</td><td>${r.unit}</td>` +
@@ -7453,7 +7464,7 @@ async function purchaseTab(t){
         `<td class="amount" style="font-weight:700;color:${Number(r.store_balance)>0?'#1a7f37':'#777'}">${Number(r.store_balance)}</td>` +
         `<td class="amount">${m.balance!=null?Number(m.balance):'—'}</td>` +
         (anyCaseWise ? `<td class="amount">${rmTentativeCell(itemBy[r.rm_item_id], m.balance, canMove)}</td>` : '') +
-        (canMove ? `<td><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button>${r.__grp !== 2 ? '' : ((Number(r.store_balance)>0 || Number(m.balance||0)>0)?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this item out of the company store or MMC custody into the asset register">→ Asset</button>`:`<span style="font-size:10px;color:#aaa;display:block;text-align:center;" title="Nothing in the store or at MMC to move${Number(r.moved_to_asset||0)>0?' — '+Number(r.moved_to_asset)+' already in the asset register':''}">${Number(r.moved_to_asset||0)>0?'in assets':'no stock'}</span>`)}</td>` : '') + `</tr>`;}).join('') || '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>'}
+        (canMove ? `<td><button class="mini" onclick="rmNameEdit('${r.rm_item_id}')" title="Edit this material’s code / name / units per case — reflects in every section">✏️ Edit</button>${r.__grp !== 2 ? '' : ((Number(r.store_balance)>0 || Number(m.balance||0)>0)?`<button class="mini" onclick="rmAssetForm('${r.rm_item_id}')" title="Move this item out of the company store or MMC custody into the asset register">→ Asset</button>`:`<span style="font-size:10px;color:#aaa;display:block;text-align:center;" title="Nothing in the store or at MMC to move${Number(r.moved_to_asset||0)>0?' — '+Number(r.moved_to_asset)+' already in the asset register':''}">${Number(r.moved_to_asset||0)>0?'in assets':'no stock'}</span>`)}</td>` : '') + `</tr>`;}).join('') || (grpSel ? '<tr><td colspan="9" style="color:#777">No material in the ticked categories.</td></tr>' : '<tr><td colspan="9" style="color:#777">Nothing in stock yet — a material appears here the moment a purchase is received against a PO (Purchase orders → Receive…).</td></tr>')}
       </tbody></table></div>
       <p style="font-size:11.5px;color:#777;margin-top:6px;">Listed in this order: case-wise consumables, then blend-wise, then consumables not yet sorted, then spare parts &amp; plant machinery, office consumables, marketing consumables and services &amp; expenses — A→Z within each group (the category box on the row sets it; MMC → Raw material shows the same).</p>
       ${inAssets.length ? `<details style="margin-top:6px;font-size:11.5px;color:#777;"><summary style="cursor:pointer;">🏷 ${inAssets.length} item(s) moved entirely to the asset register are not listed here — they are in <b>Accounting → Assets</b></summary><div style="margin:6px 0 0 14px;">${inAssets.map(r=>`<div><b>${esc(r.code)}</b> ${esc(r.name||'')} — ${Number(r.moved_to_asset||0) + Number((mmcBy[r.rm_item_id]||{}).moved_to_asset||0)} ${esc(r.unit||'')} in assets</div>`).join('')}</div></details>` : ''}
@@ -8256,6 +8267,13 @@ function rmStorePrint(){
     </tbody></table>
     <p style="font-size:11px;color:#555;margin-top:10px;">Store balance = purchased in − issued to MMC − moved to assets. Tentative cases = material at MMC ÷ units per case, for case-wise consumables only (180 ml → 48, 750 ml → 12, 90 ml → 100 unless set on the item); the smallest figure across a line's materials is what can actually be made.</p>`;
   printHtml('RM store — ' + calFmt(new Date()), body);
+}
+// RM store: tick boxes for the category groups — ticking one shows only that group; ticking none means All
+function rmStoreGrpToggle(g, on){
+  const set = window.rmStoreGrps instanceof Set ? new Set(window.rmStoreGrps) : new Set();
+  if (on) set.add(g); else set.delete(g);
+  window.rmStoreGrps = set.size ? set : null;
+  purchaseTab('store');
 }
 // ---- RM store: sort an item into its category right here (same setting as MMC → Raw material → category chips) ----
 function rmStoreCatPick(i, itemId){
