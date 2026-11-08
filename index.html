@@ -4569,13 +4569,13 @@ async function mfgTab(which){
         const monthL = rows.filter(b => String(b.blend_date).slice(0,7) === mon).reduce((x,b)=>x+Number(b.litres||0),0);
         const tbx = balBy[t]; const now = tbx ? Number(tbx.balance) : rows.reduce((x,b)=>x+Number(b.litres||0),0);
         const blended = tbx ? Number(tbx.blended) : rows.reduce((x,b)=>x+Number(b.litres||0),0); const drawn = tbx ? Number(tbx.drawn) : 0;
-        return `<div class="stat" style="cursor:pointer;min-width:210px;" title="Open the blend-wise production report" onclick="window.prMode='blend';mfgTab('report')">
+        return `<div class="stat" style="cursor:pointer;flex:1 1 230px;min-width:0;overflow-wrap:anywhere;" title="Open the blend-wise production report" onclick="window.prMode='blend';mfgTab('report')">
           <div class="n" style="font-size:20px;${now < 0 ? 'color:#b3261e;' : ''}">${rows.length ? now + ' L' : '—'}</div>
           <div class="l"><b>${tankLabel(t)}</b>${last ? ' · ' + esc(last.blend_name) : ' · empty'}</div>
-          <div style="font-size:10.5px;color:#777;margin-top:2px;">${last ? 'in tank now · last blend ' + Number(last.litres) + ' L on ' + last.blend_date + ' · ' + esc(last.blend_no||'') : 'no blend recorded yet'}${rows.length ? '<br>' + blended + ' L blended in − ' + drawn + ' L drawn for bottling · ' + monthL + ' L blended this month' : ''}</div></div>`;
+          <div style="font-size:10.5px;color:#777;margin-top:4px;line-height:1.35;">${last ? 'in tank now<br>last blend ' + Number(last.litres) + ' L on ' + last.blend_date + ' · ' + esc(last.blend_no||'') : 'no blend recorded yet'}${rows.length ? '<br>' + blended + ' L blended in − ' + drawn + ' L drawn for bottling<br>' + monthL + ' L blended this month' : ''}</div></div>`;
       }).join('');
     } catch(e){ tankTiles = ''; }
-    let html = `<div class="statgrid"><div class="stat"><div class="n">${total}</div><div class="l">Total FG cases at MMC</div></div>${tankTiles}</div>
+    let html = `<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin-bottom:14px;"><div class="stat" style="flex:0 0 170px;"><div class="n">${total}</div><div class="l">Total FG cases at MMC</div></div>${tankTiles}</div>
       <p style="font-size:11px;color:#777;margin:-4px 0 10px;">Tanks show what is in each tank now: all blends prepared (blend-wise production report) minus the blend drawn for bottling (case-wise production report), with the latest blend's name; click a tank to open the report.</p>`;
     html += '<div class="table-scroll"><table><thead><tr><th>SKU</th><th class="amount">Cases in stock</th></tr></thead><tbody>';
     for (const r of (data||[]).filter(x=>Number(x.cases)!==0))
