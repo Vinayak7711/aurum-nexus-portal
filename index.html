@@ -11028,14 +11028,17 @@ async function vlTdsDel(id, no){
   if (error){ alert('Could not delete: ' + error.message); return; }
   acctTab('ledger');
 }
-// PO history → ✏️ Edit: correct a past purchase order — party, each line's material, quantity, rate and tax.
-// A line already dispatched or received keeps its material (the receipts and stock are booked against it); its quantity cannot go below what was received.
+// PO history → ✏️ Edit: correct a past purchase order — party, date, and its material lines: add a material, remove one,
+// change which material a line is for, rename the material itself, and correct quantity, rate and tax.
+// A line already dispatched or received: its quantity cannot go below what was received, and it cannot be removed
+// (the receipts and stock are booked against it); the Director can still change its material — the receipts and
+// dispatches of that order move to the new material with it, so the stock follows.
 async function poHistEdit(poId){
   if (!(isDir() || canPurEdit())){ alert('Only a Director or a purchase editor can edit a purchase order.'); return; }
   const G = db.schema('mfg');
   const [{ data: po, error: e0 }, { data: lines }, { data: vens }] = await Promise.all([
     G.from('purchase_orders').select('id, po_no, vendor_id, order_date, status, remarks').eq('id', poId).single(),
-    G.from('po_lines').select('id, qty, rm_item_id, item:rm_item_id(code,name,unit)').eq('po_id', poId),
+    G.from('po_lines').select('id, qty, rm_item_id').eq('po_id', poId),
     db.schema('sales').from('vendors').select('id, code, name').order('name') ]);
   if (e0 || !po){ alert('Could not load the order: ' + (e0 ? e0.message : 'not found')); return; }
   const ids = (lines||[]).map(l=>l.id);
@@ -11043,60 +11046,110 @@ async function poHistEdit(poId){
     ids.length ? G.from('po_values').select('*').in('line_id', ids) : { data: [] },
     G.from('rm_receipts').select('rm_item_id, qty').eq('po_id', poId),
     G.from('v_po_line_status').select('rm_item_id, dispatched_qty').eq('po_id', poId) ]);
-  if (!rmItems.length){ try { const { data: ri } = await G.from('rm_items').select('*').order('code'); rmItems = ri || []; } catch(e){} }
+  try { const { data: ri } = await G.from('rm_items').select('*').order('code'); if (ri && ri.length) rmItems = ri; } catch(e){}
   const vBy = {}; (vals||[]).forEach(v=>vBy[v.line_id]=v);
   const recBy = {}; (recd||[]).forEach(r => recBy[r.rm_item_id] = (recBy[r.rm_item_id]||0) + Number(r.qty||0));
   const dspBy = {}; (lst||[]).forEach(r => dspBy[r.rm_item_id] = Number(r.dispatched_qty||0));
-  window.__phe = { po, lines: lines||[], vBy, recBy, dspBy };
-  const itemOpts = cur => rmItems.filter(i => i.is_active !== false || i.id === cur).map(i => `<option value="${i.id}" ${i.id===cur?'selected':''}>${esc(i.code)} — ${esc(i.name||'')}</option>`).join('');
+  // working copy of the lines: existing ones keep their id; new ones get a temporary key; removed ones are remembered
+  const work = (lines||[]).map(l => { const v = vBy[l.id] || {}; return { key: l.id, id: l.id, item: l.rm_item_id, orig: l.rm_item_id, q: Number(l.qty), r: Number(v.rate_per_unit||0), t: Number(v.tax_rate||0), v, got: recBy[l.rm_item_id]||0, dsp: dspBy[l.rm_item_id]||0 }; });
+  window.__phe = { po, work, removed: [], vens: vens||[], seq: 0 };
   apprModal('Edit purchase order ' + (po.po_no||''), `
-    <p style="font-size:12px;color:#777;margin:0 0 8px;">Correct the party, the material, quantity, rate and tax of each line — the order value, the vendor's bill and outstanding follow. A line already dispatched or received keeps its material; its quantity cannot go below what was received.</p>
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">Correct the party and date; add or remove materials; change a line's material (✏️ rename changes the material's own name everywhere it is used); correct quantity, rate and tax. The order value, the vendor's bill and outstanding follow.${isDir() ? ' On a line already received or dispatched, changing the material moves that order’s receipts and dispatches — and the stock — to the new material.' : ' A line already received or dispatched keeps its material.'}</p>
     <div class="row2c"><div><label>Party / vendor</label><select id="phe-vendor">${(vens||[]).map(v=>`<option value="${v.id}" ${v.id===po.vendor_id?'selected':''}>${esc(v.name)} (${esc(v.code)})</option>`).join('')}</select></div>
       <div><label>Order date</label><input type="date" id="phe-date" value="${po.order_date||''}"></div></div>
-    <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Tax %</th><th class="amount">Total ₹</th></tr></thead><tbody>
-    ${(lines||[]).map(l=>{ const v = vBy[l.id] || {}; const got = recBy[l.rm_item_id]||0, dsp = dspBy[l.rm_item_id]||0; const locked = got > 0 || dsp > 0;
-      return `<tr><td style="font-size:12px;min-width:220px;">${locked ? `<b>${esc(l.item?.code||'')}</b> ${esc(l.item?.name||'')}<br><span style="font-size:10.5px;color:#b26a00;">${got>0?'received '+got:'dispatched '+dsp} — material fixed</span>` : `<select id="phe-i-${l.id}" style="width:100%;max-width:100%;">${itemOpts(l.rm_item_id)}</select>`}</td>
-      <td><input type="number" id="phe-q-${l.id}" step="any" min="${got||0}" value="${Number(l.qty)}" style="width:90px;padding:5px;" oninput="poHistEditCalc()"></td>
-      <td><input type="number" id="phe-r-${l.id}" step="any" value="${Number(v.rate_per_unit||0)}" style="width:90px;padding:5px;" oninput="poHistEditCalc()"></td>
-      <td><input type="number" id="phe-t-${l.id}" step="any" value="${Number(v.tax_rate||0)}" style="width:60px;padding:5px;" oninput="poHistEditCalc()" ${v.margin_per_unit?'title="Margin scheme — tax on the margin only"':''}></td>
-      <td class="amount" id="phe-tot-${l.id}"></td></tr>`; }).join('') || '<tr><td colspan="5" style="color:#777">This order has no lines.</td></tr>'}
-    <tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Order total (incl. tax)</td><td class="amount" id="phe-grand"></td></tr></tbody></table></div>
+    <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Tax %</th><th class="amount">Total ₹</th><th></th></tr></thead><tbody id="phe-lines"></tbody></table></div>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><button class="mini" onclick="poHistEditAdd()">+ Add material</button><span style="font-size:11.5px;color:#777;">Removing a line takes it off the order; a line already received or dispatched cannot be removed — correct its quantity instead.</span></div>
     <button class="btn gold sm" style="margin-top:10px;" onclick="poHistEditSave()">Save changes</button><div id="phe-msg" style="font-size:12px;margin-top:6px;"></div>`);
-  const box = document.querySelector('#appr-modal > div'); if (box) box.style.maxWidth = '820px';
+  const box = document.querySelector('#appr-modal > div'); if (box) box.style.maxWidth = '900px';
+  poHistEditRender();
+}
+function poHistEditItemOpts(cur){ return rmItems.filter(i => i.is_active !== false || i.id === cur).map(i => `<option value="${i.id}" ${i.id===cur?'selected':''}>${esc(i.code)} — ${esc(i.name||'')}</option>`).join(''); }
+function poHistEditRender(){
+  const B = window.__phe, tb = $('phe-lines'); if (!tb) return;
+  tb.innerHTML = B.work.map(w => { const moved = w.got > 0 || w.dsp > 0; const canSwap = !moved || isDir(); const it = rmItems.find(i=>i.id===w.item) || {};
+    return `<tr><td style="font-size:12px;min-width:240px;">${canSwap ? `<select id="phe-i-${w.key}" style="width:100%;max-width:100%;" onchange="poHistEditPick('${w.key}')">${poHistEditItemOpts(w.item)}</select>` : `<b>${esc(it.code||'')}</b> ${esc(it.name||'')}`}
+      <div style="font-size:10.5px;margin-top:3px;">${moved ? `<span style="color:#b26a00;">${w.got>0?'received '+w.got:'dispatched '+w.dsp}${canSwap && w.item!==w.orig ? ' — receipts will move to the new material' : (canSwap ? '' : ' — material fixed')}</span> · ` : ''}<a href="#" onclick="poHistRename('${w.key}');return false;" title="Change this material's own name — reflects everywhere it is used">✏️ rename</a>${it.unit?' · <span style="color:#777">'+esc(it.unit)+'</span>':''}</div></td>
+      <td><input type="number" id="phe-q-${w.key}" step="any" min="${w.got||0}" value="${w.q}" style="width:90px;padding:5px;" oninput="poHistEditCalc()"></td>
+      <td><input type="number" id="phe-r-${w.key}" step="any" value="${w.r}" style="width:90px;padding:5px;" oninput="poHistEditCalc()"></td>
+      <td><input type="number" id="phe-t-${w.key}" step="any" value="${w.t}" style="width:60px;padding:5px;" oninput="poHistEditCalc()" ${w.v.margin_per_unit?'title="Margin scheme — tax on the margin only"':''}></td>
+      <td class="amount" id="phe-tot-${w.key}"></td>
+      <td>${moved ? '' : `<button class="mini" onclick="poHistEditRemove('${w.key}')" title="Remove this material from the order">🗑</button>`}</td></tr>`; }).join('') || '<tr><td colspan="6" style="color:#777">No materials — add one below.</td></tr>';
+  tb.insertAdjacentHTML('beforeend', `<tr style="font-weight:700;background:#faf6ea;"><td colspan="4">Order total (incl. tax)</td><td class="amount" id="phe-grand"></td><td></td></tr>`);
   poHistEditCalc();
 }
-function poHistEditLine(l){
-  const v = (window.__phe.vBy||{})[l.id] || {};
-  const q = Number($('phe-q-'+l.id).value)||0, r = Number($('phe-r-'+l.id).value)||0, t = Number($('phe-t-'+l.id).value)||0;
-  const amount = Math.round(q * r * 100) / 100, taxable = v.margin_per_unit ? Number(v.margin_per_unit) * q : amount;
-  const sel = $('phe-i-'+l.id); const item = sel ? sel.value : l.rm_item_id;
+function poHistEditLine(w){
+  const q = Number($('phe-q-'+w.key).value)||0, r = Number($('phe-r-'+w.key).value)||0, t = Number($('phe-t-'+w.key).value)||0;
+  const amount = Math.round(q * r * 100) / 100, taxable = w.v.margin_per_unit ? Number(w.v.margin_per_unit) * q : amount;
+  const sel = $('phe-i-'+w.key); const item = sel ? sel.value : w.item;
   return { q, r, t, amount, tax: Math.round(taxable * t) / 100, item };
 }
+function poHistEditSync(){ (window.__phe.work||[]).forEach(w => { const x = poHistEditLine(w); w.q = x.q; w.r = x.r; w.t = x.t; w.item = x.item; }); }
 function poHistEditCalc(){
-  let g = 0; (window.__phe.lines||[]).forEach(l=>{ const x = poHistEditLine(l); g += x.amount + x.tax; $('phe-tot-'+l.id).textContent = inr(x.amount + x.tax); });
-  $('phe-grand').textContent = '₹ ' + inr(g);
+  let g = 0; (window.__phe.work||[]).forEach(w => { const x = poHistEditLine(w); g += x.amount + x.tax; const c = $('phe-tot-'+w.key); if (c) c.textContent = inr(x.amount + x.tax); });
+  const gd = $('phe-grand'); if (gd) gd.textContent = '₹ ' + inr(g);
+}
+function poHistEditPick(key){ poHistEditSync(); poHistEditRender(); }
+function poHistEditAdd(){
+  poHistEditSync(); const B = window.__phe; B.seq++;
+  const used = new Set(B.work.map(w=>w.item)); const first = rmItems.find(i => i.is_active !== false && !used.has(i.id)) || rmItems[0];
+  if (!first){ say('phe-msg','No materials in the list — add the material under RM store first.',false); return; }
+  B.work.push({ key: 'new' + B.seq, id: null, item: first.id, orig: null, q: 1, r: 0, t: 18, v: {}, got: 0, dsp: 0 });
+  poHistEditRender();
+}
+function poHistEditRemove(key){
+  poHistEditSync(); const B = window.__phe; const w = B.work.find(x=>x.key===key); if (!w) return;
+  if (w.got > 0 || w.dsp > 0){ say('phe-msg','That line has already been received or dispatched — correct its quantity instead.',false); return; }
+  if (w.id) B.removed.push(w.id); B.work = B.work.filter(x=>x.key!==key); poHistEditRender();
+}
+async function poHistRename(key){
+  poHistEditSync(); const w = window.__phe.work.find(x=>x.key===key); if (!w) return;
+  const it = rmItems.find(i=>i.id===w.item); if (!it) return;
+  const name = prompt('New name for material ' + it.code + '\n(the code stays ' + it.code + '; the new name shows everywhere this material is used):', it.name || '');
+  if (name == null) return; const nm = name.trim(); if (!nm){ alert('Name cannot be empty.'); return; }
+  const { error } = await db.schema('mfg').rpc('rm_item_edit', { p_item: it.id, p_code: it.code, p_name: nm });
+  if (error){ alert('Could not rename: ' + error.message); return; }
+  try { const { data: ri } = await db.schema('mfg').from('rm_items').select('*').order('code'); if (ri && ri.length) rmItems = ri; } catch(e){}
+  poHistEditRender(); say('phe-msg', 'Material renamed to “' + nm + '”.', true);
 }
 async function poHistEditSave(){
-  const B = window.__phe, G = db.schema('mfg');
+  poHistEditSync(); const B = window.__phe, G = db.schema('mfg');
   const vendor = $('phe-vendor').value, date = $('phe-date').value;
   if (!vendor){ say('phe-msg','Choose the party.',false); return; }
   if (!date){ say('phe-msg','Enter the order date.',false); return; }
+  if (!B.work.length){ say('phe-msg','An order needs at least one material line.',false); return; }
   const seen = {};
-  for (const l of B.lines){
-    const x = poHistEditLine(l); const got = B.recBy[l.rm_item_id]||0;
-    if (!(x.q > 0) || x.r < 0 || x.t < 0){ say('phe-msg','Quantity must be above zero; rate and tax cannot be negative.',false); return; }
-    if (x.q < got){ say('phe-msg','Quantity cannot be below the ' + got + ' already received on that line.',false); return; }
-    if (seen[x.item]){ say('phe-msg','The same material is on two lines — merge them into one.',false); return; } seen[x.item] = 1;
+  for (const w of B.work){
+    if (!(w.q > 0) || w.r < 0 || w.t < 0){ say('phe-msg','Quantity must be above zero; rate and tax cannot be negative.',false); return; }
+    if (w.q < w.got){ say('phe-msg','Quantity cannot be below the ' + w.got + ' already received on that line.',false); return; }
+    if (seen[w.item]){ say('phe-msg','The same material is on two lines — merge them into one.',false); return; } seen[w.item] = 1;
+  }
+  const moving = B.work.filter(w => w.id && w.item !== w.orig && (w.got > 0 || w.dsp > 0));
+  if (moving.length){
+    if (!isDir()){ say('phe-msg','Only a Director can change the material of a line already received or dispatched.',false); return; }
+    const txt = moving.map(w => { const a = rmItems.find(i=>i.id===w.orig)||{}, b = rmItems.find(i=>i.id===w.item)||{}; return '• ' + (a.code||'?') + ' → ' + (b.code||'?') + (w.got>0 ? ' (received ' + w.got + ')' : '') ; }).join('\n');
+    if (!confirm('Change the material on a line that was already received / dispatched?\n\n' + txt + '\n\nThe receipts and dispatches of this order move to the new material, so the stock moves with them. Continue?')) return;
   }
   const { error: e0 } = await G.from('purchase_orders').update({ vendor_id: vendor, order_date: date }).eq('id', B.po.id);
   if (e0){ say('phe-msg','Could not save: '+e0.message,false); return; }
-  for (const l of B.lines){
-    const x = poHistEditLine(l), v = B.vBy[l.id] || {};
-    const { error: e1 } = await G.from('po_lines').update({ qty: x.q, rm_item_id: x.item }).eq('id', l.id);
-    if (e1){ say('phe-msg','Could not save: '+e1.message,false); return; }
-    const upd = { rate_per_unit: x.r, amount: x.amount, tax_rate: x.t, tax_amount: x.tax, tax_type: x.t > 0 ? (v.tax_type && v.tax_type !== 'NONE' ? v.tax_type : 'GST') : (v.tax_type || 'NONE') };
-    if (v.igst_rate) upd.igst_rate = x.t; else if (v.cgst_rate || v.sgst_rate){ upd.cgst_rate = x.t/2; upd.sgst_rate = x.t/2; }
-    const { error: e2 } = v.line_id ? await G.from('po_values').update(upd).eq('line_id', l.id) : await G.from('po_values').insert(Object.assign({ line_id: l.id }, upd));
+  if (B.removed.length){ const { error: eD } = await G.from('po_lines').delete().in('id', B.removed); if (eD){ say('phe-msg','Could not remove a line: '+eD.message,false); return; } }
+  for (const w of B.work){
+    const amount = Math.round(w.q * w.r * 100) / 100, taxable = w.v.margin_per_unit ? Number(w.v.margin_per_unit) * w.q : amount, tax = Math.round(taxable * w.t) / 100;
+    let lineId = w.id;
+    if (!lineId){ const { data: ins, error: eI } = await G.from('po_lines').insert({ po_id: B.po.id, rm_item_id: w.item, qty: w.q }).select('id').single(); if (eI){ say('phe-msg','Could not add a line: '+eI.message,false); return; } lineId = ins.id; }
+    else {
+      const { error: e1 } = await G.from('po_lines').update({ qty: w.q, rm_item_id: w.item }).eq('id', lineId);
+      if (e1){ say('phe-msg','Could not save: '+e1.message,false); return; }
+      if (w.item !== w.orig && (w.got > 0 || w.dsp > 0)){
+        const { error: eR } = await G.from('rm_receipts').update({ rm_item_id: w.item }).eq('po_id', B.po.id).eq('rm_item_id', w.orig);
+        if (eR){ say('phe-msg','Line saved, but the receipts could not be moved: '+eR.message,false); return; }
+        const { error: eP } = await G.from('po_dispatches').update({ rm_item_id: w.item }).eq('po_id', B.po.id).eq('rm_item_id', w.orig);
+        if (eP){ say('phe-msg','Line saved, but the dispatches could not be moved: '+eP.message,false); return; }
+      }
+    }
+    const v = w.v || {};
+    const upd = { rate_per_unit: w.r, amount, tax_rate: w.t, tax_amount: tax, tax_type: w.t > 0 ? (v.tax_type && v.tax_type !== 'NONE' ? v.tax_type : 'GST') : (v.tax_type || 'NONE') };
+    if (v.igst_rate) upd.igst_rate = w.t; else if (v.cgst_rate || v.sgst_rate){ upd.cgst_rate = w.t/2; upd.sgst_rate = w.t/2; }
+    const { error: e2 } = v.line_id ? await G.from('po_values').update(upd).eq('line_id', lineId) : await G.from('po_values').insert(Object.assign({ line_id: lineId }, upd));
     if (e2){ say('phe-msg','Could not save: '+e2.message,false); return; }
   }
   apprModalClose(); try { await poHistRun(); } catch(e){}
