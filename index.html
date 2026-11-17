@@ -11058,12 +11058,36 @@ async function poHistEdit(poId){
     <div class="row2c"><div><label>Party / vendor</label><select id="phe-vendor">${(vens||[]).map(v=>`<option value="${v.id}" ${v.id===po.vendor_id?'selected':''}>${esc(v.name)} (${esc(v.code)})</option>`).join('')}</select></div>
       <div><label>Order date</label><input type="date" id="phe-date" value="${po.order_date||''}"></div></div>
     <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Tax %</th><th class="amount">Total ₹</th><th></th></tr></thead><tbody id="phe-lines"></tbody></table></div>
-    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><button class="mini" onclick="poHistEditAdd()">+ Add material</button><span style="font-size:11.5px;color:#777;">Removing a line takes it off the order; a line already received or dispatched cannot be removed — correct its quantity instead.</span></div>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><button class="mini" onclick="poHistEditAdd()" title="Add a line for a material already in the list — then pick it from the dropdown">+ Add material from the list</button><button class="mini" style="font-weight:700;color:#0b57d0;" onclick="poHistEditAddNew()" title="Create a material that is not in the list yet (name, unit, code, category) and add it to this order">➕ New material (not in the list)</button><span style="font-size:11.5px;color:#777;">Removing a line takes it off the order; a line already received or dispatched cannot be removed — correct its quantity instead.</span></div>
     <button class="btn gold sm" style="margin-top:10px;" onclick="poHistEditSave()">Save changes</button><div id="phe-msg" style="font-size:12px;margin-top:6px;"></div>`);
   const box = document.querySelector('#appr-modal > div'); if (box) box.style.maxWidth = '900px';
   poHistEditRender();
 }
-function poHistEditItemOpts(cur){ return rmItems.filter(i => i.is_active !== false || i.id === cur).map(i => `<option value="${i.id}" ${i.id===cur?'selected':''}>${esc(i.code)} — ${esc(i.name||'')}</option>`).join(''); }
+function poHistEditItemOpts(cur){ return rmItems.filter(i => i.is_active !== false || i.id === cur).map(i => `<option value="${i.id}" ${i.id===cur?'selected':''}>${esc(i.code)} — ${esc(i.name||'')}</option>`).join('') + '<option value="__new">➕ New material — not in the list yet…</option>'; }
+// Create a brand-new material (name, unit, code, category) and return its id — used from the PO editor's "New material" button and the dropdown's last option.
+async function poHistNewMaterial(){
+  const name = (prompt('Name of the new material:')||'').trim(); if (!name) return null;
+  let unit = (prompt('Unit — type L (litres), KG (kilograms) or NOS (numbers/pieces):','NOS')||'').trim().toUpperCase();
+  if (!['L','KG','NOS'].includes(unit)){ alert('Unit must be L, KG or NOS.'); return null; }
+  const suggested = name.replace(/[^A-Za-z0-9]/g,'').slice(0,6).toUpperCase() || 'ITEM';
+  const code = (prompt('Short unique code for it:', suggested)||'').trim().toUpperCase(); if (!code) return null;
+  const catAns = (prompt('Category — C production consumable, S spare part / plant machinery, O office consumable, M marketing consumable, V service / expense:', 'C')||'').trim().toUpperCase();
+  const cat = catAns.startsWith('S') ? 'SPARES' : catAns.startsWith('V') ? 'SERVICES' : catAns.startsWith('O') ? 'OFFICE' : catAns.startsWith('M') ? 'MARKETING' : 'CONSUMABLE';
+  const { data: newId, error } = await db.schema('mfg').rpc('add_rm_item', { p_code: code, p_name: name, p_unit: unit });
+  if (error){ alert('Could not add material: ' + error.message); return null; }
+  let sub = null;
+  if (cat === 'CONSUMABLE'){ const sa = (prompt('Consumed how? C for case-wise (bottles, caps, labels, cartons…) or B for blend-wise (spirit, flavour, water, chemicals…). Leave blank to sort it later:', 'C')||'').trim().toUpperCase(); sub = sa.startsWith('B') ? 'BLEND' : (sa.startsWith('C') ? 'CASE' : null); }
+  if (newId && (cat !== 'CONSUMABLE' || sub)){ const { error: ce } = await db.schema('mfg').rpc('set_rm_category', { p_item: newId, p_cat: cat, p_sub: sub }); if (ce) alert('Material added, but its category could not be set: ' + ce.message); }
+  try { const { data: ri } = await db.schema('mfg').from('rm_items').select('*').order('code'); if (ri && ri.length) rmItems = ri; } catch(e){}
+  return newId || null;
+}
+async function poHistEditAddNew(){
+  poHistEditSync(); const B = window.__phe;
+  const id = await poHistNewMaterial(); if (!id) return;
+  B.seq++; B.work.push({ key: 'new' + B.seq, id: null, item: id, orig: null, q: 1, r: 0, t: 18, v: {}, got: 0, dsp: 0 });
+  poHistEditRender(); const it = rmItems.find(i=>i.id===id) || {}; say('phe-msg', 'New material ' + (it.code||'') + ' added to the order — enter its quantity and rate, then Save changes.', true);
+  const q = $('phe-q-new' + B.seq); if (q) q.focus();
+}
 function poHistEditRender(){
   const B = window.__phe, tb = $('phe-lines'); if (!tb) return;
   tb.innerHTML = B.work.map(w => { const moved = w.got > 0 || w.dsp > 0; const canSwap = !moved || isDir(); const it = rmItems.find(i=>i.id===w.item) || {};
@@ -11080,7 +11104,7 @@ function poHistEditRender(){
 function poHistEditLine(w){
   const q = Number($('phe-q-'+w.key).value)||0, r = Number($('phe-r-'+w.key).value)||0, t = Number($('phe-t-'+w.key).value)||0;
   const amount = Math.round(q * r * 100) / 100, taxable = w.v.margin_per_unit ? Number(w.v.margin_per_unit) * q : amount;
-  const sel = $('phe-i-'+w.key); const item = sel ? sel.value : w.item;
+  const sel = $('phe-i-'+w.key); const item = sel && sel.value && sel.value !== '__new' ? sel.value : w.item;
   return { q, r, t, amount, tax: Math.round(taxable * t) / 100, item };
 }
 function poHistEditSync(){ (window.__phe.work||[]).forEach(w => { const x = poHistEditLine(w); w.q = x.q; w.r = x.r; w.t = x.t; w.item = x.item; }); }
@@ -11088,7 +11112,11 @@ function poHistEditCalc(){
   let g = 0; (window.__phe.work||[]).forEach(w => { const x = poHistEditLine(w); g += x.amount + x.tax; const c = $('phe-tot-'+w.key); if (c) c.textContent = inr(x.amount + x.tax); });
   const gd = $('phe-grand'); if (gd) gd.textContent = '₹ ' + inr(g);
 }
-function poHistEditPick(key){ poHistEditSync(); poHistEditRender(); }
+async function poHistEditPick(key){
+  const sel = $('phe-i-'+key);
+  if (sel && sel.value === '__new'){ const w = window.__phe.work.find(x=>x.key===key); sel.value = w ? w.item : ''; poHistEditSync();
+    const id = await poHistNewMaterial(); if (id && w){ w.item = id; } poHistEditRender(); return; }
+  poHistEditSync(); poHistEditRender(); }
 function poHistEditAdd(){
   poHistEditSync(); const B = window.__phe; B.seq++;
   const used = new Set(B.work.map(w=>w.item)); const first = rmItems.find(i => i.is_active !== false && !used.has(i.id)) || rmItems[0];
