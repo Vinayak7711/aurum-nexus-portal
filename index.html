@@ -11054,7 +11054,7 @@ async function poHistEdit(poId){
   const work = (lines||[]).map(l => { const v = vBy[l.id] || {}; return { key: l.id, id: l.id, item: l.rm_item_id, orig: l.rm_item_id, q: Number(l.qty), r: Number(v.rate_per_unit||0), t: Number(v.tax_rate||0), v, got: recBy[l.rm_item_id]||0, dsp: dspBy[l.rm_item_id]||0 }; });
   window.__phe = { po, work, removed: [], vens: vens||[], seq: 0 };
   apprModal('Edit purchase order ' + (po.po_no||''), `
-    <p style="font-size:12px;color:#777;margin:0 0 8px;">Correct the party and date; add or remove materials; change a line's material (✏️ rename changes the material's own name everywhere it is used); correct quantity, rate and tax. The order value, the vendor's bill and outstanding follow.${isDir() ? ' On a line already received or dispatched, changing the material moves that order’s receipts and dispatches — and the stock — to the new material.' : ' A line already received or dispatched keeps its material.'}</p>
+    <p style="font-size:12px;color:#777;margin:0 0 8px;">Correct the party and date; add or remove materials; change a line's material (✏️ rename changes the material's own name everywhere it is used); correct quantity, rate and tax. The order value, the vendor's bill and outstanding follow.${isDir() ? ' On a line already received or dispatched, changing the material or the quantity also corrects that order’s receipts and dispatches — so the stock at MMC / the store, the vendor’s bill and the PO history all follow.' : ' A line already received or dispatched keeps its material and cannot go below what was received.'}</p>
     <div class="row2c"><div><label>Party / vendor</label><select id="phe-vendor">${(vens||[]).map(v=>`<option value="${v.id}" ${v.id===po.vendor_id?'selected':''}>${esc(v.name)} (${esc(v.code)})</option>`).join('')}</select></div>
       <div><label>Order date</label><input type="date" id="phe-date" value="${po.order_date||''}"></div></div>
     <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Material</th><th class="amount">Qty</th><th class="amount">Rate ₹</th><th class="amount">Tax %</th><th class="amount">Total ₹</th><th></th></tr></thead><tbody id="phe-lines"></tbody></table></div>
@@ -11093,7 +11093,7 @@ function poHistEditRender(){
   tb.innerHTML = B.work.map(w => { const moved = w.got > 0 || w.dsp > 0; const canSwap = !moved || isDir(); const it = rmItems.find(i=>i.id===w.item) || {};
     return `<tr><td style="font-size:12px;min-width:240px;">${canSwap ? `<select id="phe-i-${w.key}" style="width:100%;max-width:100%;" onchange="poHistEditPick('${w.key}')">${poHistEditItemOpts(w.item)}</select>` : `<b>${esc(it.code||'')}</b> ${esc(it.name||'')}`}
       <div style="font-size:10.5px;margin-top:3px;">${moved ? `<span style="color:#b26a00;">${w.got>0?'received '+w.got:'dispatched '+w.dsp}${canSwap && w.item!==w.orig ? ' — receipts will move to the new material' : (canSwap ? '' : ' — material fixed')}</span> · ` : ''}<a href="#" onclick="poHistRename('${w.key}');return false;" title="Change this material's own name — reflects everywhere it is used">✏️ rename</a>${it.unit?' · <span style="color:#777">'+esc(it.unit)+'</span>':''}</div></td>
-      <td><input type="number" id="phe-q-${w.key}" step="any" min="${w.got||0}" value="${w.q}" style="width:90px;padding:5px;" oninput="poHistEditCalc()"></td>
+      <td><input type="number" id="phe-q-${w.key}" step="any" min="${isDir()?0:(w.got||0)}" value="${w.q}" style="width:90px;padding:5px;" oninput="poHistEditCalc()" ${w.got>0?'title="Received '+w.got+' — changing this also corrects the receipt and the stock"':''}></td>
       <td><input type="number" id="phe-r-${w.key}" step="any" value="${w.r}" style="width:90px;padding:5px;" oninput="poHistEditCalc()"></td>
       <td><input type="number" id="phe-t-${w.key}" step="any" value="${w.t}" style="width:60px;padding:5px;" oninput="poHistEditCalc()" ${w.v.margin_per_unit?'title="Margin scheme — tax on the margin only"':''}></td>
       <td class="amount" id="phe-tot-${w.key}"></td>
@@ -11148,8 +11148,17 @@ async function poHistEditSave(){
   const seen = {};
   for (const w of B.work){
     if (!(w.q > 0) || w.r < 0 || w.t < 0){ say('phe-msg','Quantity must be above zero; rate and tax cannot be negative.',false); return; }
-    if (w.q < w.got){ say('phe-msg','Quantity cannot be below the ' + w.got + ' already received on that line.',false); return; }
+    if (w.q < w.got && !isDir()){ say('phe-msg','Quantity cannot be below the ' + w.got + ' already received on that line — only a Director can cut a received quantity (the receipts and stock are reduced with it).',false); return; }
     if (seen[w.item]){ say('phe-msg','The same material is on two lines — merge them into one.',false); return; } seen[w.item] = 1;
+  }
+  // quantity changed on a line that was already received: the receipts (and so the stock at MMC / store) follow the corrected quantity
+  const qtyMoves = B.work.filter(w => w.id && w.got > 0 && w.q !== w.got);
+  let extraReceived = false;
+  if (qtyMoves.length){
+    const cut = qtyMoves.filter(w => w.q < w.got), up = qtyMoves.filter(w => w.q > w.got);
+    const nm = w => (rmItems.find(i=>i.id===w.item)||{}).code || '?';
+    if (cut.length && !confirm('Reduce the received quantity too?\n\n' + cut.map(w => '• ' + nm(w) + ': received ' + w.got + ' → ' + w.q).join('\n') + '\n\nThe receipts of this order are reduced to the corrected quantity, so the stock comes down with them. Continue?')) return;
+    if (up.length){ extraReceived = confirm('The quantity is now MORE than what was received:\n\n' + up.map(w => '• ' + nm(w) + ': received ' + w.got + ' → ordered ' + w.q).join('\n') + '\n\nOK = the extra quantity was also received (the receipt and stock go up to the new quantity).\nCancel = not received yet — the order stays open for the balance.'); }
   }
   const moving = B.work.filter(w => w.id && w.item !== w.orig && (w.got > 0 || w.dsp > 0));
   if (moving.length){
@@ -11173,6 +11182,11 @@ async function poHistEditSave(){
         const { error: eP } = await G.from('po_dispatches').update({ rm_item_id: w.item }).eq('po_id', B.po.id).eq('rm_item_id', w.orig);
         if (eP){ say('phe-msg','Line saved, but the dispatches could not be moved: '+eP.message,false); return; }
       }
+      if (w.got > 0 && w.q !== w.got && (w.q < w.got || extraReceived)){
+        const eA = await poHistAdjustQty('rm_receipts', B.po.id, w.item, w.q, 'received_on');
+        if (eA){ say('phe-msg','Line saved, but the receipts could not be adjusted: '+eA,false); return; }
+      }
+      if (w.dsp > 0 && w.q < w.dsp){ const eD2 = await poHistAdjustQty('po_dispatches', B.po.id, w.item, w.q, 'dispatch_date'); if (eD2){ say('phe-msg','Line saved, but the dispatches could not be adjusted: '+eD2,false); return; } }
     }
     const v = w.v || {};
     const upd = { rate_per_unit: w.r, amount, tax_rate: w.t, tax_amount: tax, tax_type: w.t > 0 ? (v.tax_type && v.tax_type !== 'NONE' ? v.tax_type : 'GST') : (v.tax_type || 'NONE') };
@@ -11180,7 +11194,29 @@ async function poHistEditSave(){
     const { error: e2 } = v.line_id ? await G.from('po_values').update(upd).eq('line_id', lineId) : await G.from('po_values').insert(Object.assign({ line_id: lineId }, upd));
     if (e2){ say('phe-msg','Could not save: '+e2.message,false); return; }
   }
+  // the order's status follows what is now ordered vs received (a received order whose quantity went up re-opens for the balance)
+  try { if (['RECEIVED','PARTIAL','DISPATCHED'].includes(B.po.status)){
+    const [{ data: ls }, { data: rs }] = await Promise.all([ G.from('po_lines').select('qty').eq('po_id', B.po.id), G.from('rm_receipts').select('qty').eq('po_id', B.po.id) ]);
+    const ord = (ls||[]).reduce((a,l)=>a+Number(l.qty||0),0), got = (rs||[]).reduce((a,r)=>a+Number(r.qty||0),0);
+    const st = got >= ord && got > 0 ? 'RECEIVED' : (got > 0 ? 'PARTIAL' : B.po.status);
+    if (st !== B.po.status) await G.from('purchase_orders').update(Object.assign({ status: st }, st === 'RECEIVED' ? { received_at: new Date().toISOString() } : {})).eq('id', B.po.id);
+  } } catch(e){}
   apprModalClose(); try { await poHistRun(); } catch(e){}
+}
+// Bring the receipts (or dispatches) of one material on one order to a new total: trims the latest entries first, or tops up the latest one.
+async function poHistAdjustQty(table, poId, itemId, target, dateCol){
+  const G = db.schema('mfg');
+  const { data: rows, error } = await G.from(table).select('id, qty').eq('po_id', poId).eq('rm_item_id', itemId).order(dateCol, { ascending: false }).order('created_at', { ascending: false });
+  if (error) return error.message;
+  let total = (rows||[]).reduce((a,r)=>a+Number(r.qty||0),0);
+  if (target > total){ if (!rows || !rows.length) return 'nothing recorded to top up'; const { error: e1 } = await G.from(table).update({ qty: Number(rows[0].qty) + (target - total) }).eq('id', rows[0].id); return e1 ? e1.message : null; }
+  for (const r of (rows||[])){
+    if (total <= target) break;
+    const q = Number(r.qty||0), cut = Math.min(q, total - target);
+    const res = cut >= q ? await G.from(table).delete().eq('id', r.id) : await G.from(table).update({ qty: q - cut }).eq('id', r.id);
+    if (res.error) return res.error.message; total -= cut;
+  }
+  return null;
 }
 async function vlBillEdit(poId){
   if (!isDir()){ alert('Only a Director can edit a purchase bill.'); return; }
