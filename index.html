@@ -7449,7 +7449,16 @@ async function purchaseTab(t){
         ${(orph||[]).map((o,ix)=>`<tr><td>${o.received_on||''}</td><td><b>${esc(o.po_no||'')}</b></td><td>${esc(o.vendor||'—')}</td><td>${esc(o.challan_no||'—')}${o.invoice_no?'<br><span style="font-size:11px;color:#777">Inv: '+esc(o.invoice_no)+'</span>':''}</td><td style="font-size:12px;">${esc(o.items||'')}</td>` +
           `<td><button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="grnDelAsk('','o${ix}','${esc(o.po_no||'')}')">🗑 Delete receipt</button></td></tr>`).join('')}
         </tbody></table></div>`; } } catch(e){} }
-    B.innerHTML = incoming + `<div id="po-recv"></div><div id="po-msg"></div>${orphHtml}
+    let excessHtml = '';
+    try { const { data: xs } = await G.from('v_po_excess').select('*').order('received_on', { ascending: false }).order('created_at', { ascending: false }).limit(300);
+      const qx = v => { const n = Number(v||0); return Number.isInteger(n) ? n : n.toFixed(2); };
+      const xTot = (xs||[]).reduce((a,x)=>a + (Number(x.excess_qty||0) * Number(x.rate_per_unit||0)), 0);
+      excessHtml = `<h4 class="sec" style="margin-top:16px;">📦 Excess received from vendor${(xs||[]).length ? ' <span style="font-weight:normal;font-size:12px;color:#777">· ' + xs.length + ' receipt(s) · ₹ ' + inr(xTot) + ' at PO rate</span>' : ''}</h4>
+        <p style="font-size:12px;color:#555;margin:4px 0 8px;">Material the vendor sent <b>over and above the purchase order</b>. The whole quantity is in stock (store, or MMC custody for a → MMC order); only the part above the order is listed here. The vendor's bill stays as per the PO — if the excess is to be paid for, correct the order quantity in <b>PO history → ✏️ Edit</b>; if it is to go back, raise a return with the vendor.</p>
+        <div class="table-scroll"><table class="fit"><colgroup><col style="width:9%"><col style="width:11%"><col style="width:15%"><col style="width:22%"><col style="width:8%"><col style="width:8%"><col style="width:8%"><col style="width:9%"><col style="width:10%"></colgroup><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Material</th><th class="amount">Ordered</th><th class="amount">Received (this lot)</th><th class="amount">Excess</th><th class="amount">Excess value ₹ (PO rate)</th><th>Challan / Invoice</th></tr></thead><tbody>
+        ${(xs||[]).map(x => `<tr style="background:#fff8ee;"><td>${esc(x.received_on||'')}</td><td><b>${esc(x.po_no||'')}</b>${x.bill_to_mmc?'<br><span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">→ MMC</span>':''}</td><td>${esc(x.vendor_name||'—')}</td><td><b>${esc(x.item_code||'')}</b> <span style="color:#555;font-size:11px;">${esc(x.item_name||'')}</span> <span style="color:#999;font-size:10.5px;">${esc(x.unit||'')}</span></td><td class="amount">${qx(x.ordered_qty)}</td><td class="amount">${qx(x.received_qty)}</td><td class="amount" style="font-weight:700;color:#b26a00;">+${qx(x.excess_qty)}</td><td class="amount">${x.rate_per_unit!=null?inr(Number(x.excess_qty||0)*Number(x.rate_per_unit||0)):'—'}</td><td style="font-size:11px;">${esc(x.challan_no||'—')}${x.invoice_no?'<br>Inv: '+esc(x.invoice_no):''}</td></tr>`).join('') || '<tr><td colspan="9" style="color:#777">No excess received so far — every receipt has been within its purchase order.</td></tr>'}
+        </tbody></table></div>`; } catch(e){ excessHtml = ''; }
+    B.innerHTML = incoming + `<div id="po-recv"></div><div id="po-msg"></div>${excessHtml}${orphHtml}
       <h4 class="sec">Receipts recorded &amp; quality inspections</h4>
       <p style="font-size:12px;color:#555;">Every receipt recorded against a PO, with the receiver's inspection: whether the material and quantity match the PO, the inspection report, and quality remarks. Recorded from a PO's “Receive…” action.</p>
       <div class="table-scroll"><table class="fit"><colgroup><col style="width:9%"><col style="width:10%"><col style="width:15%"><col style="width:12%"><col style="width:9%"><col style="width:6%"><col style="width:14%"><col style="width:14%"><col style="width:7%"><col style="width:4%"></colgroup><thead><tr><th>Date</th><th>PO</th><th>Vendor</th><th>Challan / Invoice</th><th>As per PO</th><th>Qty OK</th><th>Inspection report</th><th>Quality remarks</th><th>Received by</th><th></th></tr></thead><tbody>
@@ -8009,9 +8018,10 @@ async function poReceiveForm(id, poNo, afterJs){
       const dspq = st.dispatched_qty!=null ? Number(st.dispatched_qty) : Number(l.qty); const atVendor = st.awaiting_dispatch_qty!=null ? Number(st.awaiting_dispatch_qty) : 0;
       const transit = st.in_transit_qty!=null ? Number(st.in_transit_qty) : pend;
       return `<tr><td>${esc(i.code||'?')} ${esc(i.name||'')}</td><td class="amount">${qf(l.qty)}</td><td class="amount">${qf(dspq)}</td><td class="amount" style="color:${atVendor>0?'#b3261e':'#777'}">${qf(atVendor)}</td><td class="amount">${qf(got)}</td><td class="amount" style="font-weight:700;color:${transit>0?'#0b57d0':'#777'}">${qf(transit)}</td>` +
-        `<td><input type="number" class="rcv-qty" data-item="${l.rm_item_id}" min="0" max="${pend}" step="any" placeholder="0" value="${transit>0?qf(transit):''}" style="width:110px;"></td></tr>`;}).join('')}
+        `<td><input type="number" class="rcv-qty" data-item="${l.rm_item_id}" data-pend="${Math.max(0,pend)}" data-code="${esc(i.code||'')}" min="0" step="any" placeholder="0" value="${transit>0?qf(transit):''}" style="width:110px;" oninput="rcvExcessHint()"><div class="rcv-xs" style="font-size:10.5px;color:#b26a00;font-weight:600;"></div></td></tr>`;}).join('')}
     </tbody></table></div>
-    <p style="font-size:11.5px;color:#777;margin:4px 0 0;">“Receive now” is pre-filled with the quantity in transit — correct it to what actually arrived. Anything still pending at the vendor stays on the order and can be received in a later lot.</p>
+    <p style="font-size:11.5px;color:#777;margin:4px 0 0;">“Receive now” is pre-filled with the quantity in transit — correct it to what actually arrived. Anything still pending at the vendor stays on the order and can be received in a later lot. <b>Vendor sent more than ordered?</b> Enter the full quantity that arrived — the part above the order is received into stock and listed under <b>Excess received from vendor</b>.</p>
+    <div id="rcv-excess-note" style="display:none;margin-top:6px;padding:8px 10px;background:#fff3e0;border-radius:8px;font-size:12px;color:#7a4a00;"></div>
     <div class="row2c" style="margin-top:8px;">
       <div><label>Received at *</label><select id="rcv-dest">
         <option value="STORE" ${toMMC?'':'selected'}>Company / office store</option>
@@ -8683,6 +8693,17 @@ async function rmAssetSave(itemId){
   alert('Done. ' + qty + ' ' + (r.unit||'') + ' of ' + r.code + (src === 'MMC' ? ' left MMC custody' : ' left the store') + ' and is booked as asset ' + res.data + ' (Accounting → Assets).');
   purchaseTab('store');
 }
+// Lines where what arrived is above the order balance (the vendor sent more than ordered)
+function rcvExcessLines(){
+  const out = []; document.querySelectorAll('.rcv-qty').forEach(inp => { const q = Number(inp.value)||0, pend = Number(inp.dataset.pend)||0; if (q > pend) out.push({ code: inp.dataset.code || '?', qty: q, pend, excess: Math.round((q - pend) * 1000) / 1000 }); });
+  return out;
+}
+function rcvExcessHint(){
+  document.querySelectorAll('.rcv-qty').forEach(inp => { const q = Number(inp.value)||0, pend = Number(inp.dataset.pend)||0; const h = inp.parentElement.querySelector('.rcv-xs'); if (h) h.textContent = q > pend ? '⚠ ' + (Math.round((q - pend) * 1000) / 1000) + ' excess above the PO' : ''; });
+  const xs = rcvExcessLines(), note = $('rcv-excess-note'); if (!note) return;
+  note.style.display = xs.length ? '' : 'none';
+  note.innerHTML = xs.length ? '<b>Excess received from vendor:</b> ' + xs.map(x => esc(x.code) + ' +' + x.excess).join(', ') + ' — the whole quantity goes into stock; the excess is recorded separately and shown under <b>Excess received from vendor</b> (the bill stays as per the PO unless you correct the order in PO history).' : '';
+}
 async function poReceiveSave(id){
   const lines = [];
   document.querySelectorAll('.rcv-qty').forEach(inp => {
@@ -8690,6 +8711,11 @@ async function poReceiveSave(id){
     if (q > 0) lines.push({ rm_item_id: inp.dataset.item, qty: q });
   });
   if (!lines.length){ say('rcv-msg','Enter a received quantity on at least one line.',false); return; }
+  const xs = rcvExcessLines();
+  if (xs.length){
+    if (!confirm('The vendor has sent MORE than the purchase order:\n\n' + xs.map(x => '• ' + x.code + ': ' + x.excess + ' above the order (order balance ' + x.pend + ', arrived ' + x.qty + ')').join('\n') + '\n\nThe full quantity is received into stock; the excess is listed under “Excess received from vendor” on Receipts & QC. Continue?')) return;
+    if ($('rcv-qtyok') && !$('rcv-qtyok').value) $('rcv-qtyok').value = 'no';
+  }
   const challan = $('rcv-challan').value.trim() || null;
   const invoice = $('rcv-invoice').value.trim() || null;
   const inspDate = $('rcv-inspdate') ? ($('rcv-inspdate').value || null) : null;
