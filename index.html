@@ -2983,17 +2983,18 @@ async function fdErpData(){
   if (FD.erp) return FD.erp;
   const A = db.schema('acct'); const from = fdQRange(FD.fy,0)[0], to = fdQRange(FD.fy,3)[1];
   const safe = async p => { try { const r = await p; return r.error ? null : (r.data || []); } catch(e){ return null; } };
-  const [banks, ents, petty, exps, allExp, slips, assets, avl] = await Promise.all([
+  const [banks, ents, petty, exps, allExp, slips, bonuses, assets, avl] = await Promise.all([
     safe(A.from('v_bank_balances').select('id, name, opening_balance, balance')),
     safe(A.from('v_entries').select('entry_date, kind, direction, amount, status, bank_account_id, counter_bank_account_id, narration').eq('status','APPROVED').lte('entry_date', to).limit(20000)),
     safe(A.from('petty_cash').select('entry_kind, amount, status, category, expense_date').eq('status','APPROVED').lte('expense_date', to).limit(20000)),
     safe(A.from('expenses').select('exp_date, category, amount, bill_amount, petty_id').gte('exp_date', from).lte('exp_date', to).limit(20000)),
     safe(A.from('expenses').select('category').limit(5000)),
     safe(A.from('salary_slips').select('period, gross, status').gte('period', from.slice(0,7)).lte('period', to.slice(0,7))),
+    safe(A.from('staff_bonuses').select('period, amount, status, kind').gte('period', from.slice(0,7)).lte('period', to.slice(0,7))),
     safe(A.from('assets').select('purchase_value, purchase_date, status, disposed_on')),
     safe(A.from('asset_value_log').select('kind, as_on, change_amount').gte('as_on', from).lte('as_on', to))
   ]);
-  FD.erp = { banks, ents, petty, exps, allExpCats: (allExp||[]).map(x=>x.category), slips, assets, avl };
+  FD.erp = { banks, ents, petty, exps, allExpCats: (allExp||[]).map(x=>x.category), slips, bonuses, assets, avl };
   return FD.erp;
 }
 // the expense figure of one Accounting expense line: the bill (taxable) amount — TDS deducted from it is still the expense,
@@ -3064,6 +3065,7 @@ async function fdFillPL(){
   (E.petty||[]).forEach(p => { if (p.entry_kind !== 'EXPENSE') return; const q = fdQOf(FD.fy, p.expense_date); if (q < 0) return; add('H:Petty cash — ' + (p.category||'Other'), q, Number(p.amount||0), 'Petty cash: ' + (p.category||'Other')); });
   const salHead = fdExpHeads(FD.data, E).find(h => /salary|wage/i.test(h)) || 'Salary & wages';
   (E.slips||[]).forEach(s => { if (!['APPROVED','PAID'].includes(s.status)) return; add('H:' + salHead, fdQOf(FD.fy, s.period + '-15'), Number(s.gross||0), 'Salary slips (gross)'); });
+  (E.bonuses||[]).forEach(b => { if (!['APPROVED','PAID'].includes(b.status)) return; const per = /^\d{4}-\d{2}/.test(b.period||'') ? b.period.slice(0,7) : monthLabelJS(); add('H:' + salHead, fdQOf(FD.fy, per + '-15'), Number(b.amount||0), 'Bonuses & incentives'); });
   (E.avl||[]).forEach(a => { if (a.kind !== 'DEPRECIATION') return; add('dep', fdQOf(FD.fy, a.as_on), Math.abs(Number(a.change_amount||0)), 'Asset register depreciation'); });
   (E.ents||[]).forEach(e => { if (e.kind !== 'BANK_IN' || !/interest/i.test(e.narration||'')) return; add('interest', fdQOf(FD.fy, e.entry_date), Number(e.amount||0), 'Bank receipts marked "interest"'); });
   const lines = [...FD_OI.map(([k,l])=>[k,l]), ...fdExpHeads(FD.data, E).map(h=>['H:'+h, h]), ['dep','Depreciation & Amortisation']];
@@ -3186,7 +3188,7 @@ async function fdErpSnapshot(){
   let expYtd = null;
   if (E.exps || E.petty){ expYtd = 0; (E.exps||[]).forEach(x=>{ if (!x.petty_id && !/asset|tds/i.test(x.category||'')) expYtd += fdExpVal(x); });
     (E.petty||[]).forEach(p=>{ if (p.entry_kind==='EXPENSE' && fdQOf(FD.fy,p.expense_date)>=0) expYtd += Number(p.amount||0); }); }
-  const salYtd = E.slips ? E.slips.filter(s=>['APPROVED','PAID'].includes(s.status)).reduce((s,x)=>s+Number(x.gross||0),0) : null;
+  const salYtd = E.slips ? E.slips.filter(s=>['APPROVED','PAID'].includes(s.status)).reduce((s,x)=>s+Number(x.gross||0),0) + (E.bonuses||[]).filter(b=>['APPROVED','PAID'].includes(b.status)).reduce((s,x)=>s+Number(x.amount||0),0) : null;
   const gbNow = E.assets ? fdGBAt(E, today) : null;
   const item = (l, v, sub) => `<div style="flex:1;min-width:170px;"><div style="font-size:11.5px;color:#777">${l}</div><div style="font-size:16px;font-weight:700;color:#1a1a2e">${v==null?'—':'₹ '+fdV(v)}</div>${sub?`<div style="font-size:11px;color:#999">${sub}</div>`:''}</div>`;
   el.innerHTML = `<div style="display:flex;gap:14px;flex-wrap:wrap;">
@@ -8819,7 +8821,7 @@ async function openAcct(){
 }
 // Who the entry is with: the payee / party first; the staff member only for salary, advance and recovery entries
 // (never the person who typed the entry).
-function acWho(e){ if (!e) return ''; const staffKinds = {SALARY:1, ADVANCE:1, RECOVERY:1}; return e.payee || e.party_name || (staffKinds[e.kind] ? (e.staff_name||'') : '') || ''; }
+function acWho(e){ if (!e) return ''; const staffKinds = {SALARY:1, BONUS:1, ADVANCE:1, RECOVERY:1}; return e.payee || e.party_name || (staffKinds[e.kind] ? (e.staff_name||'') : '') || ''; }
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
 function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
 async function acctTab(t){
@@ -8838,7 +8840,7 @@ async function acctTab(t){
   if (t === 'appr'){
     const finAppr = canFinApprove(), pettyAppr = canPetty('admin');
     if (!finAppr && !pettyAppr){ B.innerHTML = '<div class="msg err">Pending approvals are visible only to the Director, the Accounts head (finance-approve permission) and petty cash approvers.</div>'; return; }
-    const [entR, pcR, slR, advR, poR, rqR, mkR, vprR] = await Promise.all([
+    const [entR, pcR, slR, advR, poR, rqR, mkR, vprR, bonR] = await Promise.all([
       A.from('v_entries').select('*').eq('status','PENDING_APPROVAL').order('entry_date',{ascending:false}).limit(300),
       A.from('petty_cash').select('*').in('status',['PENDING','PENDING_APPROVAL']).order('expense_date',{ascending:false}).limit(300),
       A.from('salary_slips').select('*').eq('status','DRAFT').order('period',{ascending:false}).limit(300),
@@ -8846,8 +8848,10 @@ async function acctTab(t){
       db.schema('mfg').from('v_po_tracking').select('*').eq('status','PENDING_APPROVAL').order('order_date',{ascending:false}).limit(300),
       db.schema('mfg').from('rm_requests').select('*').eq('status','REQUESTED').order('created_at',{ascending:false}).limit(300),
       db.schema('sales').from('v_mkt_requests').select('*').eq('status','PENDING_APPROVAL').order('created_at',{ascending:false}).limit(300),
-      A.from('vendor_pay_requests').select('*').eq('status','PENDING_APPROVAL').order('requested_at',{ascending:false}).limit(300)
+      A.from('vendor_pay_requests').select('*').eq('status','PENDING_APPROVAL').order('requested_at',{ascending:false}).limit(300),
+      A.from('v_staff_bonuses').select('*').eq('status','DRAFT').order('created_at',{ascending:false}).limit(300)
     ]);
+    const bns = finAppr ? ((bonR && bonR.data) ? bonR.data : []) : [];
     // each approver sees only what they may decide: petty-cash approvers get the petty cash queue only
     const ents = finAppr ? entR.data||[] : [], pcs = pettyAppr ? pcR.data||[] : [], sls = finAppr ? slR.data||[] : [], advs = finAppr ? advR.data||[] : [],
           pos = finAppr ? poR.data||[] : [], rqs = finAppr ? rqR.data||[] : [], mks = finAppr ? mkR.data||[] : [];
@@ -8878,7 +8882,7 @@ async function acctTab(t){
         (vpos||[]).forEach(p=>{ window.__vpoNames[p.id] = p.po_no; }); } }
     window.__apprData = { ents, pcs, sls, advs, pos, rqs, mks, poAmt, venBy, vprs };
     window.__pcAll = pcs;   // so the petty voucher printer works from this tab too
-    const total = ents.length + pcs.length + sls.length + advs.length + pos.length + rqs.length + mks.length + vprs.length;
+    const total = ents.length + pcs.length + sls.length + advs.length + pos.length + rqs.length + mks.length + vprs.length + bns.length;
     const SEC = (title, count, inner) => count ? `<h4 class="sec" style="margin-top:16px;">${title} <span style="background:#b3261e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${count}</span></h4>${inner}` : '';
     const T = (head, rows) => `<div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
     B.innerHTML = `
@@ -8902,6 +8906,9 @@ async function acctTab(t){
       ${SEC('🧾 Salary slips', sls.length, T('<th>Slip</th><th>Staff</th><th>Month</th><th class="amount">Net ₹</th><th></th>',
         sls.map(s=>`<tr><td><b>${esc(s.slip_no)}</b></td><td>${esc(acStaffName(s.staff_id))}</td><td>${s.period}</td><td class="amount" style="font-weight:700">${inr(s.net_pay)}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('slip','${s.id}')" title="See the full slip">👁 View</button> <button class="mini" onclick="apprPrint('slip','${s.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('slip','${s.id}',false)">✔ Approve</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('slip','${s.id}',true)">Reject</button> ${dirDelBtn('acct','salary_slips', s.id, s.slip_no, "acctTab('appr')")}</td></tr>`).join('')))}
+      ${SEC('🎁 Bonuses & incentives', bns.length, T('<th>No.</th><th>Staff</th><th>Type</th><th>For</th><th class="amount">Amount ₹</th><th></th>',
+        bns.map(b=>`<tr><td><b>${esc(b.bonus_no)}</b></td><td>${esc(b.staff_name||acStaffName(b.staff_id))}</td><td>${b.kind==='INCENTIVE'?'Incentive':'Bonus'}</td><td>${esc(b.period)}${b.reason?'<br><span style="font-size:11px;color:#777">'+esc(b.reason)+'</span>':''}</td><td class="amount" style="font-weight:700">${inr(b.amount)}</td>`+
+          `<td style="white-space:nowrap"><button class="mini" onclick="acBonusPrint('${b.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="acBonusApprove('${b.id}',false,true)">✔ Approve</button> <button class="mini" onclick="acBonusApprove('${b.id}',true,true)">✖ Reject</button></td></tr>`).join('')))}
       ${SEC('🤝 Staff advances', advs.length, T('<th>No.</th><th>Staff</th><th>Type</th><th>Date</th><th class="amount">Amount ₹</th><th></th>',
         advs.map(a=>`<tr><td><b>${esc(a.adv_no)}</b></td><td>${esc(a.staff_name)}</td><td>${(a.adv_type||'SALARY')==='EXPENSE'?'Against expenses':'Against salary'}</td><td>${a.given_on}</td><td class="amount" style="font-weight:700">${inr(a.amount)}</td>`+
           `<td style="white-space:nowrap"><button class="mini" onclick="apprView('adv','${a.id}')" title="See full details">👁 View</button> <button class="mini" onclick="apprPrint('adv','${a.id}')" title="Print / save PDF">🖨 Print</button> <button class="mini" onclick="apprAct('adv','${a.id}',false)">✔ Approve &amp; pay</button> <button class="mini" style="color:#c0392b;" onclick="apprAct('adv','${a.id}',true)">Reject</button> ${dirDelBtn('acct','advances', a.id, a.adv_no, "acctTab('appr')")}</td></tr>`).join('')))}
@@ -8954,7 +8961,7 @@ async function acctTab(t){
     // (Older entries carry the staff who keyed them in — those are not the staff's money and stay out.)
     const staffRel = e => {
       if (!e.staff_name) return false;
-      if (['SALARY','ADVANCE','RECOVERY'].includes(e.kind)) return true;
+      if (['SALARY','BONUS','ADVANCE','RECOVERY'].includes(e.kind)) return true;
       const toks = String(e.staff_name).toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2);
       const p = String(e.payee||'').toLowerCase();
       return toks.length>0 && toks.every(t=>p.includes(t));
@@ -9729,10 +9736,12 @@ async function acctTab(t){
   }
 
   if (t === 'salary'){
-    const [sl, st] = await Promise.all([
+    const [sl, st, bn] = await Promise.all([
       A.from('salary_slips').select('*').order('period', {ascending:false}).order('created_at', {ascending:false}).limit(100),
-      A.from('staff_salary').select('*').eq('is_active', true)
+      A.from('staff_salary').select('*').eq('is_active', true),
+      A.from('v_staff_bonuses').select('*').order('created_at', {ascending:false}).limit(200)
     ]);
+    window.__acBonuses = bn.data || [];
     const structBy = {}; (st.data||[]).forEach(s=>structBy[s.staff_id]=s);
     window.__acSlips = sl.data || [];
     // employees who are paid but have no ERP login
@@ -9742,7 +9751,8 @@ async function acctTab(t){
       ${canFinEdit()?`<div class="row2c">
         <button class="btn ghost sm" onclick="acStructForm()">Set / revise a salary structure</button>
         <button class="btn gold sm" onclick="acSlipForm()">+ Generate salary slip</button></div>
-        <div style="margin-top:8px;"><button class="btn ghost sm" onclick="acEmpForm()">+ Add employee (no ERP login)</button></div>`:''}
+        <div class="row2c" style="margin-top:8px;"><button class="btn ghost sm" onclick="acEmpForm()">+ Add employee (no ERP login)</button>
+        <button class="btn gold sm" style="background:#1a7f37;" onclick="acBonusForm()">🎁 Pay bonus / incentive</button></div>`:''}
       <div id="ac-sal-form"></div>
       ${(window.__acEmps||[]).length ? `
       <h4 class="sec" style="margin-top:16px;">Employees on payroll without an ERP login <span style="background:#1a1a2e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${(window.__acEmps||[]).length}</span></h4>
@@ -9762,7 +9772,8 @@ async function acctTab(t){
           (isDir()?`<button class="mini" onclick="acSlipDelete('${s.id}')">Delete</button>`:'')+
         `</td></tr>`).join('') || '<tr><td colspan="8" style="color:#777">No salary slips yet.</td></tr>'}
       </tbody></table></div>
-      <div id="ac-slip-view"></div>`;
+      <div id="ac-slip-view"></div>
+      ${acBonusSectionHtml()}`;
     return;
   }
 
@@ -10785,7 +10796,7 @@ async function acEntrySave(){
   if (!(amt>0)){ say('en-msg','Amount must be above zero.',false); return; }
   // a plain "Payment" with a vendor picked is a vendor payment — it must reach Vendor Dues
   if (k === 'PAYMENT' && $('en-vendor') && $('en-vendor').value) k = 'VPAY';
-  { const dir = ['VPAY','MMC_PAY','PAYMENT','BANK_OUT','SALARY','ADVANCE'].includes(k) ? 'OUT' : ['BANK_IN','RECOVERY','MMC_RCPT'].includes(k) ? 'IN' : null;
+  { const dir = ['VPAY','MMC_PAY','PAYMENT','BANK_OUT','SALARY','BONUS','ADVANCE'].includes(k) ? 'OUT' : ['BANK_IN','RECOVERY','MMC_RCPT'].includes(k) ? 'IN' : null;
     if (k !== 'MMC_VEN' && !(await acDupWarn(amt, $('en-date').value, dir))) return; }
   if (k === 'BANK_OUT'){
     // a cash withdrawal is a petty cash top-up: one record in the petty book, one bank entry, linked
@@ -11435,6 +11446,87 @@ function acSlipAdvChange(){
   const out = Number((window.__acAdvOutstanding||{})[id] || 0);
   $('sp-rec').value = out;
   note.innerHTML = 'Outstanding on this advance is ₹' + inr(out) + ' — filled in above. Lower it if you want to recover only part of it this month.';
+}
+// ── Bonuses & incentives: recorded as a draft, approved, then paid from a bank (ledger entry of kind BONUS against the staff member) ──
+function acBonusSectionHtml(){
+  const rows = window.__acBonuses || [];
+  const tot = k => rows.filter(b=>b.status==='PAID' && (!k || b.kind===k)).reduce((s,b)=>s+Number(b.amount||0),0);
+  return `<h4 class="sec" style="margin-top:18px;">🎁 Bonuses &amp; incentives <span style="background:#1a1a2e;color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;">${rows.length}</span>${rows.length?` <span style="font-weight:normal;font-size:12px;color:#777">· paid so far ₹ ${inr(tot())} (bonus ₹ ${inr(tot('BONUS'))} · incentive ₹ ${inr(tot('INCENTIVE'))})</span>`:''}</h4>
+    <p style="font-size:12px;color:#555;margin:2px 0 8px;">Paid outside the monthly salary slip — festival / annual bonus, sales or production incentive. Recorded as a draft, approved by the Accounts head or Director, then paid from a bank: the payment goes to the ledger against the staff member (kind BONUS) and counts with salary in the finance summary.</p>
+    <div class="table-scroll"><table class="fit"><colgroup><col style="width:12%"><col style="width:18%"><col style="width:9%"><col style="width:17%"><col style="width:11%"><col style="width:13%"><col style="width:20%"></colgroup><thead><tr><th>No.</th><th>Staff</th><th>Type</th><th>For</th><th class="amount">Amount ₹</th><th>Status</th><th></th></tr></thead><tbody>
+    ${rows.map(b=>`<tr><td><b>${esc(b.bonus_no)}</b><br><span style="font-size:10.5px;color:#999">${String(b.created_at||'').slice(0,10)}</span></td><td>${esc(b.staff_name||acStaffName(b.staff_id))}${b.designation?'<br><span style="font-size:11px;color:#777">'+esc(b.designation)+'</span>':''}</td><td>${b.kind==='INCENTIVE'?'💹 Incentive':'🎁 Bonus'}</td><td>${esc(b.period)}${b.reason?'<br><span style="font-size:11px;color:#777">'+esc(b.reason)+'</span>':''}</td><td class="amount" style="font-weight:700">${inr(b.amount)}</td>` +
+      `<td><span style="color:${AC_ST[b.status]||'#333'};font-weight:600;font-size:12px">${b.status}</span>${b.status==='PAID'&&b.paid_on?'<br><span style="font-size:10.5px;color:#777">'+esc(b.paid_on)+' · '+esc(acBankName(b.paid_bank_id))+(b.paid_ref?' · '+esc(b.paid_ref):'')+'</span>':''}</td>` +
+      `<td><div style="display:flex;flex-wrap:wrap;gap:4px;"><button class="mini" onclick="acBonusPrint('${b.id}')" title="Print / save the voucher">🖨 Voucher</button>` +
+        (b.status==='DRAFT'&&canFinApprove()?`<button class="mini" onclick="acBonusApprove('${b.id}',false)">Approve</button><button class="mini" onclick="acBonusApprove('${b.id}',true)">Reject</button>`:'') +
+        (b.status==='APPROVED'&&canFinApprove()?`<button class="mini" style="color:#0b57d0;font-weight:600" onclick="acBonusPay('${b.id}')">Pay</button>`:'') +
+        (isDir()?`<button class="mini" onclick="acBonusDelete('${b.id}')">Delete</button>`:'') +
+      `</div></td></tr>`).join('') || '<tr><td colspan="7" style="color:#777">No bonus or incentive recorded yet.</td></tr>'}
+    </tbody></table></div>`;
+}
+function acBonusForm(){
+  const box = $('ac-sal-form'); if (!box) return;
+  box.innerHTML = `
+    <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">🎁 Pay bonus / incentive</h3>
+    <p style="font-size:12px;color:#777;margin:2px 0 8px;">Recorded as a draft first; the Accounts head or Director approves it, then pays it from a bank. It never touches the monthly salary slip.</p>
+    <div class="row2c"><div><label>Staff *</label><select id="bn-staff">${acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}${s.designation?' — '+esc(s.designation):''}</option>`).join('')}</select></div>
+      <div><label>Type *</label><select id="bn-kind"><option value="BONUS">Bonus (festival / annual / ex-gratia)</option><option value="INCENTIVE">Incentive (sales / production / performance)</option></select></div></div>
+    <div class="row2c"><div><label>For month *</label><input type="month" id="bn-period" value="${monthLabelJS()}"></div>
+      <div><label>Amount ₹ *</label><input type="number" id="bn-amt" min="0" step="any" placeholder="0.00"></div></div>
+    <label>Reason / occasion</label><input type="text" id="bn-reason" placeholder="e.g. Diwali bonus 2026 · Q2 sales target achieved · 500 cases above target">
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acBonusSave()">Record (draft)</button>
+    <div id="bn-msg"></div></div>`;
+  box.scrollIntoView({behavior:'smooth'});
+}
+async function acBonusSave(){
+  const amt = Number($('bn-amt').value)||0;
+  if (!(amt > 0)){ say('bn-msg','Enter the amount.',false); return; }
+  const { error } = await db.schema('acct').rpc('create_bonus', { p_staff: $('bn-staff').value, p_kind: $('bn-kind').value, p_period: $('bn-period').value, p_amount: amt, p_reason: $('bn-reason').value.trim() || null });
+  if (error){ say('bn-msg','Could not record: '+error.message,false); return; }
+  acctTab('salary');
+}
+async function acBonusApprove(id, reject, fromAppr){
+  if (reject && !confirm('Reject this bonus / incentive? It is marked cancelled and nothing is paid.')) return;
+  const { error } = await db.schema('acct').rpc('approve_bonus', { p_bonus: id, p_reject: !!reject });
+  if (error){ alert('Could not update: '+error.message); return; }
+  acctTab(fromAppr ? 'appr' : 'salary');
+}
+async function acBonusPay(id){
+  const active = acBanks.filter(b=>b.is_active);
+  if (!active.length){ alert('Add a bank account first.'); return; }
+  const bank = active.length===1 ? active[0].id : (function(){
+    const name = prompt('Pay from which bank?\n'+active.map((b,i)=>(i+1)+'. '+b.name).join('\n'), '1');
+    const idx = Number(name)-1; return active[idx] ? active[idx].id : null; })();
+  if (!bank) return;
+  const ref = prompt('Payment reference no. (optional):','')||null;
+  const { error } = await db.schema('acct').rpc('pay_bonus', { p_bonus: id, p_bank: bank, p_mode: 'NEFT', p_ref: ref });
+  if (error){ alert('Could not pay: '+error.message); return; }
+  acctTab('salary');
+}
+async function acBonusDelete(id){
+  const b = (window.__acBonuses||[]).find(x=>x.id===id);
+  if (!confirm('Delete this bonus / incentive' + (b ? ' (' + b.bonus_no + ')' : '') + '?' + (b && b.status==='PAID' ? '\n\nIt is already paid, so the bank payment entry it created is removed as well and that money goes back into the bank balance.' : ''))) return;
+  const { error } = await db.schema('acct').rpc('delete_bonus', { p_bonus: id });
+  if (error){ alert('Could not delete: '+error.message); return; }
+  acctTab('salary');
+}
+async function acBonusPrint(id){
+  let b = (window.__acBonuses||[]).find(x=>x.id===id);
+  if (!b){ const { data } = await db.schema('acct').from('v_staff_bonuses').select('*').eq('id', id).maybeSingle(); b = data; }
+  if (!b) return;
+  const kind = b.kind==='INCENTIVE' ? 'INCENTIVE' : 'BONUS';
+  const body = `<h2 style="margin:0 0 4px;">${kind} VOUCHER${b.status==='DRAFT'?' (DRAFT — AWAITING APPROVAL)':''}</h2>
+    <table style="width:100%;max-width:640px;margin-top:10px;"><tbody>
+      <tr><th style="text-align:left;width:34%">Voucher no.</th><td><b>${esc(b.bonus_no)}</b></td></tr>
+      <tr><th style="text-align:left">Date</th><td>${esc(String(b.created_at||'').slice(0,10))}</td></tr>
+      <tr><th style="text-align:left">Paid to</th><td><b>${esc(b.staff_name||acStaffName(b.staff_id))}</b>${b.designation?' — '+esc(b.designation):''}</td></tr>
+      <tr><th style="text-align:left">Type</th><td>${kind==='INCENTIVE'?'Incentive':'Bonus'}</td></tr>
+      <tr><th style="text-align:left">For</th><td>${esc(b.period)}</td></tr>
+      ${b.reason?`<tr><th style="text-align:left">Reason / occasion</th><td>${esc(b.reason)}</td></tr>`:''}
+      <tr class="tot"><th style="text-align:left">Amount</th><td class="amount"><b>₹ ${inr(b.amount)}</b></td></tr>
+      <tr><th style="text-align:left">Status</th><td>${esc(b.status)}${b.status==='PAID'?' — paid on '+esc(b.paid_on||'')+' from '+esc(acBankName(b.paid_bank_id))+(b.paid_mode?' by '+esc(b.paid_mode):'')+(b.paid_ref?' (ref '+esc(b.paid_ref)+')':'')+(b.paid_entry_no?' · ledger '+esc(b.paid_entry_no):''):''}</td></tr>
+    </tbody></table>
+    <div style="display:flex;justify-content:space-between;margin-top:48px;max-width:640px;font-size:12px;"><div>Prepared by<br><br>______________________</div><div>Approved by<br><br>______________________</div><div>Received by<br><br>______________________</div></div>`;
+  printHtml((kind==='INCENTIVE'?'Incentive':'Bonus') + ' voucher ' + (b.bonus_no||''), body);
 }
 async function acSlipGen(){
   const { error } = await db.schema('acct').rpc('generate_salary_slip', {
