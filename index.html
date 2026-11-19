@@ -11419,9 +11419,9 @@ function acSlipAbsCalc(){
   const gross = Number(st.basic||0) + Number(st.hra||0) + Number(st.allowances||0);
   const perDay = gross / days;
   if (ab < 0 || ab > days){ out.value = '—'; note.innerHTML = `<span style="color:#b3261e">Days absent must be between 0 and ${days}.</span>`; return; }
-  const amt = Math.round(perDay * ab * 100) / 100;
+  const amt = Math.round(perDay * ab);   // rounded off to the rupee — no paise on the slip
   out.value = inr(amt);
-  note.innerHTML = `Gross ₹ ${inr(gross)} ÷ ${days} days in ${per||'the month'} = <b>₹ ${inr(perDay)}</b> per day` + (ab ? ` × ${ab} day${ab===1?'':'s'} absent = <b>₹ ${inr(amt)}</b> deducted. Net pay before other deductions ≈ ₹ ${inr(gross - amt)}.` : '. Enter the days absent to deduct them.');
+  note.innerHTML = `Gross ₹ ${inr(gross)} ÷ ${days} days in ${per||'the month'} = <b>₹ ${inr(perDay)}</b> per day` + (ab ? ` × ${ab} day${ab===1?'':'s'} absent = ₹ ${inr(perDay * ab)} → rounded off to <b>₹ ${inr(amt)}</b> deducted. Net pay before other deductions ≈ ₹ ${inr(gross - amt)}.` : '. Enter the days absent to deduct them (rounded off to the rupee).');
 }
 function acSlipStaffChange(){
   try { acSlipAbsCalc(); } catch(e){}
