@@ -10007,7 +10007,7 @@ async function acVendorPayForm(vid, vname, out){
         <div><label>Date</label><input type="date" id="vp-date" value="${calFmt(new Date())}"></div></div>
       <div class="row2c" style="margin-top:8px;">
         <div><label>To be paid by *</label><select id="vp-mode" onchange="$('vp-bank-wrap').style.display=this.value==='CASH'?'none':'';">
-          <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="CASH">Cash</option></select></div>
+          <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CARD">Bank — Card (debit / credit)</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="CASH">Cash</option></select></div>
         <div id="vp-bank-wrap"><label>From bank</label><select id="vp-bank">${bankOpts}</select></div>
       </div>
       <label style="margin-top:8px;">Note for the approver</label><input type="text" id="vp-note" placeholder="e.g. part payment, balance on delivery">
@@ -10128,7 +10128,7 @@ async function acMmcForm(kind, targetId, vid, vname, out){
       ${isPay ? `
       <div class="row2c" style="margin-top:8px;">
         <div><label>From bank *</label><select id="mm-bank">${bankOpts}</select></div>
-        <div><label>Mode</label><select id="mm-mode"><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CHEQUE">Cheque</option><option value="OTHER">Other</option></select></div>
+        <div><label>Mode</label><select id="mm-mode"><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CARD">Card (debit / credit)</option><option value="CHEQUE">Cheque</option><option value="OTHER">Other</option></select></div>
       </div>` : ''}
       <div class="row2c" style="margin-top:8px;">
         <div><label>${isPay ? 'UTR / cheque no.' : 'MMC’s payment reference (UTR etc.)'}</label><input type="text" id="mm-ref"></div>
@@ -10398,7 +10398,7 @@ async function acExpForm(fromKind){
         <label style="margin-top:8px;display:block;">Details</label><input type="text" id="ex-desc" placeholder="What this expense was for">
         <div class="row2c" id="ex-paid-wrap" style="margin-top:8px;">
           <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='PETTY'?'none':'';">
-            <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="PETTY">Petty cash box</option></select></div>
+            <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CARD">Bank — Card (debit / credit)</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="PETTY">Petty cash box</option></select></div>
           <div id="ex-bank-wrap"><label>Bank account</label><select id="ex-bank">${bankOpts}</select></div>
         </div>
         <button class="btn gold sm" style="margin-top:10px;" onclick="acExpenseAdd()">Record expense</button>
@@ -10693,7 +10693,7 @@ async function acEntryForm(kind){
     <div id="en-counter-wrap" style="display:none"><label>Transfer to *</label><select id="en-counter">${bankOpts}</select></div>
     <div id="en-dir-wrap" style="display:none"><label>Direction *</label><select id="en-dir"><option value="OUT">Money OUT</option><option value="IN">Money IN</option></select></div></div>
     <div class="row2c"><div><label>Date</label><input type="date" id="en-date" value="${calFmt(new Date())}"></div>
-    <div id="en-mode-wrap"><label>Mode</label><select id="en-mode"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div></div>
+    <div id="en-mode-wrap"><label>Mode</label><select id="en-mode"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option value="CARD">CARD (debit / credit card)</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div></div>
     <div class="row2c"><div><label id="en-ref-lbl">Reference no. (UTR / cheque)</label><input type="text" id="en-ref"></div>
     <div id="en-staff-wrap"><label>Staff — only if this money is that person’s own (salary / advance / recovery); leave blank otherwise</label><select id="en-staff">${staffOpts}</select></div></div>
     <label id="en-narr-lbl">Payee / narration</label><input type="text" id="en-narr" placeholder="Who / what for">
@@ -10892,7 +10892,7 @@ async function acEdit(id){
   const bankOpts = sel => acBanks.map(b=>`<option value="${b.id}" ${b.id===sel?'selected':''}>${esc(b.name)}</option>`).join('');
   const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}" ${s.id===e.staff_id?'selected':''}>${esc(s.full_name)}</option>`).join('');
   const KINDS = [['BANK_IN','Money IN (deposit / receipt)'],['BANK_OUT','Money OUT (withdrawal)'],['PAYMENT','Payment (vendor / expense)'],['TRANSFER','Transfer between accounts'],['RECOVERY','Advance recovery (cash in)'],['SALARY','Salary'],['ADVANCE','Staff advance'],['OTHER','Other']];
-  const MODES = ['','NEFT','RTGS','UPI','CHEQUE','CASH','OTHER'];
+  const MODES = ['','NEFT','RTGS','UPI','CARD','CHEQUE','CASH','OTHER'];
   const host = $('ac-entry-form') || $('acct-body');
   const box = document.createElement('div'); box.id = 'ac-edit-box';
   const old = $('ac-edit-box'); if (old) old.remove();
