@@ -11490,17 +11490,27 @@ async function acBonusApprove(id, reject, fromAppr){
   if (error){ alert('Could not update: '+error.message); return; }
   acctTab(fromAppr ? 'appr' : 'salary');
 }
-async function acBonusPay(id){
-  const active = acBanks.filter(b=>b.is_active);
+// Pay an approved bonus / incentive: asks the bank, date, mode and reference, then posts the ledger entry
+function acBonusPay(id){
+  const b = (window.__acBonuses||[]).find(x=>x.id===id); if (!b) return;
+  const active = acBanks.filter(x=>x.is_active);
   if (!active.length){ alert('Add a bank account first.'); return; }
-  const bank = active.length===1 ? active[0].id : (function(){
-    const name = prompt('Pay from which bank?\n'+active.map((b,i)=>(i+1)+'. '+b.name).join('\n'), '1');
-    const idx = Number(name)-1; return active[idx] ? active[idx].id : null; })();
-  if (!bank) return;
-  const ref = prompt('Payment reference no. (optional):','')||null;
-  const { error } = await db.schema('acct').rpc('pay_bonus', { p_bonus: id, p_bank: bank, p_mode: 'NEFT', p_ref: ref });
-  if (error){ alert('Could not pay: '+error.message); return; }
-  acctTab('salary');
+  apprModal('Pay ' + (b.kind==='INCENTIVE'?'incentive':'bonus') + ' ' + (b.bonus_no||''), `
+    <p style="font-size:13px;margin:0 0 8px;"><b>${esc(b.staff_name||acStaffName(b.staff_id))}</b> · ${esc(b.period)}${b.reason?' · '+esc(b.reason):''} — <b>₹ ${inr(b.amount)}</b></p>
+    <div class="row2c"><div><label>Pay from bank *</label><select id="bp-bank">${active.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></div>
+      <div><label>Payment date *</label><input type="date" id="bp-date" value="${calFmt(new Date())}"></div></div>
+    <div class="row2c"><div><label>Mode</label><select id="bp-mode"><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CARD">Card (debit / credit)</option><option value="CHEQUE">Cheque</option><option value="CASH">Cash</option><option value="OTHER">Other</option></select></div>
+      <div><label>Reference no. (UTR / cheque)</label><input type="text" id="bp-ref" placeholder="optional"></div></div>
+    <p style="font-size:11.5px;color:#777;margin:4px 0 0;">The payment is posted to that bank's ledger against the staff member (kind BONUS) on the date given, and the ${b.kind==='INCENTIVE'?'incentive':'bonus'} is marked PAID.</p>
+    <button class="btn gold sm" style="margin-top:10px;" onclick="acBonusPayGo('${b.id}')">Pay ₹ ${inr(b.amount)}</button><div id="bp-msg" style="font-size:12px;margin-top:6px;"></div>`);
+}
+async function acBonusPayGo(id){
+  const bank = $('bp-bank').value, date = $('bp-date').value;
+  if (!bank){ say('bp-msg','Choose the bank.',false); return; }
+  if (!date){ say('bp-msg','Enter the payment date.',false); return; }
+  const { error } = await db.schema('acct').rpc('pay_bonus', { p_bonus: id, p_bank: bank, p_mode: $('bp-mode').value || 'NEFT', p_ref: ($('bp-ref').value||'').trim() || null, p_date: date });
+  if (error){ say('bp-msg','Could not pay: '+error.message,false); return; }
+  apprModalClose(); acctTab('salary');
 }
 async function acBonusDelete(id){
   const b = (window.__acBonuses||[]).find(x=>x.id===id);
