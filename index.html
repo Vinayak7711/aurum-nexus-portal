@@ -2983,8 +2983,8 @@ async function fdErpData(){
   if (FD.erp) return FD.erp;
   const A = db.schema('acct'); const from = fdQRange(FD.fy,0)[0], to = fdQRange(FD.fy,3)[1];
   const safe = async p => { try { const r = await p; return r.error ? null : (r.data || []); } catch(e){ return null; } };
-  const [banks, ents, petty, exps, allExp, slips, bonuses, assets, avl] = await Promise.all([
-    safe(A.from('v_bank_balances').select('id, name, opening_balance, balance')),
+  let [banks, ents, petty, exps, allExp, slips, bonuses, assets, avl] = await Promise.all([
+    safe(A.from('v_bank_balances').select('id, name, opening_balance, balance, principal_id')),
     safe(A.from('v_entries').select('entry_date, kind, direction, amount, status, bank_account_id, counter_bank_account_id, narration').eq('status','APPROVED').lte('entry_date', to).limit(20000)),
     safe(A.from('petty_cash').select('entry_kind, amount, status, category, expense_date').eq('status','APPROVED').lte('expense_date', to).limit(20000)),
     safe(A.from('expenses').select('exp_date, category, amount, bill_amount, petty_id').gte('exp_date', from).lte('exp_date', to).limit(20000)),
@@ -2994,6 +2994,9 @@ async function fdErpData(){
     safe(A.from('assets').select('purchase_value, purchase_date, status, disposed_on')),
     safe(A.from('asset_value_log').select('kind, as_on, change_amount').gte('as_on', from).lte('as_on', to))
   ]);
+  { const pers = new Set((banks||[]).filter(b=>b.principal_id).map(b=>b.id));   // money a director paid personally is not company cash
+    if (banks) banks = banks.filter(b=>!pers.has(b.id));
+    if (ents) ents = ents.filter(e=>!pers.has(e.bank_account_id)); }
   FD.erp = { banks, ents, petty, exps, allExpCats: (allExp||[]).map(x=>x.category), slips, bonuses, assets, avl };
   return FD.erp;
 }
@@ -8884,6 +8887,20 @@ async function openAcct(){
 // (never the person who typed the entry).
 function acWho(e){ if (!e) return ''; const staffKinds = {SALARY:1, BONUS:1, ADVANCE:1, RECOVERY:1}; return e.payee || e.party_name || (staffKinds[e.kind] ? (e.staff_name||'') : '') || ''; }
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
+// "Paid personally by <director / promoter>" accounts: a payment from one is the person's own money spent for the company —
+// it reaches the vendor / expense head like any payment, and the Directors & promoters ledger shows it as money the company owes them.
+function acBankIsPersonal(id){ const b = acBanks.find(x=>x.id===id); return !!(b && b.principal_id); }
+function acBankOpts(sel, opts){
+  const O = opts || {}; const act = acBanks.filter(b=>b.is_active || (sel && b.id===sel));
+  const co = act.filter(b=>!b.principal_id), pe = O.noPersonal ? [] : act.filter(b=>b.principal_id);
+  const op = b => `<option value="${b.id}" ${b.id===sel?'selected':''}>${esc(b.name)}</option>`;
+  return co.map(op).join('') + (pe.length ? `<optgroup label="👔 Paid personally by a director / promoter (company owes them)">${pe.map(op).join('')}</optgroup>` : '');
+}
+function acPersonalNote(bankId, what){
+  const b = acBanks.find(x=>x.id===bankId); if (!b || !b.principal_id) return '';
+  const p = (window.__principals||[]).find(x=>x.id===b.principal_id);
+  return `<div style="font-size:11.5px;color:#5a4a00;background:#faf6ea;border:1px solid #e3d9b8;border-radius:8px;padding:6px 10px;margin:6px 0;">👔 Paid from <b>${esc(p?p.name:b.name.replace('Paid personally by ',''))}</b>'s own money — ${what||'the payment'} still goes to the vendor / expense head as usual, no company bank moves, and the amount is shown in the <b>Directors &amp; promoters ledger</b> as money the company owes ${p&&p.role==='PROMOTER'?'the promoter':'the director'}.</div>`;
+}
 function acStaffName(id){ const s = acStaff.find(x=>x.id===id); return s ? s.full_name : '—'; }
 async function acctTab(t){
   for (const k of ['banks','newe','ledger','tax','vdues','recv','exp','salary','adv','assets','appr']){ const c = $('ac-'+k); if (c) c.classList.toggle('on', k===t || (t==='petty' && k==='ledger')); }
@@ -8991,8 +9008,10 @@ async function acctTab(t){
   }
 
   if (t === 'banks'){
-    const { data: bals, error } = await A.from('v_bank_balances').select('*').order('name');
+    const { data: balsAll, error } = await A.from('v_bank_balances').select('*').order('name');
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
+    const bals = (balsAll||[]).filter(b=>!b.principal_id), pers = (balsAll||[]).filter(b=>b.principal_id && (b.is_active || Number(b.balance)!==0));
+    await acPrincipals();
     B.innerHTML = `
       <h4 class="sec">Bank accounts &amp; balances</h4>
       <div class="table-scroll"><table><thead><tr><th>Account</th><th>Bank</th><th>A/C</th><th class="amount">Opening ₹</th><th class="amount">Balance ₹</th><th></th></tr></thead><tbody>
@@ -9002,7 +9021,12 @@ async function acctTab(t){
         || '<tr><td colspan="6" style="color:#777">No bank accounts yet.</td></tr>'}
       </tbody></table></div>
       ${canFinEdit()?`<button class="btn gold sm" style="margin-top:10px;" onclick="acBankEdit()">+ Add bank account</button>`:''}
-      <div id="ac-bank-form"></div>`;
+      <div id="ac-bank-form"></div>
+      ${pers.length ? `<h4 class="sec" style="margin-top:18px;">👔 Paid personally by directors &amp; promoters</h4>
+      <p style="font-size:11.5px;color:#777;margin:2px 0 8px;">When a director / promoter pays a vendor or an expense from their own money, choose their name under <b>From our bank</b> on the entry form. The payment reaches the vendor / expense head as usual and the amount below is what the company owes them for it (their full account, with money they put in and repayments, is under Ledger → Directors &amp; promoters).</p>
+      <div class="table-scroll"><table><thead><tr><th>Person</th><th class="amount">Paid on the company’s behalf ₹</th><th></th></tr></thead><tbody>
+      ${pers.map(b=>{ const p=(window.__principals||[]).find(x=>x.id===b.principal_id); return `<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(p?p.name:b.name)}</b> <span style="font-size:11px;color:#777">${p?(p.role==='PROMOTER'?'Promoter':'Director'):''}</span></td><td class="amount" style="font-weight:700;color:#b3261e">${inr(-Number(b.balance||0))}</td><td style="white-space:nowrap"><button class="mini" onclick="window.acLedType='D:';window.acLedSel='D:${b.principal_id}';acctTab('ledger')">📖 Ledger</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : ''}`;
     return;
   }
 
@@ -9032,7 +9056,7 @@ async function acctTab(t){
     };
     const matchLed = (e, key) => {
       const k = key.slice(0,2), name = key.slice(2);
-      if (key==='T:B:') return !!(e.bank_name_label || e.counter_bank_label);
+      if (key==='T:B:') return !!(e.bank_name_label || e.counter_bank_label) && !acBankIsPersonal(e.bank_account_id);
       if (key==='T:P:') return !!e.party_name;
       if (key==='T:S:') return staffRel(e);
       if (key==='T:D:') return (window.__principals||[]).some(p => acPrincipalRel(e, p));
@@ -9079,7 +9103,7 @@ async function acctTab(t){
           pettyLabel += ' — cash in hand ₹ ' + inr(bal); } catch(e){}
       }
       const LT = {
-        'B:': ['🏦 Bank accounts', mkItemsL('B:', [...new Set((all||[]).flatMap(e=>[e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort())],
+        'B:': ['🏦 Bank accounts', mkItemsL('B:', [...new Set((all||[]).flatMap(e=>[acBankIsPersonal(e.bank_account_id) ? null : e.bank_name_label, e.counter_bank_label]).filter(Boolean))].sort())],
         'P:': ['🤝 Party / distributor', mkItemsL('P:', distNamesL)],
         'V:': ['💳 Vendor', vendorItemsL],
         'M:': ['🏭 MMC', [{ key: 'M:MMC', label: mmcLabel }]],
@@ -9460,6 +9484,9 @@ async function acctTab(t){
           else { dOut = true; dIn = !!e.counter_bank_label; }
         }
         return Object.assign({}, e, { _in: dIn, _out: dOut }); }); }
+    // a payment made from a director's own money: in their ledger it is money the company owes them (IN), not money paid to them
+    const isDLed = (sel==='T:D:' || sel.slice(0,2)==='D:');
+    es = es.map(e => acBankIsPersonal(e.bank_account_id) ? Object.assign({}, e, { _personal: true, _in: isDLed ? true : e._in, _out: isDLed ? false : e._out }) : e);
     const isUnlinked = e => { const l = linkOf[e.id]; return e.direction==='OUT' && ['PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && e.status!=='REJECTED' && !(l && (l.mmc_link||l.vendor_link||l.expense_link||l.salary_link||l.petty_link)); };
     const unlinkedN = es.filter(isUnlinked).length;
     if (window.acLedOnlyUnlinked) es = es.filter(isUnlinked);
@@ -9488,12 +9515,12 @@ async function acctTab(t){
       <div id="ac-entry-form"></div>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       ${(sel==='T:S:' || sel.slice(0,2)==='S:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Only this person’s own money is shown — salary, advances, recoveries and payments made out in their name. Entries they merely keyed in for vendors, rent or other heads belong to those ledgers, not here.</p>` : ''}
-      ${(sel==='T:D:' || sel.slice(0,2)==='D:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;"><b>Money in</b> = received from the director / promoter (unsecured loan, capital, fund transfer in); <b>Money out</b> = paid back or paid to them. <b>Net</b> above is what the company still owes them (negative = they owe the company). Entries are linked to a person on the bank-entry form; an older entry that names them in the payee / narration is picked up automatically — use <b>👔 Link</b> on a row to fix the person.</p>` : ''}
+      ${(sel==='T:D:' || sel.slice(0,2)==='D:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;"><b>Money in</b> = received from the director / promoter (unsecured loan, capital, fund transfer in); <b>Money out</b> = paid back or paid to them. A vendor payment or expense they paid <b>from their own money</b> (chosen under “From our bank” on the entry form) also counts as money in — the company owes it to them. <b>Net</b> above is what the company still owes them (negative = they owe the company). Entries are linked to a person on the bank-entry form; an older entry that names them in the payee / narration is picked up automatically — use <b>👔 Link</b> on a row to fix the person.</p>` : ''}
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
       ${(es||[]).map(e=>{const who=acWho(e)||'';const inA=e._in?inr(e.amount):'';const outA=e._out?inr(e.amount):'';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
           `<td>${who?esc(who):esc((e.narration||'—').slice(0,80))}${who&&e.narration&&e.narration.trim()!==who.trim()?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,80))+'</span>':''}${linkHtml(e)}</td>` +
-          `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}${e.kind==='TRANSFER'&&sel.slice(0,2)==='B:'?`<br><span style="font-size:10.5px;color:#777">${e._in&&!e._out?'transfer received from '+esc(e.bank_name_label||''):e._out&&!e._in?'transfer sent to '+esc(e.counter_bank_label||''):''}</span>`:''}</td>` +
+          `<td>${e._personal ? '👔 ' + esc(e.bank_name_label||'') + '<br><span style="font-size:10.5px;color:#777">own money, paid for the company</span>' : esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}${e.kind==='TRANSFER'&&sel.slice(0,2)==='B:'?`<br><span style="font-size:10.5px;color:#777">${e._in&&!e._out?'transfer received from '+esc(e.bank_name_label||''):e._out&&!e._in?'transfer sent to '+esc(e.counter_bank_label||''):''}</span>`:''}</td>` +
           `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` +
           `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
           `<td>${(e.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acApprove('${e.id}',false)">Approve</button> <button class="mini" onclick="acApprove('${e.id}',true)">Reject</button> `:'')+
@@ -9522,7 +9549,7 @@ async function acctTab(t){
     const pendN = rows.filter(r=>r.status==='PENDING_APPROVAL').length;
     const CATS = ['Office supplies','Tea, coffee & snacks','Postage & courier','Emergency repairs','Local travel (taxi / auto)','Other'];
     const bankName = id => { const b = acBanks.find(x=>x.id===id); return b ? b.name : 'bank'; };
-    const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+    const bankOpts = acBanks.filter(b=>b.is_active && !b.principal_id).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
     B.innerHTML = `
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
         <button class="btn ghost sm" onclick="window.acLedType='C:';window.acLedSel='C:BOX';acctTab('ledger')">‹ Petty cash book (ledger)</button>
@@ -10071,7 +10098,8 @@ function acPettyVoucher(id){
   printHtml('Petty cash voucher '+r.pc_no, body);
 }
 async function acVendorPayForm(vid, vname, out){
-  const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  await acPrincipals();
+  const bankOpts = acBankOpts('');
   $('vd-form').innerHTML = '<div class="card" style="margin-top:12px;max-width:680px;">Loading the purchase orders…</div>';
   const { data: pos, error } = await db.schema('acct').rpc('vendor_po_options', { p_vendor: vid });
   if (error){ $('vd-form').innerHTML = `<div class="msg err">Could not load the purchase orders: ${esc(error.message)}</div>`; return; }
@@ -10092,8 +10120,9 @@ async function acVendorPayForm(vid, vname, out){
       <div class="row2c" style="margin-top:8px;">
         <div><label>To be paid by *</label><select id="vp-mode" onchange="$('vp-bank-wrap').style.display=this.value==='CASH'?'none':'';">
           <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CARD">Bank — Card (debit / credit)</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="CASH">Cash</option></select></div>
-        <div id="vp-bank-wrap"><label>From bank</label><select id="vp-bank">${bankOpts}</select></div>
+        <div id="vp-bank-wrap"><label>From bank — or a director / promoter’s own money</label><select id="vp-bank" onchange="$('vp-personal-note').innerHTML=acPersonalNote(this.value)">${bankOpts}</select></div>
       </div>
+      <div id="vp-personal-note"></div>
       <label style="margin-top:8px;">Note for the approver</label><input type="text" id="vp-note" placeholder="e.g. part payment, balance on delivery">
       <p style="font-size:11.5px;color:#999;margin:8px 0 0;">The UTR / cheque number is not entered here — the person approving the payment fills it in when they release it.</p>
       <button class="btn gold sm" style="margin-top:10px;" ${poOpts?'':'disabled'} onclick="acVendorPay('${vid}')">Send for approval</button>
@@ -10191,7 +10220,8 @@ async function acMmcForm(kind, targetId, vid, vname, out){
   window.__mmcVendors = vl || [];
   if (!acBanks.length){ try { const b = await db.schema('acct').from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   const vOpts = '<option value="">— not for a particular vendor —</option>' + (vl||[]).map(v=>`<option value="${v.id}" ${v.id===vid?'selected':''}>${esc(v.name)}</option>`).join('');
-  const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  await acPrincipals();
+  const bankOpts = acBankOpts('');
   const isPay = kind === 'pay';
   T.innerHTML = `
     <div class="card" style="margin-top:12px;max-width:700px;">
@@ -10211,7 +10241,7 @@ async function acMmcForm(kind, targetId, vid, vname, out){
       </div>
       ${isPay ? `
       <div class="row2c" style="margin-top:8px;">
-        <div><label>From bank *</label><select id="mm-bank">${bankOpts}</select></div>
+        <div><label>From bank * — or a director / promoter’s own money</label><select id="mm-bank" onchange="$('mm-personal-note').innerHTML=acPersonalNote(this.value,'the money sent to MMC')">${bankOpts}</select><div id="mm-personal-note"></div></div>
         <div><label>Mode</label><select id="mm-mode"><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CARD">Card (debit / credit)</option><option value="CHEQUE">Cheque</option><option value="OTHER">Other</option></select></div>
       </div>` : ''}
       <div class="row2c" style="margin-top:8px;">
@@ -10450,7 +10480,8 @@ async function acExpForm(fromKind){
   const CATS_EXP = [...new Set([...['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'], ...(window.__vnHeadsExtra||[])])].sort((a,b)=>a.localeCompare(b));
   const expVen = (window.__enVendors||[]).filter(v=>v.vendor_kind==='EXPENSE');
   const exVenOpts = '<option value="">— not from a registered expense vendor (type the payee below) —</option>' + expVen.map(v=>acVenOpt(v)).join('');
-  const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  await acPrincipals();
+  const bankOpts = acBankOpts('');
   let advOpen = [];
   try { const { data: av } = await A.from('v_advances').select('*').eq('adv_type','EXPENSE').eq('status','APPROVED').order('given_on');
         advOpen = (av||[]).filter(a => Number(a.outstanding) > 0); } catch(e){}
@@ -10483,7 +10514,7 @@ async function acExpForm(fromKind){
         <div class="row2c" id="ex-paid-wrap" style="margin-top:8px;">
           <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='PETTY'?'none':'';">
             <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CARD">Bank — Card (debit / credit)</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="PETTY">Petty cash box</option></select></div>
-          <div id="ex-bank-wrap"><label>Bank account</label><select id="ex-bank">${bankOpts}</select></div>
+          <div id="ex-bank-wrap"><label>Bank account — or a director / promoter’s own money</label><select id="ex-bank" onchange="$('ex-personal-note').innerHTML=acPersonalNote(this.value,'the expense')">${bankOpts}</select><div id="ex-personal-note"></div></div>
         </div>
         <button class="btn gold sm" style="margin-top:10px;" onclick="acExpenseAdd()">Record expense</button>
         <div id="ex-msg"></div></div>`;
@@ -10821,7 +10852,7 @@ async function acEntrySetPrincipal(entryId, pid){
 }
 async function acEntryForm(kind){
   if (!acBanks.length){ try { const b = await db.schema('acct').from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
-  const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  const bankOpts = acBanks.filter(b=>b.is_active && !b.principal_id).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
   await acVendorList(); await acPrincipals();
   const vendorOpts = '<option value="">— choose the vendor —</option>' + window.__enVendors.map(v=>acVenOpt(v)).join('');
@@ -10862,13 +10893,14 @@ async function acEntryForm(kind){
       <div id="en-manual-wrap" style="display:none"><label>Payee name — if the party is not in the vendor list</label><input type="text" id="en-payee-manual" placeholder="Type the name of the person / firm being paid">
         <p style="font-size:11.5px;color:#777;margin:4px 0 8px;">Leave the vendor as "— choose the vendor —" and type the payee here. The payment is posted to the bank ledger under this name (no vendor dues are touched).</p></div>
     </div>
-    <div class="row2c"><div id="en-bank-wrap"><label id="en-bank-lbl">Bank account *</label><select id="en-bank">${bankOpts}</select></div>
+    <div class="row2c"><div id="en-bank-wrap"><label id="en-bank-lbl">Bank account *</label><select id="en-bank" onchange="acEnBankChange()">${acBankOpts('')}</select></div>
     <div id="en-counter-wrap" style="display:none"><label>Transfer to *</label><select id="en-counter">${bankOpts}</select></div>
     <div id="en-dir-wrap" style="display:none"><label>Direction *</label><select id="en-dir"><option value="OUT">Money OUT</option><option value="IN">Money IN</option></select></div></div>
     <div class="row2c"><div><label>Date</label><input type="date" id="en-date" value="${calFmt(new Date())}"></div>
     <div id="en-mode-wrap"><label>Mode</label><select id="en-mode"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option value="CARD">CARD (debit / credit card)</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div></div>
     <div class="row2c"><div><label id="en-ref-lbl">Reference no. (UTR / cheque)</label><input type="text" id="en-ref"></div>
     <div id="en-staff-wrap"><label>Staff — only if this money is that person’s own (salary / advance / recovery); leave blank otherwise</label><select id="en-staff">${staffOpts}</select></div></div>
+    <div id="en-personal-note"></div>
     <div id="en-principal-wrap"><label>Director / promoter — only if this money is received from or paid to one of them (loan, capital, repayment); leave blank otherwise</label><select id="en-principal">${acPrincipalOpts('')}</select></div>
     <label id="en-narr-lbl">Payee / narration</label><input type="text" id="en-narr" placeholder="Who / what for">
     <p id="en-help" style="font-size:12px;color:#777;margin-top:6px;"></p>
@@ -10878,6 +10910,13 @@ async function acEntryForm(kind){
   if (kind) $('en-kind').value = kind;
   acKindChange();
   $('ac-entry-form').scrollIntoView({behavior:'smooth'});
+}
+function acEnBankChange(){
+  const b = $('en-bank'); if (!b) return;
+  const pers = acBankIsPersonal(b.value), k = $('en-kind').value;
+  if ($('en-personal-note')) $('en-personal-note').innerHTML = pers ? acPersonalNote(b.value, k==='MMC_PAY' ? 'the money sent to MMC' : 'the payment') : '';
+  if ($('en-principal-wrap')) $('en-principal-wrap').style.display = pers ? 'none' : '';
+  if (pers && $('en-principal')) $('en-principal').value = '';
 }
 function acKindChange(){
   const k = $('en-kind').value;
@@ -10902,6 +10941,11 @@ function acKindChange(){
     : k==='MMC_RCPT' ? 'Distributors pay the basic to MMC; MMC pays it on to Aurum. This posts the money received into your bank ledger and reduces the net due from MMC in the MMC basic account (both linked). It is not mixed with the money we send MMC for vendor payments.' : '';
   if (isVen || k==='PAYMENT'){ const m = $('en-mode'); if (m && !m.value) m.value = 'NEFT'; acEnLoadPos(); }
   const ph = $('en-narr'); if (ph) ph.placeholder = isVen ? 'e.g. part payment, balance on delivery' : 'Who / what for';
+  // a director's own money can only make a payment — the other kinds need a company bank
+  { const b = $('en-bank'); if (b){ const payKind = ['VPAY','PAYMENT','MMC_PAY','OTHER'].includes(k);
+      b.querySelectorAll('optgroup').forEach(g => { g.disabled = !payKind; g.style.display = payKind ? '' : 'none'; });
+      if (!payKind && acBankIsPersonal(b.value)){ const first = acBanks.find(x=>x.is_active && !x.principal_id); if (first) b.value = first.id; }
+      acEnBankChange(); } }
 }
 // manual payee box: only for a direct vendor payment when no vendor from the list is chosen
 function acEnManualToggle(){
@@ -10968,6 +11012,8 @@ async function acDupWarn(amt, date, dir){
 async function acEntrySave(){
   let k = $('en-kind').value; const amt = Number($('en-amt').value);
   if (!(amt>0)){ say('en-msg','Amount must be above zero.',false); return; }
+  if ($('en-bank') && acBankIsPersonal($('en-bank').value) && !(['VPAY','PAYMENT','MMC_PAY'].includes(k) || (k==='OTHER' && $('en-dir').value==='OUT'))){
+    say('en-msg','A director / promoter’s own money can only be used for a payment (vendor payment, other payment, payment to MMC). For money they put into the company, record Money IN into the company bank and pick their name under Director / promoter.',false); return; }
   // a plain "Payment" with a vendor picked is a vendor payment — it must reach Vendor Dues
   if (k === 'PAYMENT' && $('en-vendor') && $('en-vendor').value) k = 'VPAY';
   { const dir = ['VPAY','MMC_PAY','PAYMENT','BANK_OUT','SALARY','BONUS','ADVANCE'].includes(k) ? 'OUT' : ['BANK_IN','RECOVERY','MMC_RCPT'].includes(k) ? 'IN' : null;
@@ -11067,7 +11113,7 @@ async function acEdit(id){
     A2.from('entry_edits').select('edited_at, reason, edited_by').eq('entry_id', id).order('edited_at', {ascending:false}).limit(5)
   ]);
   const linked = [...(vpL||[]).map(x=>'vendor payment '+x.pay_no), ...(exL||[]).map(x=>'expense '+x.exp_no), ...(mmL||[]).map(x=>'MMC line '+x.txn_no)];
-  const bankOpts = sel => acBanks.map(b=>`<option value="${b.id}" ${b.id===sel?'selected':''}>${esc(b.name)}</option>`).join('');
+  const bankOpts = sel => acBankOpts(sel);
   const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}" ${s.id===e.staff_id?'selected':''}>${esc(s.full_name)}</option>`).join('');
   const KINDS = [['BANK_IN','Money IN (deposit / receipt)'],['BANK_OUT','Money OUT (withdrawal)'],['PAYMENT','Payment (vendor / expense)'],['TRANSFER','Transfer between accounts'],['RECOVERY','Advance recovery (cash in)'],['SALARY','Salary'],['ADVANCE','Staff advance'],['OTHER','Other']];
   const MODES = ['','NEFT','RTGS','UPI','CARD','CHEQUE','CASH','OTHER'];
@@ -11673,7 +11719,7 @@ async function acBonusApprove(id, reject, fromAppr){
 // Pay an approved bonus / incentive: asks the bank, date, mode and reference, then posts the ledger entry
 function acBonusPay(id){
   const b = (window.__acBonuses||[]).find(x=>x.id===id); if (!b) return;
-  const active = acBanks.filter(x=>x.is_active);
+  const active = acBanks.filter(x=>x.is_active && !x.principal_id);
   if (!active.length){ alert('Add a bank account first.'); return; }
   apprModal('Pay ' + (b.kind==='INCENTIVE'?'incentive':'bonus') + ' ' + (b.bonus_no||''), `
     <p style="font-size:13px;margin:0 0 8px;"><b>${esc(b.staff_name||acStaffName(b.staff_id))}</b> · ${esc(b.period)}${b.reason?' · '+esc(b.reason):''} — <b>₹ ${inr(b.amount)}</b></p>
@@ -11733,7 +11779,7 @@ async function acSlipApprove(id, reject){
   acctTab('salary');
 }
 async function acSlipPay(id){
-  const active = acBanks.filter(b=>b.is_active);
+  const active = acBanks.filter(b=>b.is_active && !b.principal_id);
   if (!active.length){ alert('Add a bank account first.'); return; }
   const bank = active.length===1 ? active[0].id : (function(){
     const name = prompt('Pay from which bank?\n'+active.map((b,i)=>(i+1)+'. '+b.name).join('\n'), '1');
@@ -11864,7 +11910,7 @@ async function acAdvSave(){
 async function acAdvApprove(id, reject){
   let bank = null;
   if (!reject){
-    const active = acBanks.filter(b=>b.is_active);
+    const active = acBanks.filter(b=>b.is_active && !b.principal_id);
     if (!active.length){ alert('Add a bank account first.'); return; }
     bank = active.length===1 ? active[0].id : (function(){
       const n = prompt('Pay advance from which bank?\n'+active.map((b,i)=>(i+1)+'. '+b.name).join('\n'), '1');
@@ -11892,7 +11938,7 @@ async function apprAct(kind, id, reject){
   } else if (kind === 'adv'){
     let bank = null;
     if (!reject){
-      const active = acBanks.filter(b=>b.is_active);
+      const active = acBanks.filter(b=>b.is_active && !b.principal_id);
       if (!active.length){ alert('Add a bank account first.'); return; }
       bank = active.length===1 ? active[0].id : (function(){
         const n = prompt('Pay advance from which bank?\n'+active.map((b,i)=>(i+1)+'. '+b.name).join('\n'), '1');
