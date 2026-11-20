@@ -9740,7 +9740,9 @@ async function acctTab(t){
     window.acExpCat = window.acExpCat || ''; window.acExpDept = window.acExpDept || ''; window.acExpFrom = window.acExpFrom || ''; window.acExpTo = window.acExpTo || '';
     const cats = [...new Set(all.map(r=>r.category).filter(Boolean))].sort();
     const depts = [...new Set(all.map(r=>r.dept).filter(Boolean))].sort();
-    const rows = all.filter(r => (!window.acExpCat || r.category === window.acExpCat) && (!window.acExpDept || (window.acExpDept === '__NONE__' ? !r.dept : r.dept === window.acExpDept))
+    const PC = 'Petty cash — ';
+    const catOk = r => !window.acExpCat || r.category === window.acExpCat || (window.acExpCat === 'Petty cash' && String(r.category||'').startsWith(PC));
+    const rows = all.filter(r => catOk(r) && (!window.acExpDept || (window.acExpDept === '__NONE__' ? !r.dept : r.dept === window.acExpDept))
       && (!window.acExpFrom || String(r.exp_date) >= window.acExpFrom) && (!window.acExpTo || String(r.exp_date) <= window.acExpTo));
     window.__expRows = rows;
     const ym = new Date().toISOString().slice(0,7);
@@ -9761,7 +9763,7 @@ async function acctTab(t){
       <p style="font-size:12px;color:#777;margin:0 0 8px;">This tab is for viewing — every rupee of expense, from wherever it was paid: lines entered from <b>New Entry → Business expense</b>, plus (shaded, booked automatically) payments to a vendor marked <b>Expense vendor</b> or against an Expense purchase order, paid <b>salary slips</b> and <b>bonuses</b> under Salary &amp; wages, and approved <b>petty-cash</b> vouchers under “Petty cash — …”. Payments to a vendor marked <b>Expense vendor</b> in Party Master appear here automatically under that vendor’s expense head (shaded lines) — they are deleted from the vendor ledger, not from here.</p>
       <div class="card" style="padding:12px;margin-bottom:12px;">
         <div class="row2c">
-          <div><label>Expense head</label><select id="exf-cat" onchange="window.acExpCat=this.value;acctTab('exp')"><option value="">— all heads —</option>${cats.map(c=>`<option${window.acExpCat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div>
+          <div><label>Expense head</label><select id="exf-cat" onchange="window.acExpCat=this.value;acctTab('exp')"><option value="">— all heads —</option>${cats.filter(c=>!c.startsWith(PC)).map(c=>`<option${window.acExpCat===c?' selected':''}>${esc(c)}</option>`).join('')}${cats.some(c=>c.startsWith(PC))?`<option value="Petty cash"${window.acExpCat==='Petty cash'?' selected':''}>Petty cash — all subheads</option>${cats.filter(c=>c.startsWith(PC)).map(c=>`<option value="${esc(c)}"${window.acExpCat===c?' selected':''}>&nbsp;&nbsp;&nbsp;↳ ${esc(c.slice(PC.length))}</option>`).join('')}`:''}</select></div>
           <div><label>Department / section</label><select id="exf-dept" onchange="window.acExpDept=this.value;acctTab('exp')"><option value="">— all departments —</option><option value="__NONE__"${window.acExpDept==='__NONE__'?' selected':''}>General (no department)</option>${depts.map(d=>`<option${window.acExpDept===d?' selected':''}>${esc(d)}</option>`).join('')}</select></div>
         </div>
         <div class="row2c" style="margin-top:8px;">
@@ -9773,7 +9775,10 @@ async function acctTab(t){
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
         <div style="flex:1;min-width:260px;"><h4 class="sec">Head-wise</h4>
         <div class="table-scroll"><table><thead><tr><th>Expense head</th><th class="amount">Entries</th><th class="amount">Paid ₹</th></tr></thead><tbody>
-        ${Object.keys(byHead).sort((a,b)=>byHead[b].amt-byHead[a].amt).map(k=>`<tr style="cursor:pointer" onclick="window.acExpCat='${esc(k).replace(/'/g,'&#39;')}';acctTab('exp')"><td>${esc(k)}</td><td class="amount">${byHead[k].n}</td><td class="amount" style="font-weight:600">${inr(byHead[k].amt)}</td></tr>`).join('') || '<tr><td colspan="3" style="color:#777">Nothing in this selection.</td></tr>'}
+        ${(()=>{ const pcKeys = Object.keys(byHead).filter(k=>k.startsWith(PC)); const main = Object.keys(byHead).filter(k=>!k.startsWith(PC)).map(k=>({ k, n: byHead[k].n, amt: byHead[k].amt, sub: null }));
+            if (pcKeys.length) main.push({ k: 'Petty cash', n: pcKeys.reduce((a,k)=>a+byHead[k].n,0), amt: pcKeys.reduce((a,k)=>a+byHead[k].amt,0), sub: pcKeys.map(k=>({ k, label: k.slice(PC.length), n: byHead[k].n, amt: byHead[k].amt })).sort((a,b)=>b.amt-a.amt) });
+            const rowH = (k, label, n, amt, sub) => `<tr style="cursor:pointer;${sub?'font-size:12px;color:#555;':''}" onclick="window.acExpCat='${esc(k).replace(/'/g,'&#39;')}';acctTab('exp')"><td style="${sub?'padding-left:26px;':''}">${sub?'↳ ':''}${esc(label)}${!sub&&k==='Petty cash'?' <span style="font-size:10.5px;color:#777;font-weight:normal;">(all subheads)</span>':''}</td><td class="amount">${n}</td><td class="amount" style="font-weight:${sub?'normal':'600'}">${inr(amt)}</td></tr>`;
+            return main.sort((a,b)=>b.amt-a.amt).map(h => rowH(h.k, h.k, h.n, h.amt, false) + (h.sub ? h.sub.map(x=>rowH(x.k, x.label, x.n, x.amt, true)).join('') : '')).join(''); })() || '<tr><td colspan="3" style="color:#777">Nothing in this selection.</td></tr>'}
         </tbody></table></div></div>
         <div style="flex:1;min-width:260px;"><h4 class="sec">Section / department-wise</h4>
         <div class="table-scroll"><table><thead><tr><th>Department</th><th class="amount">Entries</th><th class="amount">Paid ₹</th></tr></thead><tbody>
