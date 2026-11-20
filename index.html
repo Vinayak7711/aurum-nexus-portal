@@ -7313,7 +7313,7 @@ async function purchaseTab(t){
     B.innerHTML = `
       <h4 class="sec">New purchase order</h4>
       <div class="row2c">
-        <div><label>Vendor (registered) *</label><select id="po-vendor">${(vendors||[]).map(v=>`<option value="${v.id}" ${preVendor===v.id?'selected':''}>${esc(v.name)} (${esc(v.code)})${v.status==='PENDING'?' — pending':''}</option>`).join('')}</select>${preVendor?'<span style="font-size:11px;color:#1a7f37;">✔ vendor taken from the material request</span>':''}
+        <div><label>Vendor (registered) *</label><select id="po-vendor">${(vendors||[]).map(v=>`<option value="${v.id}" ${preVendor===v.id?'selected':''}>${esc(v.name)} (${esc(v.code)})${v.status==='PENDING'?' — pending':''}</option>`).join('')}</select>${preVendor && poLinkReqs.length ?'<span style="font-size:11px;color:#1a7f37;">✔ vendor taken from the material request</span>':''}
           <div class="switch" style="margin:6px 0 0;"><input type="checkbox" id="po-newven" onchange="poNewVenToggle()"><span><b>Vendor is not registered</b> — type the name below; the vendor is added to the list as <i>pending</i> and the order is placed on it</span></div>
           <div id="po-newven-wrap" style="display:none;margin-top:6px;background:#fbf8ef;border:1px solid #eadfbe;border-radius:10px;padding:10px 12px;">
             <label>Vendor name *</label><input type="text" id="po-newven-name" placeholder="e.g. Sharma Hardware, Nashik">
