@@ -7305,6 +7305,9 @@ async function purchaseTab(t){
       }
     }
     const itemName = id => (rmItems.find(i=>i.id===id)||{}).name || '?';
+    // the form is redrawn every time a line is added or removed — keep what was already filled in (vendor, delivery, category, MMC flag, terms, remarks)
+    poHeadKeep(); const H = window.__poHead || {};
+    if (!preVendor && H.vendor) preVendor = H.vendor; else if (preVendor) H.vendor = preVendor;   // a request's vendor wins over the kept one
     B.innerHTML = `
       <h4 class="sec">New purchase order</h4>
       <div class="row2c">
@@ -7376,6 +7379,7 @@ async function purchaseTab(t){
       ${canPurApprove() ? '' : '<p style="font-size:12px;color:#b8860b;margin-top:6px;">This order will wait for approval by the Accounts head or the Director before it can be dispatched or received.</p>'}
       <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">${canPurApprove() ? 'Place purchase order' : 'Submit for approval'}</button>
       <div id="pon-msg"></div>`;
+    poHeadRestore();
     return;
   }
 
@@ -7891,6 +7895,17 @@ function poNewTotals(){
         : ' &nbsp;·&nbsp; <b>Total: ₹ ' + inr(sub) + '</b>')
     : '';
 }
+// Header of the New PO form survives the redraws that adding / removing a line causes
+function poHeadKeep(){
+  const v = $('po-vendor'); if (!v) return;
+  window.__poHead = { vendor: v.value, expected: ($('po-expected')||{}).value || '', cat: ($('po-cat')||{}).value || 'RM', mmc: !!(($('po-billmmc')||{}).checked), terms: ($('po-terms')||{}).value || '', remarks: ($('po-remarks')||{}).value || '' };
+}
+function poHeadRestore(){
+  const H = window.__poHead; if (!H) return;
+  const set = (id, val) => { const el = $(id); if (!el) return; if (el.type === 'checkbox') el.checked = !!val; else if (val !== undefined && val !== null) { el.value = val; } };
+  if (H.vendor && $('po-vendor') && [...$('po-vendor').options].some(o=>o.value===H.vendor)) $('po-vendor').value = H.vendor;
+  set('po-expected', H.expected); set('po-cat', H.cat); set('po-billmmc', H.mmc); set('po-terms', H.terms); set('po-remarks', H.remarks);
+}
 function poAddLine(){
   const qty = Number($('pol-qty').value), rate = Number($('pol-rate').value);
   if (!(qty > 0)){ say('pon-msg','Quantity must be above zero.',false); return; }
@@ -7967,7 +7982,7 @@ async function poPlace(){
     const { error: cErr } = await db.schema('mfg').rpc('po_set_category', { p_po: data, p_cat: cat });
     if (cErr){ say('pon-msg','PO created, but the category could not be saved: '+cErr.message,false); return; }
   }
-  poLines = []; poLinkReq = null; poLinkReqs = []; poClubVendor = null; reqSel.clear(); purchaseTab('pos');
+  poLines = []; poLinkReq = null; poLinkReqs = []; poClubVendor = null; window.__poHead = null; reqSel.clear(); purchaseTab('pos');
 }
 async function poApprove(id){
   const { error } = await db.schema('mfg').rpc('po_approve', { p_po: id });
