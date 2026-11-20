@@ -9195,7 +9195,7 @@ async function acctTab(t){
       const tInC = inRange.filter(r=>r.status==='APPROVED' && isTopC(r)).reduce((s,r)=>s+Number(r.amount),0);
       const tOutC = inRange.filter(r=>r.status==='APPROVED' && !isTopC(r)).reduce((s,r)=>s+Number(r.amount),0);
       const pendC = inRange.filter(r=>r.status==='PENDING_APPROVAL').length;
-      window.__ledRows = inRange.map(r=>({ entry_no:r.pc_no, entry_date:r.expense_date, kind:isTopC(r)?'TOP-UP':'CASH EXPENSE', payee:isTopC(r)?('Top-up from '+bankNm(r.bank_id)):(r.paid_to||''),
+      window.__ledBank = null; window.__ledRows = inRange.map(r=>({ entry_no:r.pc_no, entry_date:r.expense_date, kind:isTopC(r)?'TOP-UP':'CASH EXPENSE', payee:isTopC(r)?('Top-up from '+bankNm(r.bank_id)):(r.paid_to||''),
         narration:(isTopC(r)?'':(r.category||'')+' — ')+(r.description||'')+(pvLinks[r.id]?' [Linked to vendor '+pvLinks[r.id].vendor+' · '+pvLinks[r.id].pay_nos+']':''), bank_name_label:'Petty cash box', counter_bank_label:'', mode:'CASH', ref_no:'',
         amount:Number(r.amount), direction:isTopC(r)?'IN':'OUT', status:r.status }));
       window.__ledLabel = 'Petty cash book';
@@ -9241,7 +9241,7 @@ async function acctTab(t){
       const tGst = exs.reduce((s,r)=>s+Number(r.gst_amount||0),0);
       const tTds = exs.reduce((s,r)=>s+Number(r.tds_amount||0),0);
       const tPaid = exs.reduce((s,r)=>s+Number(r.amount),0);
-      window.__ledRows = exs.map(r=>({ entry_no:r.exp_no, entry_date:r.exp_date, kind:'EXPENSE', payee:r.payee||'',
+      window.__ledBank = null; window.__ledRows = exs.map(r=>({ entry_no:r.exp_no, entry_date:r.exp_date, kind:'EXPENSE', payee:r.payee||'',
         narration:(r.dept?'['+r.dept+'] ':'')+(r.description||''), bank_name_label:r.mode==='PETTY'?'Petty cash':(r.bank?r.bank.name:''),
         counter_bank_label:'', mode:r.mode, ref_no:r.hsn_code?'HSN '+r.hsn_code:'', amount:Number(r.amount), direction:'OUT', status:'PAID' }));
       window.__ledLabel = 'Expense ledger — ' + (allCats ? 'All categories (combined)' : catL);
@@ -9284,7 +9284,7 @@ async function acctTab(t){
       const totBil = docs.reduce((s,r)=>s+Number(r.billed||0),0);
       const totPaid = docs.reduce((s,r)=>s+Number(r.paid||0),0);
       const outst = totBil - totPaid;
-      window.__ledRows = docs.map(r=>({ entry_no:r.doc_no, entry_date:r.doc_date, kind:r.kind, payee:r.vname, narration:r.detail,
+      window.__ledBank = null; window.__ledRows = docs.map(r=>({ entry_no:r.doc_no, entry_date:r.doc_date, kind:r.kind, payee:r.vname, narration:r.detail,
         bank_name_label:'', counter_bank_label:'', mode:'', ref_no:'', amount:Number(r.billed||0)+Number(r.paid||0),
         direction:r.kind==='BILL'?'IN':'OUT', status:r.kind==='BILL'?'BILLED':'PAID' }));
       window.__ledLabel = 'All vendors — combined ledger';
@@ -9437,7 +9437,7 @@ async function acctTab(t){
       const totBil = docs.reduce((s,r)=>s+Number(r.billed||0),0);
       const totPaid = docs.reduce((s,r)=>s+Number(r.paid||0),0);
       const outst = totBil - totPaid;
-      window.__ledRows = docs.map(r=>({ entry_no:r.doc_no, entry_date:r.doc_date, kind:r.kind, payee:vnameL, narration:r.detail,
+      window.__ledBank = null; window.__ledRows = docs.map(r=>({ entry_no:r.doc_no, entry_date:r.doc_date, kind:r.kind, payee:vnameL, narration:r.detail,
         bank_name_label:'', counter_bank_label:'', mode:'', ref_no:'', amount:Number(r.billed||0)+Number(r.paid||0),
         direction:r.kind==='BILL'?'IN':'OUT', status:r.kind==='BILL'?'BILLED':'PAID' }));
       window.__ledLabel = 'Vendor ledger — ' + vnameL;
@@ -9503,6 +9503,29 @@ async function acctTab(t){
     if (window.acLedOnlyUnlinked) es = es.filter(isUnlinked);
     const totIn = es.filter(e=>e._in).reduce((s,e)=>s+Number(e.amount),0);
     const totOut = es.filter(e=>e._out).reduce((s,e)=>s+Number(e.amount),0);
+    // single bank ledger: running balance after every approved entry (opening balance + everything before the from-date, then row by row)
+    let ledBank = null, openBal = 0, closeBal = 0;
+    if (!isAllLed && sel.slice(0,2)==='B:'){
+      ledBank = acBanks.find(b=>b.name===sel.slice(2)) || null;
+      if (ledBank){
+        openBal = Number(ledBank.opening_balance||0);
+        if (window.acLedFrom){
+          try {
+            const [{ data: pre }, { data: preT }] = await Promise.all([
+              A.from('v_entries').select('amount,direction,kind').eq('status','APPROVED').eq('bank_account_id', ledBank.id).lt('entry_date', window.acLedFrom).limit(5000),
+              A.from('v_entries').select('amount').eq('status','APPROVED').eq('kind','TRANSFER').eq('counter_bank_account_id', ledBank.id).lt('entry_date', window.acLedFrom).limit(5000) ]);
+            (pre||[]).forEach(e => { openBal += (e.direction==='IN' ? 1 : -1) * Number(e.amount||0); });
+            (preT||[]).forEach(e => { openBal += Number(e.amount||0); });
+          } catch(e){}
+        }
+        // rows are newest first — walk them oldest first (ties by creation time) to build the balance
+        const order = es.map((e,i)=>i).sort((a,b)=> (es[a].entry_date+''+(es[a].created_at||'')) < (es[b].entry_date+''+(es[b].created_at||'')) ? -1 : 1);
+        let bal = openBal;
+        order.forEach(i => { const e = es[i]; if (e.status==='APPROVED'){ bal += (e._in?Number(e.amount):0) - (e._out?Number(e.amount):0); e._counted = true; } e._bal = bal; });
+        closeBal = bal;
+      }
+    }
+    window.__ledBank = ledBank ? { open: openBal, close: closeBal } : null;
     window.__ledRows = es;
     window.__ledLabel = isAllLed ? 'All entries'
       : sel==='T:B:' ? 'All bank accounts — combined ledger'
@@ -9518,6 +9541,8 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Money in</div><div style="font-size:19px;font-weight:700;color:#1a7f37">₹ ${inr(totIn)}</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Money out</div><div style="font-size:19px;font-weight:700;color:#b3261e">₹ ${inr(totOut)}</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Net</div><div style="font-size:19px;font-weight:700;color:${totIn-totOut>=0?'#1a7f37':'#b3261e'}">₹ ${inr(totIn-totOut)}</div></div>
+        ${ledBank ? `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Opening balance${window.acLedFrom?' on '+window.acLedFrom:''}</div><div style="font-size:19px;font-weight:700;color:${openBal>=0?'#1a7f37':'#b3261e'}">₹ ${inr(openBal)}</div></div>
+        <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;border:1.5px solid #c9a227;"><div style="font-size:12px;color:#777">Closing balance${window.acLedTo?' on '+window.acLedTo:''}</div><div style="font-size:19px;font-weight:700;color:${closeBal>=0?'#1a7f37':'#b3261e'}">₹ ${inr(closeBal)}</div></div>` : ''}
       </div>
       <button class="btn ghost sm" onclick="acLedCsv()">⬇ Download (CSV / Excel)</button>
       <button class="btn ghost sm" onclick="acLedPrint()">🖨 Print / save PDF</button>
@@ -9527,19 +9552,21 @@ async function acctTab(t){
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       ${(sel==='T:S:' || sel.slice(0,2)==='S:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Only this person’s own money is shown — salary, advances, recoveries and payments made out in their name. Entries they merely keyed in for vendors, rent or other heads belong to those ledgers, not here.</p>` : ''}
       ${(sel==='T:D:' || sel.slice(0,2)==='D:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;"><b>Money in</b> = received from the director / promoter (unsecured loan, capital, fund transfer in); <b>Money out</b> = paid back or paid to them. A vendor payment or expense they paid <b>from their own money</b> (chosen under “From our bank” on the entry form) also counts as money in — the company owes it to them. <b>Net</b> above is what the company still owes them (negative = they owe the company). Entries are linked to a person on the bank-entry form; an older entry that names them in the payee / narration is picked up automatically — use <b>👔 Link</b> on a row to fix the person.</p>` : ''}
-      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
+      <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th>${ledBank?'<th class="amount">Balance ₹</th>':''}<th>Status</th><th></th></tr></thead><tbody>
       ${(es||[]).map(e=>{const who=acWho(e)||'';const inA=e._in?inr(e.amount):'';const outA=e._out?inr(e.amount):'';
+        const balTd = ledBank ? `<td class="amount" style="font-weight:700;white-space:nowrap;color:${e._counted ? (Number(e._bal)>=0?'#1a3d6b':'#b3261e') : '#999'}" title="${e._counted ? 'Bank balance after this entry' : 'Not counted — the entry is not approved; balance unchanged'}">${inr(e._bal)}${e._counted?'':'<br><span style="font-size:10px;font-weight:400;">not counted</span>'}</td>` : '';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
           `<td>${who?esc(who):esc((e.narration||'—').slice(0,80))}${who&&e.narration&&e.narration.trim()!==who.trim()?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,80))+'</span>':''}${linkHtml(e)}</td>` +
           `<td>${e._personal ? '👔 ' + esc(e.bank_name_label||'') + '<br><span style="font-size:10.5px;color:#777">own money, paid for the company</span>' : esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}${e.kind==='TRANSFER'&&sel.slice(0,2)==='B:'?`<br><span style="font-size:10.5px;color:#777">${e._in&&!e._out?'transfer received from '+esc(e.bank_name_label||''):e._out&&!e._in?'transfer sent to '+esc(e.counter_bank_label||''):''}</span>`:''}</td>` +
-          `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` +
+          `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` + balTd +
           `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
           `<td>${(e.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acApprove('${e.id}',false)">Approve</button> <button class="mini" onclick="acApprove('${e.id}',true)">Reject</button> `:'')+
                 (canFinApprove()?`<button class="mini" onclick="acEdit('${e.id}')" title="Correct this entry (date, kind, amount, bank, mode, reference, narration)">✏️ Edit</button> `:'')+
                 (((sel==='T:D:' || sel.slice(0,2)==='D:') || ((isAllLed || sel==='T:B:' || sel.slice(0,2)==='B:') && ['BANK_IN','PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && !e.staff_id && !e.party_id && (e.principal_id || isUnlinked(e) || e.direction==='IN'))) && canFinApprove() && (window.__principals||[]).length ? `<select class="mini" title="Which director / promoter this entry belongs to" onchange="acEntrySetPrincipal('${e.id}', this.value)" style="font-size:10.5px;padding:2px 4px;"><option value="">👔 Link to…</option>${(window.__principals||[]).map(p=>`<option value="${p.id}" ${e.principal_id===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select> ` : '')+
                 (isDir()?`<button class="mini" onclick="acDelEntry('${e.id}')">Delete</button>`:'')}</td></tr>`;}).join('')
         || '<tr><td colspan="9" style="color:#777">No entries yet.</td></tr>'}
-      </tbody></table></div>`;
+      ${ledBank ? `<tr style="background:#faf6ea;font-weight:600;"><td colspan="5">Opening balance${window.acLedFrom?' on '+window.acLedFrom:' (bank opening balance)'}</td><td></td><td></td><td class="amount">${inr(openBal)}</td><td></td><td></td></tr>` : ''}
+      </tbody></table></div>`;   // v70
     return;
   }
 
@@ -10003,13 +10030,14 @@ function printHtml(title, bodyHtml){
 function acLedCsv(){
   const rows = window.__ledRows || [];
   const esc2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
-  const lines = [['Entry no','Date','Kind','Detail','Bank','In (INR)','Out (INR)','Mode','Ref','Narration','Status'].join(',')];
+  const hasBal = !!window.__ledBank;
+  const lines = [['Entry no','Date','Kind','Detail','Bank','In (INR)','Out (INR)'].concat(hasBal?['Balance (INR)']:[]).concat(['Mode','Ref','Narration','Status']).join(',')];
   rows.forEach(e=>{
     const who = acWho(e) || '';
     lines.push([esc2(e.entry_no), esc2(e.entry_date), esc2(e.kind), esc2(who),
       esc2((e.bank_name_label||'') + (e.kind==='TRANSFER' ? ' -> '+(e.counter_bank_label||'') : '')),
-      (e._in ?? e.direction==='IN')?Number(e.amount):'', (e._out ?? e.direction==='OUT')?Number(e.amount):'',
-      esc2(e.mode||''), esc2(e.ref_no||''), esc2(e.narration||''), esc2(e.status)].join(','));
+      (e._in ?? e.direction==='IN')?Number(e.amount):'', (e._out ?? e.direction==='OUT')?Number(e.amount):''].concat(hasBal?[e._bal!=null?Number(e._bal):'']:[]).concat([
+      esc2(e.mode||''), esc2(e.ref_no||''), esc2(e.narration||''), esc2(e.status)]).join(','));
   });
   const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a');
@@ -10025,15 +10053,15 @@ function acLedPrint(){
   const body = `
     <h1>AURUM SPIRITS INDIA LIMITED</h1>
     <h2>Finance ledger · ${esc(window.__ledLabel||'All entries')} · ${window.acLedFrom||'beginning'} to ${window.acLedTo||'today'}</h2>
-    <table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th></tr></thead><tbody>
+    <table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th>${window.__ledBank?'<th class="amount">Balance ₹</th>':''}<th>Status</th></tr></thead><tbody>
     ${rows.map(e=>{const who=acWho(e)||'';
       return `<tr><td>${esc(e.entry_no)}</td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>`+
         `<td>${esc(who)}${e.narration?'<br><span style="font-size:10px;color:#666">'+esc(e.narration)+'</span>':''}</td>`+
         `<td>${esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}</td>`+
-        `<td class="amount">${isIn(e)?inr(e.amount):''}</td><td class="amount">${isOut(e)?inr(e.amount):''}</td><td>${e.status}</td></tr>`;}).join('')}
-    <tr class="tot"><td colspan="5">Total (${rows.length} entries)</td><td class="amount">${inr(totIn)}</td><td class="amount">${inr(totOut)}</td><td></td></tr>
+        `<td class="amount">${isIn(e)?inr(e.amount):''}</td><td class="amount">${isOut(e)?inr(e.amount):''}</td>${window.__ledBank?`<td class="amount">${e._bal!=null?inr(e._bal):''}</td>`:''}<td>${e.status}</td></tr>`;}).join('')}
+    <tr class="tot"><td colspan="5">Total (${rows.length} entries)</td><td class="amount">${inr(totIn)}</td><td class="amount">${inr(totOut)}</td>${window.__ledBank?'<td></td>':''}<td></td></tr>
     </tbody></table>
-    <p style="font-size:11px;color:#666;margin-top:10px;">Net: ₹ ${inr(totIn-totOut)} · Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
+    <p style="font-size:11px;color:#666;margin-top:10px;">${window.__ledBank ? 'Opening balance: ₹ ' + inr(window.__ledBank.open) + ' · Closing balance: ₹ ' + inr(window.__ledBank.close) + ' · ' : ''}Net: ₹ ${inr(totIn-totOut)} · Printed from Aurum Nexus on ${new Date().toLocaleString('en-IN')}</p>`;
   printHtml('Ledger — Aurum Spirits', body);
 }
 function inrWords(n){
