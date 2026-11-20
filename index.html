@@ -7233,6 +7233,7 @@ const PO_COL = { PENDING_APPROVAL:'#b3261e', PLACED:'#b8860b', DISPATCHED:'#0b57
 const PO_LABEL = { PENDING_APPROVAL:'AWAITING APPROVAL' };
 async function purchaseTab(t){
   for (const k of ['pos','new','req','grn','store','hist','rmcons']) $('pu-'+k).classList.toggle('on', k === t);
+  if (t === 'new') { try { poHeadKeep(); } catch(e){} }   // the New PO form is about to be redrawn — remember what is filled in before it goes
   const B = $('purchase-body'); B.innerHTML = '<p style="color:#777">Loading…</p>';
   const G = db.schema('mfg');
   // once the tab has drawn, show the full name of the material currently chosen under its dropdown
