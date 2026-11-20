@@ -8892,10 +8892,21 @@ function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name
 function acBankIsPersonal(id){ const b = acBanks.find(x=>x.id===id); return !!(b && b.principal_id); }   // v65b
 function acBankOpts(sel, opts){
   const O = opts || {}; const act = acBanks.filter(b=>b.is_active || (sel && b.id===sel));
-  const co = act.filter(b=>!b.principal_id), pe = O.noPersonal ? [] : act.filter(b=>b.principal_id);
-  const op = b => `<option value="${b.id}" ${b.id===sel?'selected':''}>${esc(b.name)}</option>`;
+  const co = O.onlyPersonal ? [] : act.filter(b=>!b.principal_id), pe = O.noPersonal ? [] : act.filter(b=>b.principal_id);
+  const op = b => `<option value="${b.id}" ${b.id===sel?'selected':''}>${esc(O.onlyPersonal ? b.name.replace(/^Paid personally by /,'') : b.name)}</option>`;
+  if (O.onlyPersonal) return pe.map(op).join('') || '<option value="">— no director / promoter on the list yet —</option>';
   return co.map(op).join('') + (pe.length ? `<optgroup label="👔 Paid personally by a director / promoter (company owes them)">${pe.map(op).join('')}</optgroup>` : '');
 }
+// payment forms: the mode "PERSONAL" (paid personally by a director / promoter) swaps the bank list for the list of people
+const AC_MODE_PERSONAL = '<option value="PERSONAL">👔 Paid personally by a director / promoter</option>';
+function acModeBankSwap(modeId, bankId, lblId, noteId, what){
+  const m = $(modeId), b = $(bankId); if (!m || !b) return;
+  const pers = m.value === 'PERSONAL';
+  if (b.dataset.pers !== (pers ? '1' : '0')){ b.innerHTML = pers ? acBankOpts('', {onlyPersonal:true}) : acBankOpts('', {noPersonal:true}); b.dataset.pers = pers ? '1' : '0'; }
+  if ($(lblId)) $(lblId).textContent = pers ? 'Which director / promoter paid? *' : ($(lblId).dataset.lbl || 'From bank *');
+  if ($(noteId)) $(noteId).innerHTML = pers ? acPersonalNote(b.value, what) : '';
+}
+function acModeLbl(m){ return m === 'PERSONAL' ? 'Personal — director / promoter' : (m || ''); }
 function acPersonalNote(bankId, what){
   const b = acBanks.find(x=>x.id===bankId); if (!b || !b.principal_id) return '';
   const p = (window.__principals||[]).find(x=>x.id===b.principal_id);
@@ -10099,7 +10110,7 @@ function acPettyVoucher(id){
 }
 async function acVendorPayForm(vid, vname, out){
   await acPrincipals();
-  const bankOpts = acBankOpts('');
+  const bankOpts = acBankOpts('', {noPersonal:true});
   $('vd-form').innerHTML = '<div class="card" style="margin-top:12px;max-width:680px;">Loading the purchase orders…</div>';
   const { data: pos, error } = await db.schema('acct').rpc('vendor_po_options', { p_vendor: vid });
   if (error){ $('vd-form').innerHTML = `<div class="msg err">Could not load the purchase orders: ${esc(error.message)}</div>`; return; }
@@ -10118,9 +10129,9 @@ async function acVendorPayForm(vid, vname, out){
       <div class="row2c"><div><label>Amount ₹ *</label><input type="number" id="vp-amt" min="1" step="any"></div>
         <div><label>Date</label><input type="date" id="vp-date" value="${calFmt(new Date())}"></div></div>
       <div class="row2c" style="margin-top:8px;">
-        <div><label>To be paid by *</label><select id="vp-mode" onchange="$('vp-bank-wrap').style.display=this.value==='CASH'?'none':'';">
-          <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CARD">Bank — Card (debit / credit)</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="CASH">Cash</option></select></div>
-        <div id="vp-bank-wrap"><label>From bank — or a director / promoter’s own money</label><select id="vp-bank" onchange="$('vp-personal-note').innerHTML=acPersonalNote(this.value)">${bankOpts}</select></div>
+        <div><label>To be paid by *</label><select id="vp-mode" onchange="acVpModeChange()">
+          <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CARD">Bank — Card (debit / credit)</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option>${AC_MODE_PERSONAL}<option value="CASH">Cash</option></select></div>
+        <div id="vp-bank-wrap"><label id="vp-bank-lbl" data-lbl="From bank *">From bank *</label><select id="vp-bank" data-pers="0" onchange="$('vp-personal-note').innerHTML=$('vp-mode').value==='PERSONAL'?acPersonalNote(this.value):''">${bankOpts}</select></div>
       </div>
       <div id="vp-personal-note"></div>
       <label style="margin-top:8px;">Note for the approver</label><input type="text" id="vp-note" placeholder="e.g. part payment, balance on delivery">
@@ -10221,7 +10232,7 @@ async function acMmcForm(kind, targetId, vid, vname, out){
   if (!acBanks.length){ try { const b = await db.schema('acct').from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   const vOpts = '<option value="">— not for a particular vendor —</option>' + (vl||[]).map(v=>`<option value="${v.id}" ${v.id===vid?'selected':''}>${esc(v.name)}</option>`).join('');
   await acPrincipals();
-  const bankOpts = acBankOpts('');
+  const bankOpts = acBankOpts('', {noPersonal:true});
   const isPay = kind === 'pay';
   T.innerHTML = `
     <div class="card" style="margin-top:12px;max-width:700px;">
@@ -10241,8 +10252,8 @@ async function acMmcForm(kind, targetId, vid, vname, out){
       </div>
       ${isPay ? `
       <div class="row2c" style="margin-top:8px;">
-        <div><label>From bank * — or a director / promoter’s own money</label><select id="mm-bank" onchange="$('mm-personal-note').innerHTML=acPersonalNote(this.value,'the money sent to MMC')">${bankOpts}</select><div id="mm-personal-note"></div></div>
-        <div><label>Mode</label><select id="mm-mode"><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CARD">Card (debit / credit)</option><option value="CHEQUE">Cheque</option><option value="OTHER">Other</option></select></div>
+        <div><label id="mm-bank-lbl" data-lbl="From bank *">From bank *</label><select id="mm-bank" data-pers="0" onchange="$('mm-personal-note').innerHTML=$('mm-mode').value==='PERSONAL'?acPersonalNote(this.value,'the money sent to MMC'):''">${bankOpts}</select><div id="mm-personal-note"></div></div>
+        <div><label>Mode</label><select id="mm-mode" onchange="acMmModeChange()"><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option><option value="UPI">UPI</option><option value="CARD">Card (debit / credit)</option><option value="CHEQUE">Cheque</option>${AC_MODE_PERSONAL}<option value="OTHER">Other</option></select></div>
       </div>` : ''}
       <div class="row2c" style="margin-top:8px;">
         <div><label>${isPay ? 'UTR / cheque no.' : 'MMC’s payment reference (UTR etc.)'}</label><input type="text" id="mm-ref"></div>
@@ -10481,14 +10492,14 @@ async function acExpForm(fromKind){
   const expVen = (window.__enVendors||[]).filter(v=>v.vendor_kind==='EXPENSE');
   const exVenOpts = '<option value="">— not from a registered expense vendor (type the payee below) —</option>' + expVen.map(v=>acVenOpt(v)).join('');
   await acPrincipals();
-  const bankOpts = acBankOpts('');
+  const bankOpts = acBankOpts('', {noPersonal:true});
   let advOpen = [];
   try { const { data: av } = await A.from('v_advances').select('*').eq('adv_type','EXPENSE').eq('status','APPROVED').order('given_on');
         advOpen = (av||[]).filter(a => Number(a.outstanding) > 0); } catch(e){}
   window.__exAdvs = advOpen;
   const advOpts = advOpen.map(a=>`<option value="${a.id}">${esc(a.adv_no)} — ${esc(a.staff_name||'')} — outstanding ₹ ${inr(a.outstanding)}</option>`).join('');
   host.innerHTML = `<div class="card" style="margin-bottom:14px;max-width:720px;">${fromKind?`<div style="margin-bottom:6px;"><button class="btn ghost sm" onclick="acEntryForm()">‹ Back to bank ledger entry &amp; vendor payment</button></div>`:''}<h2 style="font-size:15px;">Post an expense</h2>
-        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there.</p>
+        <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there. <b>Paid personally by a director / promoter</b> — no company bank moves: the expense is booked under its head and the amount shows in that person's <b>Directors &amp; promoters ledger</b> as money the company owes them.</p>
         <div style="margin-bottom:8px;"><label>Expense vendor <span style="font-weight:normal;color:#888;font-size:11px;">— from Party Master (vendor type “Expense vendor”); picks its expense head and shows the bill in that vendor’s ledger too</span></label><select id="ex-vendor" onchange="acExpVendorPick()">${exVenOpts}</select>
           <div id="ex-vendor-note" style="font-size:11.5px;color:#1a5fb4;margin-top:4px;"></div></div>
         <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
@@ -10512,9 +10523,9 @@ async function acExpForm(fromKind){
         <div id="ex-calc" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
         <label style="margin-top:8px;display:block;">Details</label><input type="text" id="ex-desc" placeholder="What this expense was for">
         <div class="row2c" id="ex-paid-wrap" style="margin-top:8px;">
-          <div><label>Paid from *</label><select id="ex-mode" onchange="$('ex-bank-wrap').style.display=this.value==='PETTY'?'none':'';">
-            <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CARD">Bank — Card (debit / credit)</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option><option value="PETTY">Petty cash box</option></select></div>
-          <div id="ex-bank-wrap"><label>Bank account — or a director / promoter’s own money</label><select id="ex-bank" onchange="$('ex-personal-note').innerHTML=acPersonalNote(this.value,'the expense')">${bankOpts}</select><div id="ex-personal-note"></div></div>
+          <div><label>Paid from *</label><select id="ex-mode" onchange="acExModeChange()">
+            <option value="NEFT">Bank — NEFT / RTGS</option><option value="UPI">Bank — UPI</option><option value="CARD">Bank — Card (debit / credit)</option><option value="CHEQUE">Bank — Cheque</option><option value="OTHER">Bank — Other</option>${AC_MODE_PERSONAL}<option value="PETTY">Petty cash box</option></select></div>
+          <div id="ex-bank-wrap"><label id="ex-bank-lbl" data-lbl="Bank account *">Bank account *</label><select id="ex-bank" data-pers="0" onchange="$('ex-personal-note').innerHTML=$('ex-mode').value==='PERSONAL'?acPersonalNote(this.value,'the expense'):''">${bankOpts}</select><div id="ex-personal-note"></div></div>
         </div>
         <button class="btn gold sm" style="margin-top:10px;" onclick="acExpenseAdd()">Record expense</button>
         <div id="ex-msg"></div></div>`;
@@ -10611,6 +10622,7 @@ async function acExpenseAdd(){
     return;
   }
   const mode = $('ex-mode').value;
+  if (mode === 'PERSONAL' && !acBankIsPersonal($('ex-bank').value)){ say('ex-msg','Choose which director / promoter paid this expense.',false); return; }
   const exVen = acVenById($('ex-vendor')?.value);
   const { data: newId, error } = await db.schema('acct').rpc('expense_add', {
     p_date: $('ex-date').value || null, p_category: $('ex-cat').value,
@@ -10620,7 +10632,7 @@ async function acExpenseAdd(){
     p_items: items,
     p_payee: $('ex-payee').value.trim() || (exVen ? exVen.name : null), p_desc: $('ex-desc').value.trim() || null,
     p_mode: mode, p_bank: mode !== 'PETTY' ? $('ex-bank').value : null });
-  if (error){ say('ex-msg','Could not record: '+error.message,false); return; }
+  if (error){ say('ex-msg','Could not record: '+error.message,false); return; }   // v67
   if (exVen && newId){ const r2 = await db.schema('acct').rpc('expense_set_vendor', { p_exp: newId, p_vendor: exVen.id }); if (r2.error) alert('Expense recorded, but the vendor could not be noted on it: ' + r2.error.message); }
   window.__exItems = [];
   acctTab('exp');
@@ -10893,11 +10905,11 @@ async function acEntryForm(kind){
       <div id="en-manual-wrap" style="display:none"><label>Payee name — if the party is not in the vendor list</label><input type="text" id="en-payee-manual" placeholder="Type the name of the person / firm being paid">
         <p style="font-size:11.5px;color:#777;margin:4px 0 8px;">Leave the vendor as "— choose the vendor —" and type the payee here. The payment is posted to the bank ledger under this name (no vendor dues are touched).</p></div>
     </div>
-    <div class="row2c"><div id="en-bank-wrap"><label id="en-bank-lbl">Bank account *</label><select id="en-bank" onchange="acEnBankChange()">${acBankOpts('')}</select></div>
+    <div class="row2c"><div id="en-bank-wrap"><label id="en-bank-lbl" data-lbl="Bank account *">Bank account *</label><select id="en-bank" data-pers="0" onchange="acEnBankChange()">${bankOpts}</select></div>
     <div id="en-counter-wrap" style="display:none"><label>Transfer to *</label><select id="en-counter">${bankOpts}</select></div>
     <div id="en-dir-wrap" style="display:none"><label>Direction *</label><select id="en-dir"><option value="OUT">Money OUT</option><option value="IN">Money IN</option></select></div></div>
     <div class="row2c"><div><label>Date</label><input type="date" id="en-date" value="${calFmt(new Date())}"></div>
-    <div id="en-mode-wrap"><label>Mode</label><select id="en-mode"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option value="CARD">CARD (debit / credit card)</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div></div>
+    <div id="en-mode-wrap"><label>Mode</label><select id="en-mode" onchange="acEnModeChange()"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option value="CARD">CARD (debit / credit card)</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option>${AC_MODE_PERSONAL}</select></div></div>
     <div class="row2c"><div><label id="en-ref-lbl">Reference no. (UTR / cheque)</label><input type="text" id="en-ref"></div>
     <div id="en-staff-wrap"><label>Staff — only if this money is that person’s own (salary / advance / recovery); leave blank otherwise</label><select id="en-staff">${staffOpts}</select></div></div>
     <div id="en-personal-note"></div>
@@ -10915,8 +10927,6 @@ function acEnBankChange(){
   const b = $('en-bank'); if (!b) return;
   const pers = acBankIsPersonal(b.value), k = $('en-kind').value;
   if ($('en-personal-note')) $('en-personal-note').innerHTML = pers ? acPersonalNote(b.value, k==='MMC_PAY' ? 'the money sent to MMC' : 'the payment') : '';
-  if ($('en-principal-wrap')) $('en-principal-wrap').style.display = pers ? 'none' : '';
-  if (pers && $('en-principal')) $('en-principal').value = '';
 }
 function acKindChange(){
   const k = $('en-kind').value;
@@ -10930,7 +10940,8 @@ function acKindChange(){
   $('en-bank-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
   $('en-mode-wrap').style.display = k==='MMC_VEN' ? 'none' : '';
   $('en-staff-wrap').style.display = (isVen || k==='MMC_RCPT') ? 'none' : '';
-  $('en-bank-lbl').textContent = k==='MMC_RCPT' ? 'Into our bank (received from MMC) *' : k==='MMC_PAY' ? 'From our bank (paid to MMC) *' : k==='VPAY' ? 'From our bank *' : 'Bank account *';
+  $('en-bank-lbl').dataset.lbl = k==='MMC_RCPT' ? 'Into our bank (received from MMC) *' : k==='MMC_PAY' ? 'From our bank (paid to MMC) *' : k==='VPAY' ? 'From our bank *' : 'Bank account *';
+  $('en-bank-lbl').textContent = $('en-bank-lbl').dataset.lbl;
   $('en-ref-lbl').textContent = k==='MMC_VEN' ? 'MMC’s payment reference (UTR etc.)' : 'Reference no. (UTR / cheque)';
   $('en-narr-lbl').textContent = isVen ? 'Note' : 'Payee / narration';
   $('en-help').textContent = k==='BANK_OUT' ? 'A cash withdrawal from the bank goes straight into the petty cash box: this posts the petty cash top-up (PC number) and, once approved, the bank withdrawal in the ledger — both linked to each other.'
@@ -10942,10 +10953,10 @@ function acKindChange(){
   if (isVen || k==='PAYMENT'){ const m = $('en-mode'); if (m && !m.value) m.value = 'NEFT'; acEnLoadPos(); }
   const ph = $('en-narr'); if (ph) ph.placeholder = isVen ? 'e.g. part payment, balance on delivery' : 'Who / what for';
   // a director's own money can only make a payment — the other kinds need a company bank
-  { const b = $('en-bank'); if (b){ const payKind = ['VPAY','PAYMENT','MMC_PAY','OTHER'].includes(k);
-      b.querySelectorAll('optgroup').forEach(g => { g.disabled = !payKind; g.style.display = payKind ? '' : 'none'; });
-      if (!payKind && acBankIsPersonal(b.value)){ const first = acBanks.find(x=>x.is_active && !x.principal_id); if (first) b.value = first.id; }
-      acEnBankChange(); } }
+  { const m = $('en-mode'), po = m && m.querySelector('option[value="PERSONAL"]'); const payKind = ['VPAY','PAYMENT','MMC_PAY','OTHER'].includes(k);
+    if (po){ po.disabled = !payKind; po.style.display = payKind ? '' : 'none'; }
+    if (m && !payKind && m.value === 'PERSONAL') m.value = 'NEFT';
+    acEnModeChange(); acEnBankChange(); }
 }
 // manual payee box: only for a direct vendor payment when no vendor from the list is chosen
 function acEnManualToggle(){
@@ -10970,6 +10981,23 @@ async function acEnLoadPos(){
     return `<option value="${p.po_id}">${esc(p.po_no)} · ${p.order_date} · value ₹${inr(p.po_value)}${isMmc ? ' · sent to MMC ₹'+inr(p.to_mmc)+' · MMC paid ₹'+inr(p.by_mmc) : (left>0 ? ' · left ₹'+inr(left) : ' · fully covered')}</option>`;
   }).join('');
   if (!window.__enPos.length && !$('en-ponote').innerHTML) $('en-ponote').textContent = isMmc ? 'This vendor has no purchase order marked "billed & delivered to MMC" — you can still record the amount without a PO.' : 'This vendor has no purchase order yet — you can still record the payment without a PO.';
+}
+function acExModeChange(){
+  const m = $('ex-mode'); if (!m) return;
+  if ($('ex-bank-wrap')) $('ex-bank-wrap').style.display = m.value==='PETTY' ? 'none' : '';
+  acModeBankSwap('ex-mode','ex-bank','ex-bank-lbl','ex-personal-note','the expense');
+}
+function acVpModeChange(){
+  const m = $('vp-mode'); if (!m) return;
+  if ($('vp-bank-wrap')) $('vp-bank-wrap').style.display = m.value==='CASH' ? 'none' : '';
+  acModeBankSwap('vp-mode','vp-bank','vp-bank-lbl','vp-personal-note','the payment');
+}
+function acMmModeChange(){ acModeBankSwap('mm-mode','mm-bank','mm-bank-lbl','mm-personal-note','the money sent to MMC'); }
+function acEnModeChange(){
+  const m = $('en-mode'); if (!m) return;
+  acModeBankSwap('en-mode','en-bank','en-bank-lbl','en-personal-note', $('en-kind').value==='MMC_PAY' ? 'the money sent to MMC' : 'the payment');
+  if ($('en-principal-wrap')) $('en-principal-wrap').style.display = m.value==='PERSONAL' ? 'none' : '';
+  if (m.value==='PERSONAL' && $('en-principal')) $('en-principal').value = '';
 }
 function acEnTdsToggle(){
   const on = $('en-tds-on').checked; $('en-tds-box').style.display = on ? '' : 'none';
@@ -11012,6 +11040,7 @@ async function acDupWarn(amt, date, dir){
 async function acEntrySave(){
   let k = $('en-kind').value; const amt = Number($('en-amt').value);
   if (!(amt>0)){ say('en-msg','Amount must be above zero.',false); return; }
+  if ($('en-mode') && $('en-mode').value === 'PERSONAL' && !acBankIsPersonal($('en-bank').value)){ say('en-msg','Choose which director / promoter made this payment.',false); return; }
   if ($('en-bank') && acBankIsPersonal($('en-bank').value) && !(['VPAY','PAYMENT','MMC_PAY'].includes(k) || (k==='OTHER' && $('en-dir').value==='OUT'))){
     say('en-msg','A director / promoter’s own money can only be used for a payment (vendor payment, other payment, payment to MMC). For money they put into the company, record Money IN into the company bank and pick their name under Director / promoter.',false); return; }
   // a plain "Payment" with a vendor picked is a vendor payment — it must reach Vendor Dues
@@ -11116,7 +11145,7 @@ async function acEdit(id){
   const bankOpts = sel => acBankOpts(sel);
   const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}" ${s.id===e.staff_id?'selected':''}>${esc(s.full_name)}</option>`).join('');
   const KINDS = [['BANK_IN','Money IN (deposit / receipt)'],['BANK_OUT','Money OUT (withdrawal)'],['PAYMENT','Payment (vendor / expense)'],['TRANSFER','Transfer between accounts'],['RECOVERY','Advance recovery (cash in)'],['SALARY','Salary'],['ADVANCE','Staff advance'],['OTHER','Other']];
-  const MODES = ['','NEFT','RTGS','UPI','CARD','CHEQUE','CASH','OTHER'];
+  const MODES = ['','NEFT','RTGS','UPI','CARD','CHEQUE','CASH','OTHER','PERSONAL'];
   const host = $('ac-entry-form') || $('acct-body');
   const box = document.createElement('div'); box.id = 'ac-edit-box';
   const old = $('ac-edit-box'); if (old) old.remove();
