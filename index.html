@@ -10242,9 +10242,11 @@ async function acMmcForm(kind, targetId, vid, vname, out){
         : 'MMC has paid the vendor out of the money you sent. This clears the vendor’s outstanding (like any vendor payment) and reduces the balance held by MMC — no bank of yours moves.'}
         ${vname ? `<br>Vendor: <b>${esc(vname)}</b>${out!=null?` · outstanding right now <b style="color:${out>0?'#b3261e':'#1a7f37'}">₹ ${inr(out)}</b>`:''}` : ''}</p>
       <div class="row2c">
-        <div><label>${isPay ? 'For vendor (optional)' : 'Vendor *'}</label><select id="mm-vendor" onchange="acMmcLoadPos()">${isPay ? vOpts : vOpts.replace('— not for a particular vendor —','— choose the vendor —')}</select></div>
+        <div><label>${isPay ? 'For vendor (optional)' : 'Vendor (from the list) — or type a payee below'}</label><select id="mm-vendor" onchange="acMmcLoadPos()">${isPay ? vOpts : vOpts.replace('— not for a particular vendor —','— choose the vendor —')}</select></div>
         <div><label>Against PO (billed to MMC)</label><select id="mm-po" onchange="acMmcPoChange()"><option value="">— none / not yet —</option></select></div>
       </div>
+      ${isPay ? '' : `<div id="mm-manual-wrap"><label>Payee name — if the party MMC paid is not in the vendor list</label><input type="text" id="mm-payee-manual" placeholder="Type the name of the person / firm MMC paid">
+        <p style="font-size:11.5px;color:#777;margin:4px 0 8px;">Leave the vendor as "— choose the vendor —" and type who MMC paid. It is recorded in the MMC ledger under that name and reduces the balance held by MMC (no vendor dues are touched).</p></div>`}
       <div id="mm-ponote" style="font-size:12px;color:#777;margin:4px 0 8px;"></div>
       <div class="row2c">
         <div><label>Amount ₹ *</label><input type="number" id="mm-amt" min="1" step="any"></div>
@@ -10270,6 +10272,7 @@ async function acMmcForm(kind, targetId, vid, vname, out){
 }
 async function acMmcLoadPos(){
   const vsel = $('mm-vendor'), psel = $('mm-po'); if (!vsel || !psel) return;
+  if ($('mm-manual-wrap')) $('mm-manual-wrap').style.display = vsel.value ? 'none' : '';   // v69
   psel.innerHTML = '<option value="">— none / not yet —</option>';
   window.__mmcPos = [];
   const { data: pos, error } = await db.schema('acct').rpc('mmc_po_options', { p_vendor: vsel.value || null });
@@ -10298,8 +10301,14 @@ async function acMmcSave(kind, targetId){
     if (!$('mm-bank') || !$('mm-bank').value){ say('mm-msg','Choose the bank the money goes from.',false); return; }
     res = await db.schema('acct').rpc('mmc_pay', { p_amount: amt, p_bank: $('mm-bank').value, p_date: $('mm-date').value || null,
       p_mode: $('mm-mode').value, p_ref: $('mm-ref').value.trim() || null, p_vendor: vid, p_po: po, p_note: $('mm-note').value.trim() || null });
+  } else if (!vid && $('mm-payee-manual') && $('mm-payee-manual').value.trim()){
+    const manual = $('mm-payee-manual').value.trim();
+    res = await db.schema('acct').rpc('mmc_paid_payee', { p_payee: manual, p_amount: amt, p_date: $('mm-date').value || null, p_ref: $('mm-ref').value.trim() || null, p_note: $('mm-note').value.trim() || null });
+    if (res.error){ say('mm-msg','Could not save: '+res.error.message,false); return; }
+    alert('Recorded — MMC paid ' + manual + ' on our behalf; the balance held by MMC has come down.');
+    window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; acctTab('ledger'); return;
   } else {
-    if (!vid){ say('mm-msg','Choose the vendor MMC paid.',false); return; }
+    if (!vid){ say('mm-msg','Choose the vendor MMC paid, or type the payee name in the box below the vendor.',false); return; }
     res = await db.schema('acct').rpc('mmc_paid_vendor', { p_vendor: vid, p_amount: amt, p_date: $('mm-date').value || null,
       p_po: po, p_ref: $('mm-ref').value.trim() || null, p_note: $('mm-note').value.trim() || null });
   }
@@ -10965,8 +10974,9 @@ function acKindChange(){
 // manual payee box: only for a direct vendor payment when no vendor from the list is chosen
 function acEnManualToggle(){
   const k = $('en-kind')?.value, vsel = $('en-vendor'), w = $('en-manual-wrap'); if (!w) return;
-  w.style.display = (k === 'VPAY' && vsel && !vsel.value) ? '' : 'none';
-  const l = $('en-vendor-lbl'); if (l) l.textContent = k === 'VPAY' ? 'Vendor (from the list) — or type a payee below' : k === 'PAYMENT' ? 'Vendor (pick one if this pays a vendor)' : k === 'MMC_PAY' ? 'For which vendor (optional — leave blank for a lump sum / deposit to MMC)' : 'Vendor *';
+  w.style.display = ((k === 'VPAY' || k === 'MMC_VEN') && vsel && !vsel.value) ? '' : 'none';
+  const mp = w.querySelector('p'); if (mp) mp.textContent = k === 'MMC_VEN' ? 'Leave the vendor as "— choose the vendor —" and type who MMC paid. The amount is recorded in the MMC ledger under that name and reduces the balance held by MMC (no vendor dues are touched, since the payee is not a registered vendor).' : 'Leave the vendor as "— choose the vendor —" and type the payee here. The payment is posted to the bank ledger under this name (no vendor dues are touched).';
+  const l = $('en-vendor-lbl'); if (l) l.textContent = (k === 'VPAY' || k === 'MMC_VEN') ? 'Vendor (from the list) — or type a payee below' : k === 'PAYMENT' ? 'Vendor (pick one if this pays a vendor)' : k === 'MMC_PAY' ? 'For which vendor (optional — leave blank for a lump sum / deposit to MMC)' : 'Vendor *';
 }
 // vendor's POs for the vendor-payment kinds (all POs for a direct payment; only MMC-billed POs for the MMC kinds)
 async function acEnLoadPos(){
@@ -11076,7 +11086,14 @@ async function acEntrySave(){
   if (k==='VPAY' || k==='MMC_PAY' || k==='MMC_VEN'){
     const vid = $('en-vendor').value, po = $('en-po').value || null, note = $('en-narr').value.trim() || null, ref = $('en-ref').value.trim() || null;
     const manual = ($('en-payee-manual') ? $('en-payee-manual').value.trim() : '');
-    if (!vid && !(k === 'VPAY' && manual) && k !== 'MMC_PAY'){ say('en-msg', k === 'VPAY' ? 'Choose the vendor from the list, or type the payee name in the box below the vendor.' : 'Choose the vendor.', false); return; }
+    if (!vid && !((k === 'VPAY' || k === 'MMC_VEN') && manual) && k !== 'MMC_PAY'){ say('en-msg', (k === 'VPAY' || k === 'MMC_VEN') ? 'Choose the vendor from the list, or type the payee name in the box below the vendor.' : 'Choose the vendor.', false); return; }
+    if (k === 'MMC_VEN' && !vid){
+      // MMC paid someone who is not in the vendor master: MMC ledger line under the typed name, no vendor dues
+      const r0 = await db.schema('acct').rpc('mmc_paid_payee', { p_payee: manual, p_amount: amt, p_date: $('en-date').value||null, p_ref: ref, p_note: note });
+      if (r0.error){ say('en-msg','Could not post: '+r0.error.message,false); return; }
+      alert('Recorded — MMC paid ' + manual + ' on our behalf; the balance held by MMC has come down.');
+      window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; acctTab('ledger'); return;
+    }
     let res, msg;
     if (k === 'VPAY' && !vid && $('en-tds-on') && $('en-tds-on').checked){ say('en-msg','TDS can be recorded only against a vendor from the list — choose the vendor.',false); return; }
     if (k === 'VPAY' && !vid){
