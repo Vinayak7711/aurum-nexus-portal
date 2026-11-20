@@ -10501,7 +10501,8 @@ async function acExpForm(fromKind){
   host.innerHTML = `<div class="card" style="margin-bottom:14px;max-width:720px;">${fromKind?`<div style="margin-bottom:6px;"><button class="btn ghost sm" onclick="acEntryForm()">‹ Back to bank ledger entry &amp; vendor payment</button></div>`:''}<h2 style="font-size:15px;">Post an expense</h2>
         <p style="font-size:12px;color:#777;margin:4px 0 8px;">Paid from a <b>bank</b> — it posts straight into the finance ledger against that bank. Paid from <b>petty cash</b> — it goes into the Petty Cash book and waits for the usual approval there. <b>Paid personally by a director / promoter</b> — no company bank moves: the expense is booked under its head and the amount shows in that person's <b>Directors &amp; promoters ledger</b> as money the company owes them.</p>
         <div style="margin-bottom:8px;"><label>Expense vendor <span style="font-weight:normal;color:#888;font-size:11px;">— from Party Master (vendor type “Expense vendor”); picks its expense head and shows the bill in that vendor’s ledger too</span></label><select id="ex-vendor" onchange="acExpVendorPick()">${exVenOpts}</select>
-          <div id="ex-vendor-note" style="font-size:11.5px;color:#1a5fb4;margin-top:4px;"></div></div>
+          <div id="ex-vendor-note" style="font-size:11.5px;color:#1a5fb4;margin-top:4px;"></div>
+          <div id="ex-payee-wrap" style="margin-top:8px;"><label>Payee — who was paid * <span style="font-weight:normal;color:#888;font-size:11px;">(the person / firm, since it is not a registered expense vendor)</span></label><input type="text" id="ex-payee" placeholder="e.g. MakeMyTrip, Air India, the electrician’s name"></div></div>
         <div class="row2c"><div><label>Date</label><input type="date" id="ex-date" value="${calFmt(new Date())}"></div>
           <div><label>Category *</label><select id="ex-cat" onchange="acExpCatChange()">${CATS_EXP.map(c=>`<option>${esc(c)}</option>`).join('')}<option value="__ADV__">⇄ Settle staff expense advance (bills against advance given)</option></select></div></div>
         <div id="ex-adv-wrap" class="hidden" style="margin-top:8px;border:1px solid #e6d9b0;background:#fdf9ee;border-radius:8px;padding:10px;">
@@ -10519,7 +10520,7 @@ async function acExpForm(fromKind){
         <button class="btn ghost sm" style="margin-top:8px;" onclick="acExpItemAdd()">＋ Add this item to the bill</button>
         <div id="ex-items" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
         <div class="row2c" style="margin-top:8px;"><div><label>TDS deducted % (0 if none)</label><input type="number" id="ex-tds" min="0" max="99.99" step="any" value="0" oninput="acExpCalc()"></div>
-          <div><label>Paid to</label><input type="text" id="ex-payee" placeholder="Who received the money"></div></div>
+          <div id="ex-paidto-echo" style="font-size:12px;color:#777;align-self:end;padding-bottom:10px;"></div></div>
         <div id="ex-calc" style="font-size:12.5px;color:#555;margin-top:6px;"></div>
         <label style="margin-top:8px;display:block;">Details</label><input type="text" id="ex-desc" placeholder="What this expense was for">
         <div class="row2c" id="ex-paid-wrap" style="margin-top:8px;">
@@ -10571,7 +10572,9 @@ function acExpCalc(){
 // an expense vendor chosen on the expense form: its head becomes the category, its name the payee
 function acExpVendorPick(){
   const v = acVenById($('ex-vendor')?.value), n = $('ex-vendor-note');
-  if (!v){ if (n) n.innerHTML = ''; return; }
+  if ($('ex-payee-wrap')) $('ex-payee-wrap').style.display = v ? 'none' : '';
+  if ($('ex-paidto-echo')) $('ex-paidto-echo').innerHTML = v ? 'Paid to: <b>' + esc(v.name) + '</b>' : '';
+  if (!v){ if (n) n.innerHTML = ''; return; }   // v68
   const sel = $('ex-cat');
   if (sel && v.expense_head){
     if (![...sel.options].some(o=>o.value===v.expense_head)){ const o = document.createElement('option'); o.text = v.expense_head; sel.insertBefore(o, sel.firstChild); }
@@ -10624,6 +10627,7 @@ async function acExpenseAdd(){
   const mode = $('ex-mode').value;
   if (mode === 'PERSONAL' && !acBankIsPersonal($('ex-bank').value)){ say('ex-msg','Choose which director / promoter paid this expense.',false); return; }
   const exVen = acVenById($('ex-vendor')?.value);
+  if (!exVen && !$('ex-payee').value.trim()){ say('ex-msg','Type the payee — who was paid (the box under the expense vendor) — or pick a registered expense vendor.',false); $('ex-payee').focus(); return; }
   const { data: newId, error } = await db.schema('acct').rpc('expense_add', {
     p_date: $('ex-date').value || null, p_category: $('ex-cat').value,
     p_bill: null, p_amount: null, p_tds_rate: rate, p_hsn: null, p_gst_rate: 0,
