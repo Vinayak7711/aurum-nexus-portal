@@ -2996,7 +2996,7 @@ async function fdErpData(){
   ]);
   { const pers = new Set((banks||[]).filter(b=>b.principal_id).map(b=>b.id));   // money a director paid personally is not company cash
     if (banks) banks = banks.filter(b=>!pers.has(b.id));
-    if (ents) ents = ents.filter(e=>!pers.has(e.bank_account_id)); }
+    if (ents) ents = ents.filter(e=>e.bank_account_id && !pers.has(e.bank_account_id)); }   // ledger-only settlements have no bank
   FD.erp = { banks, ents, petty, exps, allExpCats: (allExp||[]).map(x=>x.category), slips, bonuses, assets, avl };
   return FD.erp;
 }
@@ -9301,7 +9301,7 @@ async function acctTab(t){
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${docs.length} record${docs.length===1?'':'s'} across ${vendorsAll.length} vendors</h4>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>Vendor</th><th>Doc no.</th><th>Type</th><th>Details</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th></tr></thead><tbody>
       ${docs.map(r=>`<tr><td>${r.doc_date}</td><td><b>${esc(r.vname)}</b></td><td><b>${esc(r.doc_no)}</b></td>` +
-        `<td>${r.kind==='BILL'?'🧾 Purchase bill':r.kind==='TDS'?'🧾 TDS deducted':r.kind==='EXPENSE'?'🧾 Expense bill (paid)':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
+        `<td>${r.kind==='BILL'?'🧾 Purchase bill':r.kind==='TDS'?'🧾 TDS deducted':r.kind==='EXPENSE'?'🧾 Expense bill (paid)':Number(r.paid)<0?'↩ Money received back':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
         `<td class="amount" style="color:#b3261e">${Number(r.billed)?inr(r.billed):''}</td>` +
         `<td class="amount" style="color:#1a7f37">${Number(r.paid)?inr(r.paid):''}</td></tr>`).join('')
         || '<tr><td colspan="7" style="color:#555">No purchase bills or payments in this date range.</td></tr>'}
@@ -9456,7 +9456,7 @@ async function acctTab(t){
       <div id="ac-entry-form"></div>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>Doc no.</th><th>Type</th><th>Details</th><th class="amount">Billed ₹</th><th class="amount">Paid ₹</th><th></th></tr></thead><tbody>
       ${docs.map(r=>`<tr${r.kind==='EXPENSE'?' style="background:#fbfaf4;"':''}><td>${r.doc_date}</td><td><b>${esc(r.doc_no)}</b></td>` +
-        `<td>${r.kind==='BILL'?'🧾 Purchase bill':r.kind==='TDS'?'🧾 TDS deducted':r.kind==='EXPENSE'?'🧾 Expense bill (paid)':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
+        `<td>${r.kind==='BILL'?'🧾 Purchase bill':r.kind==='TDS'?'🧾 TDS deducted':r.kind==='EXPENSE'?'🧾 Expense bill (paid)':Number(r.paid)<0?'↩ Money received back':'💸 Payment'}</td><td style="font-size:12px;">${esc(r.detail||'')}</td>` +
         `<td class="amount" style="color:#b3261e">${Number(r.billed)?inr(r.billed):''}</td>` +
         `<td class="amount" style="color:#1a7f37">${Number(r.paid)?inr(r.paid):''}</td><td style="white-space:nowrap">${vlAct(r)}</td></tr>`).join('')
         || '<tr><td colspan="7" style="color:#777">No purchase bills or payments for this vendor in this date range.</td></tr>'}
@@ -10946,6 +10946,15 @@ async function acEntryForm(kind){
       <div id="en-manual-wrap" style="display:none"><label>Payee name — if the party is not in the vendor list</label><input type="text" id="en-payee-manual" placeholder="Type the name of the person / firm being paid">
         <p style="font-size:11.5px;color:#777;margin:4px 0 8px;">Leave the vendor as "— choose the vendor —" and type the payee here. The payment is posted to the bank ledger under this name (no vendor dues are touched).</p></div>
     </div>
+    <div id="en-xfer-wrap" style="display:none;margin:2px 0 8px;">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin:0;"><input type="checkbox" id="en-xfer-bank" checked style="width:auto;" onchange="acEnXferToggle()"> This is a bank entry — money moves between two of our bank accounts</label>
+      <p style="font-size:11.5px;color:#777;margin:4px 0 0;">Untick it to settle an amount <b>between two ledgers</b> (directors &amp; promoters, vendors) with no bank movement — for example a director clearing a vendor's bill from their own pocket, a loan moved from one director to another, or money a vendor returned to a director.</p>
+    </div>
+    <div id="en-ledger-wrap" style="display:none;">
+      <div class="row2c"><div><label>From — who gave the money *</label><select id="en-xfer-from" onchange="acEnXferHint()"></select></div>
+        <div><label>To — who received it *</label><select id="en-xfer-to" onchange="acEnXferHint()"></select></div></div>
+      <div id="en-xfer-hint" style="font-size:11.5px;color:#5a4a00;background:#faf6ea;border:1px solid #e3d9b8;border-radius:8px;padding:6px 10px;margin:6px 0;"></div>
+    </div>
     <div class="row2c"><div id="en-bank-wrap"><label id="en-bank-lbl" data-lbl="Bank account *">Bank account *</label><select id="en-bank" data-pers="0" onchange="acEnBankChange()">${bankOpts}</select></div>
     <div id="en-counter-wrap" style="display:none"><label>Transfer to *</label><select id="en-counter">${bankOpts}</select></div>
     <div id="en-dir-wrap" style="display:none"><label>Direction *</label><select id="en-dir"><option value="OUT">Money OUT</option><option value="IN">Money IN</option></select></div></div>
@@ -10963,6 +10972,44 @@ async function acEntryForm(kind){
   if (kind) $('en-kind').value = kind;
   acKindChange();
   $('ac-entry-form').scrollIntoView({behavior:'smooth'});
+}
+// Transfer between accounts: bank-to-bank (tick box on) or an internal settlement between two ledgers (tick box off)
+function acEnXferIsLedger(){ const k = $('en-kind') && $('en-kind').value, c = $('en-xfer-bank'); return k === 'TRANSFER' && c && !c.checked; }
+function acEnLedgerOpts(){
+  const P = (window.__principals||[]).filter(p=>p.is_active).map(p=>`<option value="P:${p.id}">${esc(p.name)} — ${p.role==='PROMOTER'?'promoter':'director'}</option>`).join('');
+  const V = (window.__enVendors||[]).map(v=>`<option value="V:${v.id}">${esc(v.name)}</option>`).join('');
+  return '<option value="">— choose —</option>' + (P ? `<optgroup label="👔 Directors &amp; promoters">${P}</optgroup>` : '') + (V ? `<optgroup label="💳 Vendors">${V}</optgroup>` : '');
+}
+function acEnXferToggle(){
+  const k = $('en-kind') && $('en-kind').value, isT = k === 'TRANSFER', led = acEnXferIsLedger();
+  if ($('en-xfer-wrap')) $('en-xfer-wrap').style.display = isT ? '' : 'none';
+  if ($('en-ledger-wrap')) $('en-ledger-wrap').style.display = led ? '' : 'none';
+  if ($('en-bank-wrap')) $('en-bank-wrap').style.display = (k === 'MMC_VEN' || led) ? 'none' : '';
+  if ($('en-counter-wrap')) $('en-counter-wrap').style.display = (isT && !led) ? 'block' : 'none';
+  if ($('en-mode-wrap')) $('en-mode-wrap').style.display = (k === 'MMC_VEN' || led) ? 'none' : '';
+  if ($('en-staff-wrap') && isT) $('en-staff-wrap').style.display = led ? 'none' : '';
+  if ($('en-principal-wrap') && isT) $('en-principal-wrap').style.display = led ? 'none' : '';
+  if (led){
+    const f = $('en-xfer-from'), t = $('en-xfer-to');
+    if (f && !f.options.length){ f.innerHTML = acEnLedgerOpts(); t.innerHTML = acEnLedgerOpts(); }
+    $('en-narr-lbl').textContent = 'Note (what was settled)';
+    $('en-help').textContent = 'No bank moves. The amount is posted in both ledgers: the giver\'s ledger shows it as money the company owes them (a vendor as giver shows money received back), the receiver\'s ledger shows it as paid to them (a vendor as receiver has its outstanding reduced).';
+    acEnXferHint();
+  } else if (isT){ $('en-narr-lbl').textContent = 'Payee / narration'; $('en-help').textContent = ''; }
+}
+function acEnXferHint(){
+  const h = $('en-xfer-hint'); if (!h) return;
+  const f = $('en-xfer-from').value, t = $('en-xfer-to').value;
+  const nm = v => { const o = $(v==='f'?'en-xfer-from':'en-xfer-to'); return o.selectedOptions[0] ? o.selectedOptions[0].textContent.replace(/ — (promoter|director)$/,'') : ''; };
+  if (!f || !t){ h.textContent = 'Pick who gave the money and who received it.'; return; }
+  if (f === t){ h.innerHTML = '<span style="color:#b3261e">From and To must be two different ledgers.</span>'; return; }
+  const F = nm('f'), T = nm('t'), ft = f[0], tt = t[0];
+  let txt = '';
+  if (ft === 'P' && tt === 'V') txt = `<b>${esc(F)}</b> settles <b>${esc(T)}</b> from their own money: the vendor's outstanding comes down, and ${esc(F)}'s ledger shows the amount as owed to them by the company (also counted under “Paid personally” on the Banks tab).`;
+  else if (ft === 'P' && tt === 'P') txt = `<b>${esc(F)}</b> pays <b>${esc(T)}</b> on the company's behalf: the company owes ${esc(F)} more (money in on their ledger) and owes ${esc(T)} less (money out on theirs).`;
+  else if (ft === 'V' && tt === 'P') txt = `<b>${esc(F)}</b> returned money to <b>${esc(T)}</b>: the vendor's paid total goes down by this amount (shown as money received back in the vendor ledger), and the company owes ${esc(T)} less (money out on their ledger).`;
+  else txt = `<b>${esc(F)}</b> paid <b>${esc(T)}</b> for us: ${esc(F)}'s paid total goes down (money received back), ${esc(T)}'s outstanding comes down.`;
+  h.innerHTML = '👔 ' + txt;
 }
 function acEnBankChange(){
   const b = $('en-bank'); if (!b) return;
@@ -10998,6 +11045,7 @@ function acKindChange(){
     if (po){ po.disabled = !payKind; po.style.display = payKind ? '' : 'none'; }
     if (m && !payKind && m.value === 'PERSONAL') m.value = 'NEFT';
     acEnModeChange(); acEnBankChange(); }
+  acEnXferToggle();   // v71
 }
 // manual payee box: only for a direct vendor payment when no vendor from the list is chosen
 function acEnManualToggle(){
@@ -11089,6 +11137,19 @@ async function acEntrySave(){
   if (k === 'PAYMENT' && $('en-vendor') && $('en-vendor').value) k = 'VPAY';
   { const dir = ['VPAY','MMC_PAY','PAYMENT','BANK_OUT','SALARY','BONUS','ADVANCE'].includes(k) ? 'OUT' : ['BANK_IN','RECOVERY','MMC_RCPT'].includes(k) ? 'IN' : null;
     if (k !== 'MMC_VEN' && !(await acDupWarn(amt, $('en-date').value, dir))) return; }
+  if (k === 'TRANSFER' && acEnXferIsLedger()){
+    const f = $('en-xfer-from').value, t = $('en-xfer-to').value;
+    if (!f || !t){ say('en-msg','Choose who gave the money (From) and who received it (To).',false); return; }
+    if (f === t){ say('en-msg','From and To must be two different ledgers.',false); return; }
+    const ty = v => v[0] === 'P' ? 'PRINCIPAL' : 'VENDOR';
+    const r = await db.schema('acct').rpc('journal_transfer', { p_from_type: ty(f), p_from_id: f.slice(2), p_to_type: ty(t), p_to_id: t.slice(2), p_amount: amt,
+      p_date: $('en-date').value||null, p_ref: $('en-ref').value.trim()||null, p_note: $('en-narr').value.trim()||null });
+    if (r.error){ say('en-msg','Could not post: '+r.error.message,false); return; }
+    alert('Internal settlement posted in both ledgers — no bank account has moved.');
+    if (f[0] === 'P'){ window.acLedType = 'D:'; window.acLedSel = 'D:' + f.slice(2); }
+    else { window.acLedType = 'V:'; window.acLedSel = 'V:' + ((window.__enVendors||[]).find(v=>v.id===f.slice(2))||{}).name; }
+    acctTab('ledger'); return;
+  }
   if (k === 'BANK_OUT'){
     // a cash withdrawal is a petty cash top-up: one record in the petty book, one bank entry, linked
     if (!$('en-bank').value){ say('en-msg','Choose the bank the cash is withdrawn from.',false); return; }
@@ -11182,6 +11243,7 @@ async function acEdit(id){
   const A2 = db.schema('acct');
   const { data: e, error } = await A2.from('v_entries').select('*').eq('id', id).single();
   if (error || !e){ alert('Could not open that entry.'); return; }
+  if (e.journal_id || e.kind === 'JOURNAL'){ alert('This is an internal settlement between two ledgers. It cannot be edited piecemeal — delete it (both sides go together) and post it again from New Entry → Transfer between accounts with the bank tick box off.'); return; }
   if (!acBanks.length){ try { const b = await A2.from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(x){} }
   await acPrincipals();
   const [{ data: vpL }, { data: exL }, { data: mmL }, { data: edits }] = await Promise.all([
@@ -11267,6 +11329,13 @@ async function vlPaySave(id){
 async function vlPayDel(id, no){
   if (!isDir()){ alert('Only a Director can delete.'); return; }
   const p = Object.values((window.__vlIds||{}).pay||{}).find(x=>x.id===id); if (!p) return;
+  { const { data: j } = await db.schema('acct').from('vendor_payments').select('journal_id').eq('id', id).maybeSingle();
+    if (j && j.journal_id){
+      if (!confirm('This line is one side of an internal settlement between two ledgers. Deleting it removes BOTH sides. Continue?')) return;
+      const { error } = await db.schema('app').rpc('dir_delete', { p_schema: 'acct', p_table: 'journals', p_id: j.journal_id });
+      if (error){ alert('Could not delete: ' + error.message); return; }
+      acctTab('ledger'); return;
+    } }
   if (!confirm('Delete payment ' + no + ' (₹ ' + inr(p.amount) + ')?' + (p.entry_id ? '\n\nIts bank ledger entry is deleted too, so the bank balance goes back up.' : '') + '\nAny TDS recorded with it is removed as well. This cannot be undone.')) return;
   const A2 = db.schema('acct');
   await A2.from('vendor_pay_requests').update({ payment_id: null }).eq('payment_id', id);
@@ -11611,6 +11680,13 @@ async function vlBillDel(poId, no){
 }
 async function acDelEntry(id){
   const A2 = db.schema('acct');
+  { const { data: j } = await A2.from('entries').select('journal_id').eq('id', id).maybeSingle();
+    if (j && j.journal_id){
+      if (!confirm('This entry is one side of an internal settlement between two ledgers. Deleting it removes BOTH sides (the other ledger\'s line too). Continue?')) return;
+      const { error } = await db.schema('app').rpc('dir_delete', { p_schema: 'acct', p_table: 'journals', p_id: j.journal_id });
+      if (error){ alert('Could not delete: ' + error.message); return; }
+      acctTab('ledger'); return;
+    } }
   const [ex, vp] = await Promise.all([
     A2.from('expenses').select('exp_no').eq('entry_id', id),
     A2.from('vendor_payments').select('pay_no').eq('entry_id', id)
