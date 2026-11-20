@@ -9482,6 +9482,7 @@ async function acctTab(t){
       if (l.salary_link) parts.push('👤 Salary slip ' + esc(l.salary_link));
       if (l.petty_link) parts.push('💵 Petty cash ' + esc(l.petty_link));
       if (parts.length) return '<div style="font-size:10.5px;color:#1a7f37;margin-top:2px;">🔗 ' + parts.join(' · ') + '</div>';
+      if (e.staff_id && e.staff_name) return '<div style="font-size:10.5px;color:#1a7f37;margin-top:2px;">🔗 👤 Staff: ' + esc(e.staff_name) + '</div>';
       if (['PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && e.status !== 'REJECTED')
         return '<div style="font-size:10.5px;color:#b8860b;margin-top:2px;">⚠ not linked to any head' + (canFinApprove() ? ` <button class="mini" style="padding:1px 7px;font-size:10.5px;" onclick="acLinkForm('${e.id}')">🔗 Link to MMC / vendor / expense</button>` : '') + '</div>';
       return '';
@@ -9498,7 +9499,7 @@ async function acctTab(t){
     // a payment made from a director's own money: in their ledger it is money the company owes them (IN), not money paid to them
     const isDLed = (sel==='T:D:' || sel.slice(0,2)==='D:');
     es = es.map(e => acBankIsPersonal(e.bank_account_id) ? Object.assign({}, e, { _personal: true, _in: isDLed ? true : e._in, _out: isDLed ? false : e._out }) : e);
-    const isUnlinked = e => { const l = linkOf[e.id]; return e.direction==='OUT' && ['PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && e.status!=='REJECTED' && !(l && (l.mmc_link||l.vendor_link||l.expense_link||l.salary_link||l.petty_link)); };
+    const isUnlinked = e => { const l = linkOf[e.id]; return e.direction==='OUT' && ['PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && e.status!=='REJECTED' && !e.staff_id && !(l && (l.mmc_link||l.vendor_link||l.expense_link||l.salary_link||l.petty_link)); };   // v72
     const unlinkedN = es.filter(isUnlinked).length;
     if (window.acLedOnlyUnlinked) es = es.filter(isUnlinked);
     const totIn = es.filter(e=>e._in).reduce((s,e)=>s+Number(e.amount),0);
@@ -10907,7 +10908,7 @@ async function acEntryForm(kind){
   if (!acBanks.length){ try { const b = await db.schema('acct').from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   const bankOpts = acBanks.filter(b=>b.is_active && !b.principal_id).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
-  await acVendorList(); await acPrincipals();
+  await acVendorList(); await acPrincipals(); if (!window.__vnHeadsExtra) await vnLoadHeads();
   const vendorOpts = '<option value="">— choose the vendor —</option>' + window.__enVendors.map(v=>acVenOpt(v)).join('');
   $('ac-entry-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Bank ledger entry &amp; vendor payment</h3>
@@ -10977,8 +10978,31 @@ async function acEntryForm(kind){
 function acEnXferIsLedger(){ const k = $('en-kind') && $('en-kind').value, c = $('en-xfer-bank'); return k === 'TRANSFER' && c && !c.checked; }
 function acEnLedgerOpts(){
   const P = (window.__principals||[]).filter(p=>p.is_active).map(p=>`<option value="P:${p.id}">${esc(p.name)} — ${p.role==='PROMOTER'?'promoter':'director'}</option>`).join('');
+  const heads = [...new Set([...VN_EXP_HEADS, ...(window.__vnHeadsExtra||[])])].filter(h=>h && !/^Petty cash — /.test(h) && h!=='Salary & wages').sort((a,b)=>a.localeCompare(b));
+  const E = heads.map(h=>`<option value="E:${esc(h)}">${esc(h)}</option>`).join('');
+  const S = ((typeof acStaff!=='undefined' && acStaff)||[]).filter(u=>u.user_id && !(window.__principals||[]).some(p=>p.user_id===u.user_id)).map(u=>`<option value="S:${u.user_id}">${esc(u.full_name)}${u.designation && u.designation!==u.full_name ? ' — '+esc(u.designation) : ''}</option>`).join('');
   const V = (window.__enVendors||[]).map(v=>`<option value="V:${v.id}">${esc(v.name)}</option>`).join('');
-  return '<option value="">— choose —</option>' + (P ? `<optgroup label="👔 Directors &amp; promoters">${P}</optgroup>` : '') + (V ? `<optgroup label="💳 Vendors">${V}</optgroup>` : '');
+  return '<option value="">— choose —</option>'
+    + (P ? `<optgroup label="👔 Directors &amp; promoters">${P}</optgroup>` : '')
+    + (E ? `<optgroup label="🧾 Expense heads">${E}</optgroup>` : '')
+    + (S ? `<optgroup label="👤 Staff">${S}</optgroup>` : '')
+    + `<optgroup label="🏭 MMC"><option value="M:">MMC (money with MMC)</option></optgroup>`
+    + `<optgroup label="💵 Petty cash"><option value="C:">Petty cash box</option></optgroup>`
+    + (V ? `<optgroup label="💳 Vendors">${V}</optgroup>` : '');
+}
+// which pairs can be settled internally (mirrors the server rule) — returns '' when allowed, else the reason
+function acEnXferRule(f, t){
+  const ft = f[0], tt = t[0];
+  if (ft === 'E') return 'An expense head cannot give money. To reverse an expense, delete it under Accounting → Expenses.';
+  if (ft === 'S') return 'Money from a staff member is an advance recovery — use kind “Advance recovery” (or Money IN with the staff picked).';
+  if (ft === 'C') return 'Money going out of the cash box is a petty cash expense — use New Entry → Petty cash expense.';
+  if (ft === 'V' && !'PV'.includes(tt)) return 'A vendor can only return money to a director / promoter, or settle with another vendor, here. A vendor’s bill under an expense head is recorded as an expense with that vendor picked.';
+  if (ft === 'M' && !'VP'.includes(tt)) return 'From MMC, only “MMC paid the vendor” or money MMC paid to a director / promoter can be settled here.';
+  if (tt === 'M' && ft !== 'P') return 'Money to MMC comes from a company bank (kind “Payment to MMC”) or from a director / promoter personally.';
+  if (tt === 'C' && ft !== 'P') return 'The cash box is topped up from a company bank (Money OUT — cash withdrawal) or by a director / promoter personally.';
+  if (tt === 'S' && ft !== 'P') return 'Only a director / promoter paying a staff member personally can be settled here.';
+  if (tt === 'E' && ft !== 'P') return 'Only an expense paid personally by a director / promoter can be settled here.';
+  return '';
 }
 function acEnXferToggle(){
   const k = $('en-kind') && $('en-kind').value, isT = k === 'TRANSFER', led = acEnXferIsLedger();
@@ -11004,9 +11028,16 @@ function acEnXferHint(){
   if (!f || !t){ h.textContent = 'Pick who gave the money and who received it.'; return; }
   if (f === t){ h.innerHTML = '<span style="color:#b3261e">From and To must be two different ledgers.</span>'; return; }
   const F = nm('f'), T = nm('t'), ft = f[0], tt = t[0];
+  const bad = acEnXferRule(f, t); if (bad){ h.innerHTML = '<span style="color:#b3261e">✖ ' + esc(bad) + '</span>'; return; }
   let txt = '';
   if (ft === 'P' && tt === 'V') txt = `<b>${esc(F)}</b> settles <b>${esc(T)}</b> from their own money: the vendor's outstanding comes down, and ${esc(F)}'s ledger shows the amount as owed to them by the company (also counted under “Paid personally” on the Banks tab).`;
   else if (ft === 'P' && tt === 'P') txt = `<b>${esc(F)}</b> pays <b>${esc(T)}</b> on the company's behalf: the company owes ${esc(F)} more (money in on their ledger) and owes ${esc(T)} less (money out on theirs).`;
+  else if (ft === 'P' && tt === 'E') txt = `<b>${esc(F)}</b> paid this expense personally: it is booked under <b>${esc(T)}</b> in Accounting → Expenses (and the Expense ledger), and ${esc(F)}'s ledger shows the amount as owed to them.`;
+  else if (ft === 'P' && tt === 'M') txt = `<b>${esc(F)}</b> sent money to MMC personally: the MMC ledger shows it as money with MMC (available for MMC to pay vendors), and ${esc(F)}'s ledger shows the amount as owed to them.`;
+  else if (ft === 'P' && tt === 'C') txt = `<b>${esc(F)}</b> put cash into the petty cash box personally: the box is topped up (Petty cash book), and ${esc(F)}'s ledger shows the amount as owed to them.`;
+  else if (ft === 'P' && tt === 'S') txt = `<b>${esc(F)}</b> paid <b>${esc(T)}</b> personally: the staff ledger shows the payment to them, and ${esc(F)}'s ledger shows the amount as owed to them.`;
+  else if (ft === 'M' && tt === 'V') txt = `MMC paid <b>${esc(T)}</b> out of the money with MMC: the vendor's outstanding comes down and the balance with MMC comes down (same as “MMC paid the vendor”).`;
+  else if (ft === 'M' && tt === 'P') txt = `MMC paid <b>${esc(T)}</b> out of the money with MMC: the balance with MMC comes down, and the company owes ${esc(T)} less (money out on their ledger).`;
   else if (ft === 'V' && tt === 'P') txt = `<b>${esc(F)}</b> returned money to <b>${esc(T)}</b>: the vendor's paid total goes down by this amount (shown as money received back in the vendor ledger), and the company owes ${esc(T)} less (money out on their ledger).`;
   else txt = `<b>${esc(F)}</b> paid <b>${esc(T)}</b> for us: ${esc(F)}'s paid total goes down (money received back), ${esc(T)}'s outstanding comes down.`;
   h.innerHTML = '👔 ' + txt;
@@ -11141,13 +11172,21 @@ async function acEntrySave(){
     const f = $('en-xfer-from').value, t = $('en-xfer-to').value;
     if (!f || !t){ say('en-msg','Choose who gave the money (From) and who received it (To).',false); return; }
     if (f === t){ say('en-msg','From and To must be two different ledgers.',false); return; }
-    const ty = v => v[0] === 'P' ? 'PRINCIPAL' : 'VENDOR';
-    const r = await db.schema('acct').rpc('journal_transfer', { p_from_type: ty(f), p_from_id: f.slice(2), p_to_type: ty(t), p_to_id: t.slice(2), p_amount: amt,
-      p_date: $('en-date').value||null, p_ref: $('en-ref').value.trim()||null, p_note: $('en-narr').value.trim()||null });
+    { const bad = acEnXferRule(f, t); if (bad){ say('en-msg', bad, false); return; } }
+    const TY = { P:'PRINCIPAL', V:'VENDOR', E:'EXPENSE', S:'STAFF', M:'MMC', C:'PETTY' };
+    const idOf = v => 'PVS'.includes(v[0]) ? v.slice(2) : null, nmOf = v => v[0] === 'E' ? v.slice(2) : null;
+    const r = await db.schema('acct').rpc('journal_transfer', { p_from_type: TY[f[0]], p_from_id: idOf(f), p_to_type: TY[t[0]], p_to_id: idOf(t), p_amount: amt,
+      p_date: $('en-date').value||null, p_ref: $('en-ref').value.trim()||null, p_note: $('en-narr').value.trim()||null, p_from_name: nmOf(f), p_to_name: nmOf(t) });
     if (r.error){ say('en-msg','Could not post: '+r.error.message,false); return; }
     alert('Internal settlement posted in both ledgers — no bank account has moved.');
-    if (f[0] === 'P'){ window.acLedType = 'D:'; window.acLedSel = 'D:' + f.slice(2); }
-    else { window.acLedType = 'V:'; window.acLedSel = 'V:' + ((window.__enVendors||[]).find(v=>v.id===f.slice(2))||{}).name; }
+    const go = v => { const k = v[0];
+      if (k === 'P'){ window.acLedType = 'D:'; window.acLedSel = 'D:' + v.slice(2); }
+      else if (k === 'V'){ window.acLedType = 'V:'; window.acLedSel = 'V:' + ((window.__enVendors||[]).find(x=>x.id===v.slice(2))||{}).name; }
+      else if (k === 'E'){ window.acLedType = 'E:'; window.acLedSel = 'E:' + v.slice(2); }
+      else if (k === 'M'){ window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; }
+      else if (k === 'C'){ window.acLedType = 'C:'; window.acLedSel = 'C:BOX'; }
+      else { window.acLedType = 'D:'; window.acLedSel = ''; } };
+    go(f[0] === 'M' ? t : f);
     acctTab('ledger'); return;
   }
   if (k === 'BANK_OUT'){
