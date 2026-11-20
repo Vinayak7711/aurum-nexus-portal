@@ -9024,6 +9024,7 @@ async function acctTab(t){
     // (Older entries carry the staff who keyed them in — those are not the staff's money and stay out.)
     const staffRel = e => {
       if (!e.staff_name) return false;
+      if (acPrincipalOfStaff(e)) return false;   // directors / promoters have their own ledger
       if (['SALARY','BONUS','ADVANCE','RECOVERY'].includes(e.kind)) return true;
       const toks = String(e.staff_name).toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2);
       const p = String(e.payee||'').toLowerCase();
@@ -9120,9 +9121,9 @@ async function acctTab(t){
         </div>
         ${pfx === 'D:' ? `<div class="card" style="padding:12px 14px;margin-top:10px;">
           <h4 class="sec" style="margin-top:0;">👔 Directors &amp; promoters on the list</h4>
-          <p style="font-size:11.5px;color:#777;margin:2px 0 8px;">Each person's ledger shows money received from them (loans / capital) and paid to them (repayments / payments) — entries linked to them on the bank-entry form, plus older entries that carry their name in the payee or narration.</p>
-          <div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th class="amount">Entries</th><th></th></tr></thead><tbody>
-          ${(window.__principals||[]).map(p=>`<tr${p.is_active?'':' class="inactive"'}><td><b>${esc(p.name)}</b></td><td>${p.role==='PROMOTER'?'Promoter':'Director'}</td><td class="amount">${(all||[]).filter(e=>acPrincipalRel(e,p)).length}</td><td style="white-space:nowrap">${(isDir()||canFinEdit())?`<button class="mini" onclick="acPrincipalAdd('${p.id}')">✏️ Edit</button> <button class="mini" onclick="acPrincipalToggle('${p.id}')">${p.is_active?'Deactivate':'Activate'}</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4" style="color:#777">No one on the list yet.</td></tr>'}
+          <p style="font-size:11.5px;color:#777;margin:2px 0 8px;">Each person's ledger shows money received from them (loans / capital) and paid to them (repayments / payments) — entries linked to them on the bank-entry form, plus older entries that carry their name in the payee or narration. A person linked to an ERP login also gets the salary, advances and payments recorded against that login here, and is left out of the Staff ledger.</p>
+          <div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th>ERP login</th><th class="amount">Entries</th><th></th></tr></thead><tbody>
+          ${(window.__principals||[]).map(p=>`<tr${p.is_active?'':' class="inactive"'}><td><b>${esc(p.name)}</b></td><td>${p.role==='PROMOTER'?'Promoter':'Director'}</td><td style="font-size:12px;">${p.user_id ? '👤 '+esc(acPrincipalUserName(p)) : '<span style="color:#999">not linked</span>'}</td><td class="amount">${(all||[]).filter(e=>acPrincipalRel(e,p)).length}</td><td style="white-space:nowrap">${(isDir()||canFinEdit())?`<button class="mini" onclick="acPrincipalAdd('${p.id}')">✏️ Edit</button> <button class="mini" onclick="acPrincipalLink('${p.id}')">🔗 ${p.user_id?'Change login':'Link login'}</button> <button class="mini" onclick="acPrincipalToggle('${p.id}')">${p.is_active?'Deactivate':'Activate'}</button>`:''}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#777">No one on the list yet.</td></tr>'}
           </tbody></table></div>
           ${(isDir()||canFinEdit())?`<button class="btn ghost sm" style="margin-top:8px;" onclick="acPrincipalAdd()">+ Add director / promoter</button>`:''}
         </div>` : ''}`;
@@ -10741,9 +10742,43 @@ function acPrincipalLabel(p){ return p.name + ' (' + (p.role==='PROMOTER' ? 'Pro
 function acPrincipalRel(e, p){
   if (!e || !p) return false;
   if (e.principal_id) return e.principal_id === p.id;
+  if (e.staff_id && p.user_id && e.staff_id === p.user_id) return true;   // their own ERP login (salary, advances, payments to them)
+  if (e.staff_id && !p.user_id && e.staff_name && acNameTokMatch(p.name, e.staff_name)) return true;
   const toks = String(p.name).toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2); if (!toks.length) return false;
   const hay = (String(e.payee||'') + ' ' + String(e.narration||'')).toLowerCase();
   return toks.every(t=>hay.includes(t));
+}
+function acNameTokMatch(name, hay){
+  const toks = String(name||'').toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2); if (!toks.length) return false;
+  const h = String(hay||'').toLowerCase();
+  return toks.every(t=>h.includes(t)) || (toks.length>1 && h.split(/[^a-z0-9]+/).filter(t=>t.length>2).every(t=>toks.includes(t)));
+}
+// the director / promoter an entry's staff login belongs to (so the same person is never listed under Staff as well)
+function acPrincipalOfStaff(e){
+  if (!e || !e.staff_id) return null;
+  const P = (window.__principals||[]).filter(p=>p.is_active);
+  return P.find(p=>p.user_id && p.user_id===e.staff_id) || P.find(p=>!p.user_id && e.staff_name && acNameTokMatch(p.name, e.staff_name)) || null;
+}
+function acPrincipalUserName(p){
+  if (!p || !p.user_id) return '';
+  const u = (window.acStaff||[]).find(x=>x.user_id===p.user_id || x.id===p.user_id) || (window.allUsers||[]).find(x=>x.id===p.user_id);
+  return u ? (u.full_name || u.email || '') : (window.__userNames||{})[p.user_id] || 'linked';
+}
+async function acPrincipalLink(id){
+  const cur = (window.__principals||[]).find(p=>p.id===id); if (!cur) return;
+  const taken = new Set((window.__principals||[]).filter(p=>p.id!==id && p.user_id).map(p=>p.user_id));
+  const opts = (window.acStaff||[]).filter(u=>u.user_id && !taken.has(u.user_id)).map(u=>`<option value="${u.user_id}" ${u.user_id===cur.user_id?'selected':''}>${esc(u.full_name)}${u.designation && u.designation!==u.full_name ? ' — '+esc(u.designation) : ''}</option>`).join('');
+  apprModal('🔗 Link to ERP login — ' + esc(cur.name), `
+    <p style="font-size:12px;color:#555;margin:0 0 8px;">Pick the staff login that belongs to this person. Their salary, advances and payments recorded against that login then show in the <b>Directors &amp; promoters</b> ledger and are left out of the Staff ledger.</p>
+    <label>ERP login</label><select id="pl-user"><option value="">— not linked —</option>${opts}</select>
+    <div style="display:flex;gap:8px;margin-top:12px;"><button class="btn gold" onclick="acPrincipalLinkGo('${id}')">Save link</button><button class="btn ghost" onclick="apprModalClose()">Cancel</button></div>`);
+}
+async function acPrincipalLinkGo(id){
+  const cur = (window.__principals||[]).find(p=>p.id===id); if (!cur) return;
+  const uid = ($('pl-user')||{}).value || null;
+  const { error } = await db.schema('acct').rpc('principal_save', { p_id: id, p_name: cur.name, p_role: cur.role, p_active: cur.is_active, p_user: uid, p_set_user: true });
+  if (error){ alert('Could not save: ' + error.message); return; }
+  apprModalClose(); await acPrincipals(true); acctTab('ledger');
 }
 async function acPrincipalAdd(id){
   const cur = id ? (window.__principals||[]).find(p=>p.id===id) : null;
