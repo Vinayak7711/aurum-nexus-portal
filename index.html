@@ -7268,6 +7268,7 @@ async function purchaseTab(t){
         <option value="RM" ${window.poCatFilter==='RM'?'selected':''}>Raw material only</option>
         <option value="OFFICE" ${window.poCatFilter==='OFFICE'?'selected':''}>Office &amp; admin only</option>
         <option value="SERVICES" ${window.poCatFilter==='SERVICES'?'selected':''}>Services only</option>
+        <option value="EXPENSE" ${window.poCatFilter==='EXPENSE'?'selected':''}>Expenses only</option>
         <option value="OTHER" ${window.poCatFilter==='OTHER'?'selected':''}>Other only</option></select></div>
       <div class="table-scroll"><table><thead><tr><th>PO</th><th>Vendor</th><th>Date</th><th>Expected</th><th>Qty (ordered / dispatched / received)</th>${canPurView()?'<th class="amount">Value ₹ <span style="font-weight:normal;font-size:10px;color:#999">(incl. tax)</span></th>':''}<th>Status</th><th></th></tr></thead><tbody>
       ${posShown.map(p=>`<tr><td><b>${esc(p.po_no)}</b>${mmcBy[p.id]?' <span style="background:#0b57d0;color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:600;" title="Vendor bills & delivers directly to MMC — material belongs to Aurum">→ MMC</span>':''}<br>${poCatTag(p.id, catBy[p.id])}</td><td>${esc(p.vendor_name||'—')}${termsBy[p.id]?'<br><span style="font-size:11px;color:#7a6a4a;" title="Payment terms">💳 '+esc(termsBy[p.id].slice(0,70))+'</span>':''}</td><td>${p.order_date}</td><td>${p.expected_date||'—'}</td>` +
@@ -7316,12 +7317,17 @@ async function purchaseTab(t){
         <div><label>Expected delivery</label><input type="date" id="po-expected"></div>
       </div>
       <div class="row2c" style="margin-top:8px;">
-        <div><label>What is this purchase for? *</label><select id="po-cat">
+        <div><label>What is this purchase for? *</label><select id="po-cat" onchange="poCatChange()">
           <option value="RM">Raw material (production)</option>
           <option value="OFFICE">Office &amp; admin</option>
           <option value="SERVICES">Services</option>
+          <option value="EXPENSE">Expense (booked under an Accounting expense head)</option>
           <option value="OTHER">Other</option></select></div>
-        <div><span style="font-size:11px;color:#999;">Non-raw-material orders (office things, services, expenses) are kept separate in the PO lists so production purchases stay clean.</span></div>
+        <div><span style="font-size:11px;color:#999;">Non-raw-material orders (office things, services, expenses) are kept separate in the PO lists so production purchases stay clean. An <b>Expense</b> order names its expense head — every payment against it lands in Accounting → Expenses and the Expense ledger under that head.</span></div>
+      </div>
+      <div id="po-exphead-wrap" style="display:none;margin-top:8px;background:#f7f0fb;border:1px solid #e1cdeb;border-radius:10px;padding:10px 12px;">
+        <label>Expense head * <span style="color:#999;font-weight:normal;font-size:11px;">— as in Accounting → Expenses; payments against this order are booked here</span></label>
+        <select id="po-exphead">${vnHeadOpts((window.__poHead||{}).exphead || '')}</select>
       </div>
       <div class="switch" style="margin:10px 0;"><input type="checkbox" id="po-billmmc"><span>Vendor bills &amp; delivers <b>directly to MMC</b> — material still belongs to Aurum; on receipt the stock is taken into the <b>company store</b> as usual</span></div>
       ${poLinkReqs.length > 1
@@ -7380,7 +7386,7 @@ async function purchaseTab(t){
       ${canPurApprove() ? '' : '<p style="font-size:12px;color:#b8860b;margin-top:6px;">This order will wait for approval by the Accounts head or the Director before it can be dispatched or received.</p>'}
       <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">${canPurApprove() ? 'Place purchase order' : 'Submit for approval'}</button>
       <div id="pon-msg"></div>`;
-    poHeadRestore();
+    poHeadRestore(); poCatChange();
     return;
   }
 
@@ -7583,6 +7589,7 @@ async function purchaseTab(t){
           <option value="RM">Raw material</option>
           <option value="OFFICE">Office &amp; admin</option>
           <option value="SERVICES">Services</option>
+          <option value="EXPENSE">Expense</option>
           <option value="OTHER">Other</option></select></div>
         <div><label>Order status</label><select id="ph-status">
           <option value="">All orders</option>
@@ -7819,7 +7826,7 @@ async function poPrint(id){
       <tr><th style="width:28%;">PO number</th><td><b>${esc(po.po_no)}</b></td></tr>
       <tr><th>Order date</th><td>${po.order_date}</td></tr>
       ${po.expected_date?`<tr><th>Expected delivery</th><td>${po.expected_date}</td></tr>`:''}
-      ${po.category&&po.category!=='RM'&&typeof PO_CAT_LBL!=='undefined'?`<tr><th>Order type</th><td>${esc(PO_CAT_LBL[po.category]||po.category)}</td></tr>`:''}
+      ${po.category&&po.category!=='RM'&&typeof PO_CAT_LBL!=='undefined'?`<tr><th>Order type</th><td>${esc(PO_CAT_LBL[po.category]||po.category)}${po.category==='EXPENSE'?' — booked under <b>'+esc(po.expense_head||'(expense head not set)')+'</b> in Accounting → Expenses':''}</td></tr>`:''}
       <tr><th>Deliver / bill to</th><td>${po.bill_to_mmc?'Directly to MMC — material belongs to Aurum Spirits India Limited':'Aurum Spirits India Limited — company store'}</td></tr>
     </table>
     <h2 style="margin-top:14px;">Vendor</h2>
@@ -7899,13 +7906,20 @@ function poNewTotals(){
 // Header of the New PO form survives the redraws that adding / removing a line causes
 function poHeadKeep(){
   const v = $('po-vendor'); if (!v) return;
-  window.__poHead = { vendor: v.value, expected: ($('po-expected')||{}).value || '', cat: ($('po-cat')||{}).value || 'RM', mmc: !!(($('po-billmmc')||{}).checked), terms: ($('po-terms')||{}).value || '', remarks: ($('po-remarks')||{}).value || '' };
+  window.__poHead = { vendor: v.value, expected: ($('po-expected')||{}).value || '', cat: ($('po-cat')||{}).value || 'RM', exphead: ($('po-exphead')||{}).value || '', mmc: !!(($('po-billmmc')||{}).checked), terms: ($('po-terms')||{}).value || '', remarks: ($('po-remarks')||{}).value || '' };
 }
 function poHeadRestore(){
   const H = window.__poHead; if (!H) return;
   const set = (id, val) => { const el = $(id); if (!el) return; if (el.type === 'checkbox') el.checked = !!val; else if (val !== undefined && val !== null) { el.value = val; } };
   if (H.vendor && $('po-vendor') && [...$('po-vendor').options].some(o=>o.value===H.vendor)) $('po-vendor').value = H.vendor;
   set('po-expected', H.expected); set('po-cat', H.cat); set('po-billmmc', H.mmc); set('po-terms', H.terms); set('po-remarks', H.remarks);
+  if (H.exphead && $('po-exphead')) $('po-exphead').value = H.exphead;
+  poCatChange();
+}
+function poCatChange(){
+  const w = $('po-exphead-wrap'), c = $('po-cat'); if (!w || !c) return;
+  w.style.display = c.value === 'EXPENSE' ? '' : 'none';
+  if (c.value === 'EXPENSE' && !window.__poHeadsLoaded){ window.__poHeadsLoaded = true; vnLoadHeads().then(()=>{ const sel = $('po-exphead'); if (sel) sel.innerHTML = vnHeadOpts(sel.value || ''); }); }
 }
 function poAddLine(){
   const qty = Number($('pol-qty').value), rate = Number($('pol-rate').value);
@@ -7947,6 +7961,7 @@ async function poPlace(){
   if (poLines.some(l => !(Number(l.qty) > 0))){ say('pon-msg','Every line needs a quantity above zero.',false); return; }
   if (poLines.some(l => l.tax_type && l.tax_type !== 'NONE' && !(Number(l.tax_rate) > 0))){ say('pon-msg','A line has a tax type selected but no tax rate % — enter the rate or set it to "No tax".',false); return; }
   if (poLines.some(l => !(Number(l.rate) > 0)) && !confirm('Some lines still have rate ₹0. Place the order anyway?')) return;
+  if ($('po-cat') && $('po-cat').value === 'EXPENSE' && !(($('po-exphead')||{}).value)){ say('pon-msg','Choose the expense head this order is booked under.',false); return; }
   const { data, error } = await db.schema('mfg').rpc('create_po', {
     p_vendor: $('po-vendor').value,
     p_lines: poLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty, rate: l.rate })),
@@ -7982,6 +7997,7 @@ async function poPlace(){
   if (cat !== 'RM' && data){
     const { error: cErr } = await db.schema('mfg').rpc('po_set_category', { p_po: data, p_cat: cat });
     if (cErr){ say('pon-msg','PO created, but the category could not be saved: '+cErr.message,false); return; }
+    if (cat === 'EXPENSE'){ const head = ($('po-exphead')||{}).value || ''; const { error: hErr } = await db.schema('mfg').rpc('po_set_expense_head', { p_po: data, p_head: head }); if (hErr){ say('pon-msg','PO created, but the expense head could not be saved: '+hErr.message,false); return; } }
   }
   poLines = []; poLinkReq = null; poLinkReqs = []; poClubVendor = null; window.__poHead = null; reqSel.clear(); purchaseTab('pos');
 }
@@ -7990,18 +8006,23 @@ async function poApprove(id){
   if (error){ say('po-msg','Could not approve: '+error.message,false); return; }
   purchaseTab('pos');
 }
-const PO_CAT_LBL = { RM:'Raw material', OFFICE:'Office & admin', SERVICES:'Services', OTHER:'Other' };
-const PO_CAT_COL = { RM:'#1a7f37', OFFICE:'#0b57d0', SERVICES:'#b8860b', OTHER:'#777' };
+const PO_CAT_LBL = { RM:'Raw material', OFFICE:'Office & admin', SERVICES:'Services', EXPENSE:'Expense', OTHER:'Other' };
+const PO_CAT_COL = { RM:'#1a7f37', OFFICE:'#0b57d0', SERVICES:'#b8860b', EXPENSE:'#8e24aa', OTHER:'#777' };
 // Category tag — a live dropdown for Accounts/Director (so past orders can be re-classified), a plain tag for everyone else.
 function poCatTag(id, cat, after){
   cat = cat || 'RM';
   if (!canPurEdit()) return `<span style="background:${PO_CAT_COL[cat]};color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">${PO_CAT_LBL[cat]}</span>`;
   return `<select onchange="poSetCat('${id}', this.value, '${after||'pos'}')" title="Purchase category — change it any time" style="width:auto;font-size:10.5px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;color:${PO_CAT_COL[cat]};font-weight:600;">` +
-    ['RM','OFFICE','SERVICES','OTHER'].map(c=>`<option value="${c}" ${c===cat?'selected':''}>${PO_CAT_LBL[c]}</option>`).join('') + '</select>';
+    ['RM','OFFICE','SERVICES','EXPENSE','OTHER'].map(c=>`<option value="${c}" ${c===cat?'selected':''}>${PO_CAT_LBL[c]}</option>`).join('') + '</select>';
 }
 async function poSetCat(id, cat, after){
   const { error } = await db.schema('mfg').rpc('po_set_category', { p_po: id, p_cat: cat });
   if (error){ alert('Could not change the category: '+error.message); return; }
+  if (cat === 'EXPENSE'){
+    await vnLoadHeads(); const heads = [...new Set([...VN_EXP_HEADS, ...(window.__vnHeadsExtra||[])])].sort((a,b)=>a.localeCompare(b));
+    const pick = prompt('Expense head for this order — its payments are booked under this head in Accounting → Expenses:\n\n' + heads.map((h,i)=>(i+1)+'. '+h).join('\n') + '\n\nType the number, or type a new head name:', '');
+    if (pick !== null){ const head = heads[Number(pick)-1] || String(pick).trim(); if (head){ const { error: e2 } = await db.schema('mfg').rpc('po_set_expense_head', { p_po: id, p_head: head }); if (e2) alert('Category saved, but the expense head could not be: ' + e2.message); } }
+  }
   if (after === 'hist') poHistRun(); else purchaseTab('pos');
 }
 async function poDispatch(id, poNo){ return poDispatchForm(id, poNo || ''); }
