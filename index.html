@@ -8889,7 +8889,7 @@ function acWho(e){ if (!e) return ''; const staffKinds = {SALARY:1, BONUS:1, ADV
 function acBankName(id){ const b = acBanks.find(x=>x.id===id); return b ? b.name : '—'; }
 // "Paid personally by <director / promoter>" accounts: a payment from one is the person's own money spent for the company —
 // it reaches the vendor / expense head like any payment, and the Directors & promoters ledger shows it as money the company owes them.
-function acBankIsPersonal(id){ const b = acBanks.find(x=>x.id===id); return !!(b && b.principal_id); }
+function acBankIsPersonal(id){ const b = acBanks.find(x=>x.id===id); return !!(b && b.principal_id); }   // v65b
 function acBankOpts(sel, opts){
   const O = opts || {}; const act = acBanks.filter(b=>b.is_active || (sel && b.id===sel));
   const co = act.filter(b=>!b.principal_id), pe = O.noPersonal ? [] : act.filter(b=>b.principal_id);
@@ -9025,7 +9025,7 @@ async function acctTab(t){
       ${pers.length ? `<h4 class="sec" style="margin-top:18px;">👔 Paid personally by directors &amp; promoters</h4>
       <p style="font-size:11.5px;color:#777;margin:2px 0 8px;">When a director / promoter pays a vendor or an expense from their own money, choose their name under <b>From our bank</b> on the entry form. The payment reaches the vendor / expense head as usual and the amount below is what the company owes them for it (their full account, with money they put in and repayments, is under Ledger → Directors &amp; promoters).</p>
       <div class="table-scroll"><table><thead><tr><th>Person</th><th class="amount">Paid on the company’s behalf ₹</th><th></th></tr></thead><tbody>
-      ${pers.map(b=>{ const p=(window.__principals||[]).find(x=>x.id===b.principal_id); return `<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(p?p.name:b.name)}</b> <span style="font-size:11px;color:#777">${p?(p.role==='PROMOTER'?'Promoter':'Director'):''}</span></td><td class="amount" style="font-weight:700;color:#b3261e">${inr(-Number(b.balance||0))}</td><td style="white-space:nowrap"><button class="mini" onclick="window.acLedType='D:';window.acLedSel='D:${b.principal_id}';acctTab('ledger')">📖 Ledger</button></td></tr>`; }).join('')}
+      ${pers.map(b=>{ const p=(window.__principals||[]).find(x=>x.id===b.principal_id); return `<tr style="${b.is_active?'':'opacity:.5'}"><td><b>${esc(p?p.name:b.name)}</b> <span style="font-size:11px;color:#777">${p?(p.role==='PROMOTER'?'Promoter':'Director'):''}</span></td><td class="amount" style="font-weight:700;color:${Number(b.balance)<0?'#b3261e':'#777'}">${inr(Number(b.balance)<0 ? -Number(b.balance) : 0)}</td><td style="white-space:nowrap"><button class="mini" onclick="window.acLedType='D:';window.acLedSel='D:${b.principal_id}';acctTab('ledger')">📖 Ledger</button></td></tr>`; }).join('')}
       </tbody></table></div>` : ''}`;
     return;
   }
