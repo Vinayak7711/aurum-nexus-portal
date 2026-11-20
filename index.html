@@ -9502,23 +9502,21 @@ async function acctTab(t){
         return Object.assign({}, e, { _in: dIn, _out: dOut }); }); }
     // a payment made from a director's own money: in their ledger it is money the company owes them (IN), not money paid to them
     const isDLed = (sel==='T:D:' || sel.slice(0,2)==='D:');
-    // Directors & promoters ledger — read like the person's own account with the company:
-    //   In  = money they put into the company (loan, capital) or received in a settlement
-    //   Out = money they paid out from their own pocket (vendor, expense, MMC, petty cash, staff, another director) or repaid to them
-    // _owe = what the company owes them from this entry (+ / −), totalled in the "Company owes them" tile.   v75
+    // Directors & promoters ledger:
+    //   In  = money they put into the company (loan, capital) and what they paid for the company from their own pocket ("Paid personally")
+    //   Out = money paid back to them, and internal settlements moved OUT of their ledger to the head they belong to (expense head, vendor, MMC, cash box, staff, another director)
+    // An internal settlement is a plain JOURNAL entry with no bank: its direction already says which side it is.   v76
     es = es.map(e => {
       const pers = acBankIsPersonal(e.bank_account_id), jv = e.kind === 'JOURNAL' && !e.bank_account_id;
-      if (!isDLed) return Object.assign({}, e, pers ? { _personal: true } : {}, jv ? { _giver: e.direction === 'IN' } : {});
-      if (pers) return Object.assign({}, e, { _personal: true, _in: false, _out: true, _owe: Number(e.amount) });
-      if (jv) return Object.assign({}, e, { _in: e.direction === 'OUT', _out: e.direction === 'IN', _owe: (e.direction === 'IN' ? 1 : -1) * Number(e.amount), _giver: e.direction === 'IN' });
-      return Object.assign({}, e, { _owe: (e._in ? 1 : 0) * Number(e.amount) - (e._out ? 1 : 0) * Number(e.amount) });
+      if (pers) return Object.assign({}, e, { _personal: true, _in: isDLed ? true : e._in, _out: isDLed ? false : e._out });
+      if (jv) return Object.assign({}, e, { _giver: e.direction === 'OUT' });
+      return e;
     });
     const isUnlinked = e => { const l = linkOf[e.id]; return e.direction==='OUT' && ['PAYMENT','BANK_OUT','OTHER'].includes(e.kind) && e.status!=='REJECTED' && !e.staff_id && !(l && (l.mmc_link||l.vendor_link||l.expense_link||l.salary_link||l.petty_link)); };   // v72
     const unlinkedN = es.filter(isUnlinked).length;
     if (window.acLedOnlyUnlinked) es = es.filter(isUnlinked);
     const totIn = es.filter(e=>e._in).reduce((s,e)=>s+Number(e.amount),0);
     const totOut = es.filter(e=>e._out).reduce((s,e)=>s+Number(e.amount),0);
-    const totOwe = isDLed ? es.filter(e=>e.status==='APPROVED').reduce((s,e)=>s+Number(e._owe||0),0) : null;
     // single bank ledger: running balance after every approved entry (opening balance + everything before the from-date, then row by row)
     let ledBank = null, openBal = 0, closeBal = 0;
     if (!isAllLed && sel.slice(0,2)==='B:'){
@@ -9557,7 +9555,6 @@ async function acctTab(t){
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Money in</div><div style="font-size:19px;font-weight:700;color:#1a7f37">₹ ${inr(totIn)}</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Money out</div><div style="font-size:19px;font-weight:700;color:#b3261e">₹ ${inr(totOut)}</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Net</div><div style="font-size:19px;font-weight:700;color:${totIn-totOut>=0?'#1a7f37':'#b3261e'}">₹ ${inr(totIn-totOut)}</div></div>
-        ${isDLed ? `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;border:1.5px solid #c9a227;"><div style="font-size:12px;color:#777">Company owes them</div><div style="font-size:19px;font-weight:700;color:${totOwe>=0?'#1a7f37':'#b3261e'}">₹ ${inr(totOwe)}</div></div>` : ''}
         ${ledBank ? `<div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;"><div style="font-size:12px;color:#777">Opening balance${window.acLedFrom?' on '+window.acLedFrom:''}</div><div style="font-size:19px;font-weight:700;color:${openBal>=0?'#1a7f37':'#b3261e'}">₹ ${inr(openBal)}</div></div>
         <div class="card" style="flex:1;min-width:150px;text-align:center;padding:12px;border:1.5px solid #c9a227;"><div style="font-size:12px;color:#777">Closing balance${window.acLedTo?' on '+window.acLedTo:''}</div><div style="font-size:19px;font-weight:700;color:${closeBal>=0?'#1a7f37':'#b3261e'}">₹ ${inr(closeBal)}</div></div>` : ''}
       </div>
@@ -9568,13 +9565,13 @@ async function acctTab(t){
       <div id="ac-entry-form"></div>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       ${(sel==='T:S:' || sel.slice(0,2)==='S:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Only this person’s own money is shown — salary, advances, recoveries and payments made out in their name. Entries they merely keyed in for vendors, rent or other heads belong to those ledgers, not here.</p>` : ''}
-      ${(sel==='T:D:' || sel.slice(0,2)==='D:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;"><b>Money in</b> = money the person put into the company (unsecured loan, capital, fund transfer in) or received in an internal settlement. <b>Money out</b> = money that went out from them — paid from their own pocket to a vendor, an expense head, MMC, the cash box, staff or another director (“Paid personally” / internal settlement), or repaid to them by the company. The <b>Company owes them</b> tile is the running position: what they put in plus what they paid for the company, less what was paid back to them (negative = they owe the company). Entries are linked to a person on the bank-entry form; an older entry that names them in the payee / narration is picked up automatically — use <b>👔 Link</b> on a row to fix the person.</p>` : ''}
+      ${(sel==='T:D:' || sel.slice(0,2)==='D:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;"><b>Money in</b> = money the person put into the company (unsecured loan, capital, fund transfer in) and what they paid for the company from their own pocket (“Paid personally”). <b>Money out</b> = money paid back to them, and internal settlements (New Entry → Transfer between accounts, bank tick box off) that move an amount <b>out of this ledger</b> into the head it belongs to — an expense head, a vendor, MMC, the cash box, staff or another director — where it is booked. <b>Net</b> above is the balance still standing in their ledger. Entries are linked to a person on the bank-entry form; an older entry that names them in the payee / narration is picked up automatically — use <b>👔 Link</b> on a row to fix the person.</p>` : ''}
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th>${ledBank?'<th class="amount">Balance ₹</th>':''}<th>Status</th><th></th></tr></thead><tbody>
       ${(es||[]).map(e=>{const who=acWho(e)||'';const inA=e._in?inr(e.amount):'';const outA=e._out?inr(e.amount):'';
         const balTd = ledBank ? `<td class="amount" style="font-weight:700;white-space:nowrap;color:${e._counted ? (Number(e._bal)>=0?'#1a3d6b':'#b3261e') : '#999'}" title="${e._counted ? 'Bank balance after this entry' : 'Not counted — the entry is not approved; balance unchanged'}">${inr(e._bal)}${e._counted?'':'<br><span style="font-size:10px;font-weight:400;">not counted</span>'}</td>` : '';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
           `<td>${who?esc(who):esc((e.narration||'—').slice(0,80))}${who&&e.narration&&e.narration.trim()!==who.trim()?'<br><span style="font-size:11px;color:#777">'+esc(e.narration.slice(0,80))+'</span>':''}${linkHtml(e)}</td>` +
-          `<td>${e._personal ? '👔 ' + esc(e.bank_name_label||'') + '<br><span style="font-size:10.5px;color:#777">own money, paid for the company</span>' : e.kind==='JOURNAL' && !e.bank_account_id ? '🔁 Internal settlement<br><span style="font-size:10.5px;color:#777">no bank — ' + (e._giver ? 'paid by them' : 'received by them') + '</span>' : esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}${e.kind==='TRANSFER'&&sel.slice(0,2)==='B:'?`<br><span style="font-size:10.5px;color:#777">${e._in&&!e._out?'transfer received from '+esc(e.bank_name_label||''):e._out&&!e._in?'transfer sent to '+esc(e.counter_bank_label||''):''}</span>`:''}</td>` +
+          `<td>${e._personal ? '👔 ' + esc(e.bank_name_label||'') + '<br><span style="font-size:10.5px;color:#777">own money, paid for the company</span>' : e.kind==='JOURNAL' && !e.bank_account_id ? '🔁 Internal settlement<br><span style="font-size:10.5px;color:#777">no bank — ' + (e._giver ? 'moved out to ' + esc(e.payee||'') : 'received from ' + esc(e.payee||'')) + '</span>' : esc(e.bank_name_label||'—')}${e.kind==='TRANSFER'?' → '+esc(e.counter_bank_label||''):''}${e.kind==='TRANSFER'&&sel.slice(0,2)==='B:'?`<br><span style="font-size:10.5px;color:#777">${e._in&&!e._out?'transfer received from '+esc(e.bank_name_label||''):e._out&&!e._in?'transfer sent to '+esc(e.counter_bank_label||''):''}</span>`:''}</td>` +
           `<td class="amount" style="color:#1a7f37">${inA}</td><td class="amount" style="color:#b3261e">${outA}</td>` + balTd +
           `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
           `<td>${(e.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acApprove('${e.id}',false)">Approve</button> <button class="mini" onclick="acApprove('${e.id}',true)">Reject</button> `:'')+
@@ -11076,7 +11073,7 @@ function acEnXferToggle(){
     const f = $('en-xfer-from'), t = $('en-xfer-to');
     if (f && !f.options.length){ f.innerHTML = acEnLedgerOpts(); t.innerHTML = acEnLedgerOpts(); }
     $('en-narr-lbl').textContent = 'Note (what was settled)';
-    $('en-help').textContent = 'No bank moves. The amount is posted in both ledgers: the giver\'s ledger shows it as money the company owes them (a vendor as giver shows money received back), the receiver\'s ledger shows it as paid to them (a vendor as receiver has its outstanding reduced).';
+    $('en-help').textContent = 'No bank moves. The amount goes OUT of the From ledger and is booked in the To head: an expense head gets the expense, a vendor gets a payment (outstanding comes down), a director / promoter gets money in on their ledger, MMC / the cash box get the money. A vendor as giver shows money received back.';
     acEnXferHint();
   } else if (isT){ $('en-narr-lbl').textContent = 'Payee / narration'; $('en-help').textContent = ''; }
 }
@@ -11089,12 +11086,12 @@ function acEnXferHint(){
   const F = nm('f'), T = nm('t'), ft = f[0], tt = t[0];
   const bad = acEnXferRule(f, t); if (bad){ h.innerHTML = '<span style="color:#b3261e">✖ ' + esc(bad) + '</span>'; return; }
   let txt = '';
-  if (ft === 'P' && tt === 'V') txt = `<b>${esc(F)}</b> settles <b>${esc(T)}</b> from their own money: the vendor's outstanding comes down, and ${esc(F)}'s ledger shows the amount as owed to them by the company (also counted under “Paid personally” on the Banks tab).`;
-  else if (ft === 'P' && tt === 'P') txt = `<b>${esc(F)}</b> pays <b>${esc(T)}</b> on the company's behalf: the company owes ${esc(F)} more (money in on their ledger) and owes ${esc(T)} less (money out on theirs).`;
-  else if (ft === 'P' && tt === 'E') txt = `<b>${esc(F)}</b> paid this expense personally: it is booked under <b>${esc(T)}</b> in Accounting → Expenses (and the Expense ledger), and ${esc(F)}'s ledger shows the amount as owed to them.`;
-  else if (ft === 'P' && tt === 'M') txt = `<b>${esc(F)}</b> sent money to MMC personally: the MMC ledger shows it as money with MMC (available for MMC to pay vendors), and ${esc(F)}'s ledger shows the amount as owed to them.`;
-  else if (ft === 'P' && tt === 'C') txt = `<b>${esc(F)}</b> put cash into the petty cash box personally: the box is topped up (Petty cash book), and ${esc(F)}'s ledger shows the amount as owed to them.`;
-  else if (ft === 'P' && tt === 'S') txt = `<b>${esc(F)}</b> paid <b>${esc(T)}</b> personally: the staff ledger shows the payment to them, and ${esc(F)}'s ledger shows the amount as owed to them.`;
+  if (ft === 'P' && tt === 'V') txt = `Moves ₹ out of <b>${esc(F)}</b>'s ledger (money out) and books it as a payment to <b>${esc(T)}</b> — the vendor's outstanding comes down.`;
+  else if (ft === 'P' && tt === 'P') txt = `Moves ₹ out of <b>${esc(F)}</b>'s ledger (money out) and into <b>${esc(T)}</b>'s ledger (money in).`;
+  else if (ft === 'P' && tt === 'E') txt = `Moves ₹ out of <b>${esc(F)}</b>'s ledger (money out) and books it as an expense under <b>${esc(T)}</b> (Accounting → Expenses, the Expense ledger and the P&amp;L).`;
+  else if (ft === 'P' && tt === 'M') txt = `Moves ₹ out of <b>${esc(F)}</b>'s ledger (money out) and into the MMC ledger as money with MMC (available for MMC to pay vendors).`;
+  else if (ft === 'P' && tt === 'C') txt = `Moves ₹ out of <b>${esc(F)}</b>'s ledger (money out) and tops up the petty cash box (Petty cash book).`;
+  else if (ft === 'P' && tt === 'S') txt = `Moves ₹ out of <b>${esc(F)}</b>'s ledger (money out) and books it as a payment to <b>${esc(T)}</b> on the staff ledger.`;
   else if (ft === 'M' && tt === 'V') txt = `MMC paid <b>${esc(T)}</b> out of the money with MMC: the vendor's outstanding comes down and the balance with MMC comes down (same as “MMC paid the vendor”).`;
   else if (ft === 'M' && tt === 'P') txt = `MMC paid <b>${esc(T)}</b> out of the money with MMC: the balance with MMC comes down, and the company owes ${esc(T)} less (money out on their ledger).`;
   else if (ft === 'V' && tt === 'P') txt = `<b>${esc(F)}</b> returned money to <b>${esc(T)}</b>: the vendor's paid total goes down by this amount (shown as money received back in the vendor ledger), and the company owes ${esc(T)} less (money out on their ledger).`;
