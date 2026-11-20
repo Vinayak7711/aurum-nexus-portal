@@ -10741,18 +10741,36 @@ function acPrincipalLabel(p){ return p.name + ' (' + (p.role==='PROMOTER' ? 'Pro
 // does an entry belong to this director / promoter? linked explicitly, or (unlinked) named in the payee / narration
 function acPrincipalRel(e, p){
   if (!e || !p) return false;
-  if (e.principal_id) return e.principal_id === p.id;
-  if (e.staff_id && p.user_id && e.staff_id === p.user_id) return true;   // their own ERP login (salary, advances, payments to them)
-  if (e.staff_id && !p.user_id && e.staff_name && acNameTokMatch(p.name, e.staff_name)) return true;
-  const toks = String(p.name).toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2); if (!toks.length) return false;
-  const hay = (String(e.payee||'') + ' ' + String(e.narration||'')).toLowerCase();
-  return toks.every(t=>hay.includes(t));
+  const q = acPrincipalOf(e);
+  return !!q && q.id === p.id;
 }
+// which ONE director / promoter does this entry belong to? explicit link → their own login (salary-type money, or the login's name in the payee) → named in payee / narration
+// ("Shobha Vinayak Sonavane" is Shobha, not Vinayak: the person whose first name comes first in the payee wins)
+function acPrincipalOf(e){
+  if (!e) return null;
+  const P = window.__principals || [];
+  if (e.principal_id) return P.find(p=>p.id===e.principal_id) || null;
+  const act = P.filter(p=>p.is_active);
+  const hay = String(e.payee||'') + ' ' + String(e.narration||'');
+  if (e.staff_id){
+    const lp = act.find(p=>p.user_id && p.user_id===e.staff_id);
+    if (lp && (['SALARY','BONUS','ADVANCE','RECOVERY'].includes(e.kind) || acNameTokMatch(e.staff_name, hay) || acNameTokMatch(lp.name, hay))) return lp;
+  }
+  const payT = acTok(e.payee), narT = acTok(e.narration);
+  let best = null, bestPos = 1e9;
+  act.forEach(p => {
+    if (!acNameTokMatch(p.name, hay)) return;
+    const f = acTok(p.name)[0];
+    let pos = payT.indexOf(f); if (pos < 0){ const n = narT.indexOf(f); pos = n < 0 ? 500 : 100 + n; }
+    if (pos < bestPos){ best = p; bestPos = pos; }
+  });
+  return best;
+}
+function acTok(s){ return String(s||'').toLowerCase().replace(/w/g,'v').split(/[^a-z0-9]+/).filter(t=>t.length>2); }   // Sonawane = Sonavane
 function acNameTokMatch(name, hay){
-  const toks = String(name||'').toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2); if (!toks.length) return false;
-  const h = String(hay||'').toLowerCase();
-  const ht = h.split(/[^a-z0-9]+/).filter(t=>t.length>2);
-  return toks.every(t=>h.includes(t)) || (toks.length>1 && ht.length>1 && ht.every(t=>toks.includes(t)));   // v61c
+  const toks = acTok(name); if (!toks.length) return false;
+  const ht = acTok(hay); if (!ht.length) return false;
+  return toks.every(t=>ht.includes(t));   // v61d
 }
 // the director / promoter an entry's staff login belongs to (so the same person is never listed under Staff as well)
 function acPrincipalOfStaff(e){
