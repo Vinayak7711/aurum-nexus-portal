@@ -5962,11 +5962,15 @@ async function rtEditSave(id){
 const VN_EXP_HEADS = ['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Salary & wages','Bank charges & interest','Buying Asset for Office & plant','Miscellaneous'];
 window.__vnHeadsExtra = window.__vnHeadsExtra || [];
 async function vnLoadHeads(){
+  // the expense heads list is maintained in Accounting → Expenses → Manage expense heads (acct.expense_heads)
+  try { const { data, error } = await db.schema('acct').from('expense_heads').select('*').order('name');
+    if (!error && data && data.length){ window.__expHeads = data; window.__expHeadsLoaded = true; window.__vnHeadsExtra = data.filter(h=>h.is_active).map(h=>h.name); return; } } catch(e){}
   try { const { data } = await db.schema('acct').from('expenses').select('category').limit(5000);
     window.__vnHeadsExtra = [...new Set((data||[]).map(x=>x.category).filter(Boolean))]; } catch(e){}
 }
+function acExpHeadBase(){ return window.__expHeadsLoaded ? [] : VN_EXP_HEADS; }   // v73
 function vnHeadOpts(cur){
-  const all = [...new Set([...VN_EXP_HEADS, ...(window.__vnHeadsExtra||[]), ...(cur ? [cur] : [])])].sort((a,b)=>a.localeCompare(b));
+  const all = [...new Set([...acExpHeadBase(), ...(window.__vnHeadsExtra||[]), ...(cur ? [cur] : [])])].sort((a,b)=>a.localeCompare(b));
   return '<option value="">— choose the expense head —</option>' + all.map(h=>`<option ${h===cur?'selected':''}>${esc(h)}</option>`).join('');
 }
 function vnKindBlock(prefix, kind, head){
@@ -8046,7 +8050,7 @@ async function poSetCat(id, cat, after){
   const { error } = await db.schema('mfg').rpc('po_set_category', { p_po: id, p_cat: cat });
   if (error){ alert('Could not change the category: '+error.message); return; }
   if (cat === 'EXPENSE'){
-    await vnLoadHeads(); const heads = [...new Set([...VN_EXP_HEADS, ...(window.__vnHeadsExtra||[])])].sort((a,b)=>a.localeCompare(b));
+    await vnLoadHeads(); const heads = [...new Set([...acExpHeadBase(), ...(window.__vnHeadsExtra||[])])].sort((a,b)=>a.localeCompare(b));
     const pick = prompt('Expense head for this order — its payments are booked under this head in Accounting → Expenses:\n\n' + heads.map((h,i)=>(i+1)+'. '+h).join('\n') + '\n\nType the number, or type a new head name:', '');
     if (pick !== null){ const head = heads[Number(pick)-1] || String(pick).trim(); if (head){ const { error: e2 } = await db.schema('mfg').rpc('po_set_expense_head', { p_po: id, p_head: head }); if (e2) alert('Category saved, but the expense head could not be: ' + e2.message); } }
   }
@@ -9816,7 +9820,7 @@ async function acctTab(t){
   if (t === 'exp'){
     const { data: exps, error } = await A.from('expenses').select('*, bank:bank_id(name), petty:petty_id(pc_no,status), items:expense_items(*)').order('exp_date',{ascending:false}).order('created_at',{ascending:false}).limit(1000);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
-    const all = exps || [];
+    const all = exps || []; window.__exAll = all;
     window.__exAdvNo = {};
     try { const ids = [...new Set(all.filter(r=>r.advance_id).map(r=>r.advance_id))];
           if (ids.length){ const { data: an } = await A.from('advances').select('id, adv_no').in('id', ids); (an||[]).forEach(a => window.__exAdvNo[a.id] = a.adv_no); } } catch(e){}
@@ -9854,8 +9858,9 @@ async function acctTab(t){
           <div><label>From date</label><input type="date" id="exf-from" value="${window.acExpFrom}" onchange="window.acExpFrom=this.value;acctTab('exp')"></div>
           <div><label>To date</label><input type="date" id="exf-to" value="${window.acExpTo}" onchange="window.acExpTo=this.value;acctTab('exp')"></div>
         </div>
-        <div style="margin-top:8px;">${filt?`<button class="btn ghost sm" onclick="window.acExpCat='';window.acExpDept='';window.acExpFrom='';window.acExpTo='';acctTab('exp')">✕ Clear filters</button> `:''}<button class="btn ghost sm" onclick="acExpCsv()">⬇ Download (CSV / Excel)</button></div>
+        <div style="margin-top:8px;">${filt?`<button class="btn ghost sm" onclick="window.acExpCat='';window.acExpDept='';window.acExpFrom='';window.acExpTo='';acctTab('exp')">✕ Clear filters</button> `:''}<button class="btn ghost sm" onclick="acExpCsv()">⬇ Download (CSV / Excel)</button>${canFinEdit()?` <button class="btn ghost sm" onclick="acExpHeadsPanel()">⚙️ Manage expense heads</button>`:''}</div>
       </div>
+      <div id="exp-heads-panel"></div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
         <div style="flex:1;min-width:260px;"><h4 class="sec">Head-wise</h4>
         <div class="table-scroll"><table><thead><tr><th>Expense head</th><th class="amount">Entries</th><th class="amount">Paid ₹</th></tr></thead><tbody>
@@ -10526,7 +10531,7 @@ async function acExpForm(fromKind){
   if (!acBanks.length){ try { const b = await A.from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   window.__exItems = [];
   await acVendorList(); await vnLoadHeads();
-  const CATS_EXP = [...new Set([...['Office rent','Electricity & utilities','Telephone & internet','Travel & conveyance','Professional & legal fees','Repairs & maintenance','Printing & stationery','Freight & transport','Marketing & promotion','Licences & government fees','Miscellaneous'], ...(window.__vnHeadsExtra||[])])].sort((a,b)=>a.localeCompare(b));
+  const CATS_EXP = [...new Set([...acExpHeadBase(), ...(window.__vnHeadsExtra||[])])].filter(h=>!/^Petty cash — /.test(h)).sort((a,b)=>a.localeCompare(b));
   const expVen = (window.__enVendors||[]).filter(v=>v.vendor_kind==='EXPENSE');
   const exVenOpts = '<option value="">— not from a registered expense vendor (type the payee below) —</option>' + expVen.map(v=>acVenOpt(v)).join('');
   await acPrincipals();
@@ -10569,6 +10574,48 @@ async function acExpForm(fromKind){
         <button class="btn gold sm" style="margin-top:10px;" onclick="acExpenseAdd()">Record expense</button>
         <div id="ex-msg"></div></div>`;
   host.scrollIntoView({behavior:'smooth'});
+}
+// ---- expense heads: add / rename / hide (Accounting → Expenses). A rename follows through to every expense line,
+//      expense vendor, Expense purchase order and the P&L link of that head.
+async function acExpHeadsPanel(){
+  const host = $('exp-heads-panel'); if (!host) return;
+  if (host.innerHTML.trim() && !window.__expHeadsOpen){ host.innerHTML = ''; return; }
+  await vnLoadHeads();
+  const heads = window.__expHeads || [];
+  const inUse = {}; (window.__exAll||[]).forEach(r => { if (r.category) inUse[r.category] = (inUse[r.category]||0) + 1; });
+  const vens = {}; (window.__enVendors||[]).forEach(v => { if (v.expense_head) vens[v.expense_head] = (vens[v.expense_head]||0) + 1; });
+  window.__expHeadsOpen = false;
+  host.innerHTML = `<div class="card" style="padding:12px 14px;margin-bottom:12px;">
+    <h4 class="sec" style="margin-top:0;">⚙️ Expense heads</h4>
+    <p style="font-size:11.5px;color:#777;margin:2px 0 8px;">These heads appear in every expense picker — the Business expense form, expense vendors in Party Master, Expense purchase orders, internal settlements and the P&amp;L links. Renaming a head renames it on every expense line, vendor and order already booked under it. Hiding a head keeps its past entries; it just stops being offered for new ones. “Salary &amp; wages” is filled from salary slips and the petty cash subheads are the petty cash categories, so neither is edited here.</p>
+    <div class="table-scroll"><table><thead><tr><th>Head</th><th class="amount">Expense lines</th><th class="amount">Expense vendors</th><th>Status</th><th></th></tr></thead><tbody>
+    ${heads.map(h=>`<tr${h.is_active?'':' class="inactive"'}><td><b>${esc(h.name)}</b>${h.is_system?' <span style="font-size:11px;color:#777">(automatic)</span>':''}</td><td class="amount">${inUse[h.name]||0}</td><td class="amount">${vens[h.name]||0}</td><td>${h.is_active?'<span style="color:#1a7f37">in use</span>':'<span style="color:#999">hidden</span>'}</td><td style="white-space:nowrap">${h.is_system?'':`<button class="mini" onclick="acExpHeadRename('${h.id}')">✏️ Rename</button> <button class="mini" onclick="acExpHeadToggle('${h.id}')">${h.is_active?'Hide':'Show again'}</button>`}</td></tr>`).join('') || '<tr><td colspan="5" style="color:#777">No heads yet.</td></tr>'}
+    </tbody></table></div>
+    <div class="row2c" style="margin-top:10px;align-items:end;"><div><label>New expense head</label><input type="text" id="exh-new" placeholder="e.g. Insurance, Vehicle running, Software subscriptions"></div>
+      <div><button class="btn gold sm" onclick="acExpHeadAdd()">+ Add head</button> <button class="btn ghost sm" onclick="$('exp-heads-panel').innerHTML=''">Close</button></div></div>
+    <div id="exh-msg"></div></div>`;
+}
+async function acExpHeadAdd(){
+  const name = ($('exh-new') ? $('exh-new').value : '').trim();
+  if (!name){ say('exh-msg','Type the name of the new head.',false); return; }
+  const { error } = await db.schema('acct').rpc('expense_head_save', { p_id: null, p_name: name, p_active: true });
+  if (error){ say('exh-msg','Could not add: '+error.message,false); return; }
+  window.__expHeadsOpen = true; await acExpHeadsPanel(); say('exh-msg','Added “'+name+'” — it is now offered in every expense picker.',true);
+}
+async function acExpHeadRename(id){
+  const h = (window.__expHeads||[]).find(x=>x.id===id); if (!h) return;
+  const name = prompt('New name for this expense head (every expense line, expense vendor and Expense PO under “' + h.name + '” is renamed with it):', h.name);
+  if (name === null || !name.trim() || name.trim() === h.name) return;
+  const { error } = await db.schema('acct').rpc('expense_head_save', { p_id: id, p_name: name.trim(), p_active: h.is_active });
+  if (error){ alert('Could not rename: '+error.message); return; }
+  if (window.acExpCat === h.name) window.acExpCat = name.trim();
+  window.__expHeadsOpen = true; await acctTab('exp'); await acExpHeadsPanel();
+}
+async function acExpHeadToggle(id){
+  const h = (window.__expHeads||[]).find(x=>x.id===id); if (!h) return;
+  const { error } = await db.schema('acct').rpc('expense_head_save', { p_id: id, p_name: h.name, p_active: !h.is_active });
+  if (error){ alert('Could not update: '+error.message); return; }
+  window.__expHeadsOpen = true; await acExpHeadsPanel();
 }
 function acExpCsv(){
   const rows = window.__expRows || []; if (!rows.length){ alert('Nothing to download in this selection.'); return; }
@@ -10978,7 +11025,7 @@ async function acEntryForm(kind){
 function acEnXferIsLedger(){ const k = $('en-kind') && $('en-kind').value, c = $('en-xfer-bank'); return k === 'TRANSFER' && c && !c.checked; }
 function acEnLedgerOpts(){
   const P = (window.__principals||[]).filter(p=>p.is_active).map(p=>`<option value="P:${p.id}">${esc(p.name)} — ${p.role==='PROMOTER'?'promoter':'director'}</option>`).join('');
-  const heads = [...new Set([...VN_EXP_HEADS, ...(window.__vnHeadsExtra||[])])].filter(h=>h && !/^Petty cash — /.test(h) && h!=='Salary & wages').sort((a,b)=>a.localeCompare(b));
+  const heads = [...new Set([...acExpHeadBase(), ...(window.__vnHeadsExtra||[])])].filter(h=>h && !/^Petty cash — /.test(h) && h!=='Salary & wages').sort((a,b)=>a.localeCompare(b));
   const E = heads.map(h=>`<option value="E:${esc(h)}">${esc(h)}</option>`).join('');
   const S = ((typeof acStaff!=='undefined' && acStaff)||[]).filter(u=>u.user_id && !(window.__principals||[]).some(p=>p.user_id===u.user_id)).map(u=>`<option value="S:${u.user_id}">${esc(u.full_name)}${u.designation && u.designation!==u.full_name ? ' — '+esc(u.designation) : ''}</option>`).join('');
   const V = (window.__enVendors||[]).map(v=>`<option value="V:${v.id}">${esc(v.name)}</option>`).join('');
