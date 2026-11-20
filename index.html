@@ -10580,7 +10580,7 @@ async function acExpForm(fromKind){
 async function acExpHeadsPanel(){
   const host = $('exp-heads-panel'); if (!host) return;
   if (host.innerHTML.trim() && !window.__expHeadsOpen){ host.innerHTML = ''; return; }
-  await vnLoadHeads();
+  await vnLoadHeads(); try { await acVendorList(); } catch(e){}   // v73b
   const heads = window.__expHeads || [];
   const inUse = {}; (window.__exAll||[]).forEach(r => { if (r.category) inUse[r.category] = (inUse[r.category]||0) + 1; });
   const vens = {}; (window.__enVendors||[]).forEach(v => { if (v.expense_head) vens[v.expense_head] = (vens[v.expense_head]||0) + 1; });
