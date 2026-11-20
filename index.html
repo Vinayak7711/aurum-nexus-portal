@@ -10761,13 +10761,13 @@ function acPrincipalOfStaff(e){
 }
 function acPrincipalUserName(p){
   if (!p || !p.user_id) return '';
-  const u = (window.acStaff||[]).find(x=>x.user_id===p.user_id || x.id===p.user_id) || (window.allUsers||[]).find(x=>x.id===p.user_id);
-  return u ? (u.full_name || u.email || '') : (window.__userNames||{})[p.user_id] || 'linked';
+  const u = ((typeof acStaff!=='undefined' && acStaff)||[]).find(x=>x.user_id===p.user_id || x.id===p.user_id) || (window.allUsers||[]).find(x=>x.id===p.user_id);
+  return u ? (u.full_name || u.email || '') : (window.__userNames||{})[p.user_id] || 'linked'; // v61b
 }
 async function acPrincipalLink(id){
   const cur = (window.__principals||[]).find(p=>p.id===id); if (!cur) return;
   const taken = new Set((window.__principals||[]).filter(p=>p.id!==id && p.user_id).map(p=>p.user_id));
-  const opts = (window.acStaff||[]).filter(u=>u.user_id && !taken.has(u.user_id)).map(u=>`<option value="${u.user_id}" ${u.user_id===cur.user_id?'selected':''}>${esc(u.full_name)}${u.designation && u.designation!==u.full_name ? ' — '+esc(u.designation) : ''}</option>`).join('');
+  const opts = ((typeof acStaff!=='undefined' && acStaff)||[]).filter(u=>u.user_id && !taken.has(u.user_id)).map(u=>`<option value="${u.user_id}" ${u.user_id===cur.user_id?'selected':''}>${esc(u.full_name)}${u.designation && u.designation!==u.full_name ? ' — '+esc(u.designation) : ''}</option>`).join('');
   apprModal('🔗 Link to ERP login — ' + esc(cur.name), `
     <p style="font-size:12px;color:#555;margin:0 0 8px;">Pick the staff login that belongs to this person. Their salary, advances and payments recorded against that login then show in the <b>Directors &amp; promoters</b> ledger and are left out of the Staff ledger.</p>
     <label>ERP login</label><select id="pl-user"><option value="">— not linked —</option>${opts}</select>
