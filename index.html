@@ -7313,7 +7313,13 @@ async function purchaseTab(t){
     B.innerHTML = `
       <h4 class="sec">New purchase order</h4>
       <div class="row2c">
-        <div><label>Vendor (registered) *</label><select id="po-vendor">${(vendors||[]).map(v=>`<option value="${v.id}" ${preVendor===v.id?'selected':''}>${esc(v.name)} (${esc(v.code)})${v.status==='PENDING'?' — pending':''}</option>`).join('')}</select>${preVendor?'<span style="font-size:11px;color:#1a7f37;">✔ vendor taken from the material request</span>':''}</div>
+        <div><label>Vendor (registered) *</label><select id="po-vendor">${(vendors||[]).map(v=>`<option value="${v.id}" ${preVendor===v.id?'selected':''}>${esc(v.name)} (${esc(v.code)})${v.status==='PENDING'?' — pending':''}</option>`).join('')}</select>${preVendor?'<span style="font-size:11px;color:#1a7f37;">✔ vendor taken from the material request</span>':''}
+          <div class="switch" style="margin:6px 0 0;"><input type="checkbox" id="po-newven" onchange="poNewVenToggle()"><span><b>Vendor is not registered</b> — type the name below; the vendor is added to the list as <i>pending</i> and the order is placed on it</span></div>
+          <div id="po-newven-wrap" style="display:none;margin-top:6px;background:#fbf8ef;border:1px solid #eadfbe;border-radius:10px;padding:10px 12px;">
+            <label>Vendor name *</label><input type="text" id="po-newven-name" placeholder="e.g. Sharma Hardware, Nashik">
+            <div class="row2c" style="margin-top:6px;"><div><label>Phone</label><input type="text" id="po-newven-phone" placeholder="optional"></div><div><label>GSTIN</label><input type="text" id="po-newven-gstin" placeholder="optional"></div></div>
+            <span style="font-size:11px;color:#7a6a4a;">Complete the registration later under Onboarding → Vendors (address, PAN, bank). If a vendor with exactly this name already exists, the order goes on that one.</span>
+          </div></div>
         <div><label>Expected delivery</label><input type="date" id="po-expected"></div>
       </div>
       <div class="row2c" style="margin-top:8px;">
@@ -7386,7 +7392,7 @@ async function purchaseTab(t){
       ${canPurApprove() ? '' : '<p style="font-size:12px;color:#b8860b;margin-top:6px;">This order will wait for approval by the Accounts head or the Director before it can be dispatched or received.</p>'}
       <button class="btn gold" style="margin-top:10px;" onclick="poPlace()">${canPurApprove() ? 'Place purchase order' : 'Submit for approval'}</button>
       <div id="pon-msg"></div>`;
-    poHeadRestore(); poCatChange();
+    poHeadRestore(); poCatChange(); poNewVenToggle();
     return;
   }
 
@@ -7906,7 +7912,7 @@ function poNewTotals(){
 // Header of the New PO form survives the redraws that adding / removing a line causes
 function poHeadKeep(){
   const v = $('po-vendor'); if (!v) return;
-  window.__poHead = { vendor: v.value, expected: ($('po-expected')||{}).value || '', cat: ($('po-cat')||{}).value || 'RM', exphead: ($('po-exphead')||{}).value || '', mmc: !!(($('po-billmmc')||{}).checked), terms: ($('po-terms')||{}).value || '', remarks: ($('po-remarks')||{}).value || '' };
+  window.__poHead = { vendor: v.value, newven: !!(($('po-newven')||{}).checked), nvName: ($('po-newven-name')||{}).value || '', nvPhone: ($('po-newven-phone')||{}).value || '', nvGstin: ($('po-newven-gstin')||{}).value || '', expected: ($('po-expected')||{}).value || '', cat: ($('po-cat')||{}).value || 'RM', exphead: ($('po-exphead')||{}).value || '', mmc: !!(($('po-billmmc')||{}).checked), terms: ($('po-terms')||{}).value || '', remarks: ($('po-remarks')||{}).value || '' };
 }
 function poHeadRestore(){
   const H = window.__poHead; if (!H) return;
@@ -7914,7 +7920,14 @@ function poHeadRestore(){
   if (H.vendor && $('po-vendor') && [...$('po-vendor').options].some(o=>o.value===H.vendor)) $('po-vendor').value = H.vendor;
   set('po-expected', H.expected); set('po-cat', H.cat); set('po-billmmc', H.mmc); set('po-terms', H.terms); set('po-remarks', H.remarks);
   if (H.exphead && $('po-exphead')) $('po-exphead').value = H.exphead;
-  poCatChange();
+  set('po-newven', H.newven); set('po-newven-name', H.nvName); set('po-newven-phone', H.nvPhone); set('po-newven-gstin', H.nvGstin);
+  poCatChange(); poNewVenToggle();
+}
+function poNewVenToggle(){
+  const t = $('po-newven'), w = $('po-newven-wrap'), v = $('po-vendor'); if (!t || !w) return;
+  w.style.display = t.checked ? '' : 'none';
+  if (v){ v.disabled = t.checked; v.style.opacity = t.checked ? '.5' : ''; }
+  if (t.checked){ const nm = $('po-newven-name'); if (nm && !nm.value) nm.focus(); }
 }
 function poCatChange(){
   const w = $('po-exphead-wrap'), c = $('po-cat'); if (!w || !c) return;
@@ -7962,8 +7975,16 @@ async function poPlace(){
   if (poLines.some(l => l.tax_type && l.tax_type !== 'NONE' && !(Number(l.tax_rate) > 0))){ say('pon-msg','A line has a tax type selected but no tax rate % — enter the rate or set it to "No tax".',false); return; }
   if (poLines.some(l => !(Number(l.rate) > 0)) && !confirm('Some lines still have rate ₹0. Place the order anyway?')) return;
   if ($('po-cat') && $('po-cat').value === 'EXPENSE' && !(($('po-exphead')||{}).value)){ say('pon-msg','Choose the expense head this order is booked under.',false); return; }
+  let vendorId = $('po-vendor').value;
+  if ($('po-newven') && $('po-newven').checked){
+    const nm = ($('po-newven-name').value||'').trim();
+    if (!nm){ say('pon-msg','Type the unregistered vendor\u2019s name.',false); return; }
+    const { data: vid, error: vErr } = await db.schema('sales').rpc('vendor_quick_add', { p_name: nm, p_phone: ($('po-newven-phone').value||'').trim() || null, p_gstin: ($('po-newven-gstin').value||'').trim() || null });
+    if (vErr || !vid){ say('pon-msg','Could not add the vendor: ' + (vErr ? vErr.message : 'unknown error'), false); return; }
+    vendorId = vid; window.__enVendors = null;
+  }
   const { data, error } = await db.schema('mfg').rpc('create_po', {
-    p_vendor: $('po-vendor').value,
+    p_vendor: vendorId,
     p_lines: poLines.map(l=>({ rm_item_id: l.rm_item_id, qty: l.qty, rate: l.rate })),
     p_expected: $('po-expected').value || null,
     p_request: poLinkReq, p_remarks: $('po-remarks').value.trim() || null });
