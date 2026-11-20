@@ -9018,6 +9018,8 @@ async function acctTab(t){
       .order('entry_date', {ascending:false}).order('created_at', {ascending:false}).limit(2000);
     if (error){ B.innerHTML = `<div class="msg err">Load failed: ${esc(error.message)}</div>`; return; }
     const sel = window.acLedSel;
+    await acPrincipals();
+    const prinById = {}; (window.__principals||[]).forEach(p => prinById[p.id] = p);
     // a staff ledger carries only money that is that person's own: salary, advances, recoveries, or a payment made out to them by name.
     // (Older entries carry the staff who keyed them in — those are not the staff's money and stay out.)
     const staffRel = e => {
@@ -9032,6 +9034,8 @@ async function acctTab(t){
       if (key==='T:B:') return !!(e.bank_name_label || e.counter_bank_label);
       if (key==='T:P:') return !!e.party_name;
       if (key==='T:S:') return staffRel(e);
+      if (key==='T:D:') return (window.__principals||[]).some(p => acPrincipalRel(e, p));
+      if (k==='D:') return acPrincipalRel(e, prinById[name]);
       if (k==='B:') return e.bank_name_label===name || e.counter_bank_label===name;
       if (k==='P:') return e.party_name===name;
       if (k==='V:') return e.payee===name;
@@ -9080,6 +9084,7 @@ async function acctTab(t){
         'M:': ['🏭 MMC', [{ key: 'M:MMC', label: mmcLabel }]],
         'E:': ['🧾 Expenses', mkItemsL('E:', expCatsL)],
         'S:': ['👤 Staff', mkItemsL('S:', [...new Set((all||[]).filter(staffRel).map(e=>e.staff_name))].sort())],
+        'D:': ['👔 Directors & promoters', (window.__principals||[]).filter(p=>p.is_active).map(p=>({ key: 'D:'+p.id, label: acPrincipalLabel(p) }))],
         'C:': ['💵 Petty cash', [{ key: 'C:BOX', label: pettyLabel }]],
       };
       const typeBar = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">` +
@@ -9112,7 +9117,15 @@ async function acctTab(t){
             <div><label>To date (leave blank for today)</label><input type="date" id="led-to" value="${window.acLedTo}" onchange="window.acLedTo=this.value"></div>
           </div>
           <button class="btn gold" style="margin-top:12px;" onclick="acLedView()">📖 View this ledger</button>
-        </div>`;
+        </div>
+        ${pfx === 'D:' ? `<div class="card" style="padding:12px 14px;margin-top:10px;">
+          <h4 class="sec" style="margin-top:0;">👔 Directors &amp; promoters on the list</h4>
+          <p style="font-size:11.5px;color:#777;margin:2px 0 8px;">Each person's ledger shows money received from them (loans / capital) and paid to them (repayments / payments) — entries linked to them on the bank-entry form, plus older entries that carry their name in the payee or narration.</p>
+          <div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th class="amount">Entries</th><th></th></tr></thead><tbody>
+          ${(window.__principals||[]).map(p=>`<tr${p.is_active?'':' class="inactive"'}><td><b>${esc(p.name)}</b></td><td>${p.role==='PROMOTER'?'Promoter':'Director'}</td><td class="amount">${(all||[]).filter(e=>acPrincipalRel(e,p)).length}</td><td style="white-space:nowrap">${(isDir()||canFinEdit())?`<button class="mini" onclick="acPrincipalAdd('${p.id}')">✏️ Edit</button> <button class="mini" onclick="acPrincipalToggle('${p.id}')">${p.is_active?'Deactivate':'Activate'}</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4" style="color:#777">No one on the list yet.</td></tr>'}
+          </tbody></table></div>
+          ${(isDir()||canFinEdit())?`<button class="btn ghost sm" style="margin-top:8px;" onclick="acPrincipalAdd()">+ Add director / promoter</button>`:''}
+        </div>` : ''}`;
       return;
     }
     const isAllLed = sel === 'ALL';
@@ -9456,6 +9469,8 @@ async function acctTab(t){
       : sel==='T:B:' ? 'All bank accounts — combined ledger'
       : sel==='T:P:' ? 'All parties / distributors — combined ledger'
       : sel==='T:S:' ? 'All staff — combined ledger'
+      : sel==='T:D:' ? 'All directors & promoters — combined ledger'
+      : sel.slice(0,2)==='D:' ? 'Directors & promoters ledger — ' + (prinById[sel.slice(2)] ? acPrincipalLabel(prinById[sel.slice(2)]) : '')
       : (sel.slice(0,2)==='B:'?'Bank ledger — ':sel.slice(0,2)==='P:'?'Party ledger — ':sel.slice(0,2)==='V:'?'Vendor ledger — ':'Staff ledger — ') + sel.slice(2);
     B.innerHTML = `
       <button class="btn ghost sm" onclick="acLedBack()">‹ Back to all ledgers</button>
@@ -9472,6 +9487,7 @@ async function acctTab(t){
       <div id="ac-entry-form"></div>
       <h4 class="sec" style="margin-top:12px;">${esc(window.__ledLabel)} · ${window.acLedFrom||'beginning'} → ${window.acLedTo||'today'} · ${es.length} entr${es.length===1?'y':'ies'}</h4>
       ${(sel==='T:S:' || sel.slice(0,2)==='S:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;">Only this person’s own money is shown — salary, advances, recoveries and payments made out in their name. Entries they merely keyed in for vendors, rent or other heads belong to those ledgers, not here.</p>` : ''}
+      ${(sel==='T:D:' || sel.slice(0,2)==='D:') ? `<p style="font-size:11.5px;color:#777;margin:-4px 0 8px;"><b>Money in</b> = received from the director / promoter (unsecured loan, capital, fund transfer in); <b>Money out</b> = paid back or paid to them. <b>Net</b> above is what the company still owes them (negative = they owe the company). Entries are linked to a person on the bank-entry form; an older entry that names them in the payee / narration is picked up automatically — use <b>👔 Link</b> on a row to fix the person.</p>` : ''}
       <div class="table-scroll"><table><thead><tr><th>No.</th><th>Date</th><th>Kind</th><th>Detail</th><th>Bank</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Status</th><th></th></tr></thead><tbody>
       ${(es||[]).map(e=>{const who=acWho(e)||'';const inA=e._in?inr(e.amount):'';const outA=e._out?inr(e.amount):'';
         return `<tr><td><b>${esc(e.entry_no)}</b></td><td>${e.entry_date}</td><td>${esc(e.kind)}</td>` +
@@ -9481,6 +9497,7 @@ async function acctTab(t){
           `<td><span style="color:${AC_ST[e.status]};font-weight:600;font-size:12px">${acLbl(e.status)}</span></td>` +
           `<td>${(e.status==='PENDING_APPROVAL'&&canFinApprove()?`<button class="mini" onclick="acApprove('${e.id}',false)">Approve</button> <button class="mini" onclick="acApprove('${e.id}',true)">Reject</button> `:'')+
                 (canFinApprove()?`<button class="mini" onclick="acEdit('${e.id}')" title="Correct this entry (date, kind, amount, bank, mode, reference, narration)">✏️ Edit</button> `:'')+
+                ((sel==='T:D:' || sel.slice(0,2)==='D:') && canFinApprove() ? `<select class="mini" title="Which director / promoter this entry belongs to" onchange="acEntrySetPrincipal('${e.id}', this.value)" style="font-size:10.5px;padding:2px 4px;"><option value="">👔 Link to…</option>${(window.__principals||[]).map(p=>`<option value="${p.id}" ${e.principal_id===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select> ` : '')+
                 (isDir()?`<button class="mini" onclick="acDelEntry('${e.id}')">Delete</button>`:'')}</td></tr>`;}).join('')
         || '<tr><td colspan="9" style="color:#777">No entries yet.</td></tr>'}
       </tbody></table></div>`;
@@ -10712,11 +10729,47 @@ async function acBankSave(id){
   openAcct();
 }
 /* ----- ledger ----- */
+// Directors & promoters — the people whose money (loans, capital, repayments) has its own ledger
+async function acPrincipals(force){
+  if (window.__principals && !force) return window.__principals;
+  try { const { data } = await db.schema('acct').from('principals').select('*').order('role').order('name'); window.__principals = data || []; } catch(e){ window.__principals = []; }
+  return window.__principals;
+}
+function acPrincipalOpts(sel){ return '<option value="">—</option>' + (window.__principals||[]).filter(p=>p.is_active || p.id===sel).map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${esc(p.name)} — ${p.role==='PROMOTER'?'promoter':'director'}</option>`).join(''); }
+function acPrincipalLabel(p){ return p.name + ' (' + (p.role==='PROMOTER' ? 'Promoter' : 'Director') + (p.is_active ? '' : ' · inactive') + ')'; }
+// does an entry belong to this director / promoter? linked explicitly, or (unlinked) named in the payee / narration
+function acPrincipalRel(e, p){
+  if (!e || !p) return false;
+  if (e.principal_id) return e.principal_id === p.id;
+  const toks = String(p.name).toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2); if (!toks.length) return false;
+  const hay = (String(e.payee||'') + ' ' + String(e.narration||'')).toLowerCase();
+  return toks.every(t=>hay.includes(t));
+}
+async function acPrincipalAdd(id){
+  const cur = id ? (window.__principals||[]).find(p=>p.id===id) : null;
+  const name = prompt(cur ? 'Name:' : 'Name of the director / promoter:', cur ? cur.name : ''); if (name === null) return;
+  const r = (prompt('Role — type D for Director or P for Promoter:', cur ? (cur.role==='PROMOTER'?'P':'D') : 'D')||'').trim().toUpperCase();
+  const role = r.startsWith('P') ? 'PROMOTER' : 'DIRECTOR';
+  const { error } = await db.schema('acct').rpc('principal_save', { p_id: id || null, p_name: name.trim(), p_role: role, p_active: cur ? cur.is_active : true });
+  if (error){ alert('Could not save: ' + error.message); return; }
+  await acPrincipals(true); acctTab('ledger');
+}
+async function acPrincipalToggle(id){
+  const cur = (window.__principals||[]).find(p=>p.id===id); if (!cur) return;
+  const { error } = await db.schema('acct').rpc('principal_save', { p_id: id, p_name: cur.name, p_role: cur.role, p_active: !cur.is_active });
+  if (error){ alert('Could not save: ' + error.message); return; }
+  await acPrincipals(true); acctTab('ledger');
+}
+async function acEntrySetPrincipal(entryId, pid){
+  const { error } = await db.schema('acct').rpc('entry_set_principal', { p_entry: entryId, p_principal: pid || null });
+  if (error){ alert('Could not link the entry: ' + error.message); return; }
+  acctTab('ledger');
+}
 async function acEntryForm(kind){
   if (!acBanks.length){ try { const b = await db.schema('acct').from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(e){} }
   const bankOpts = acBanks.filter(b=>b.is_active).map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
   const staffOpts = '<option value="">—</option>'+acStaff.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
-  await acVendorList();
+  await acVendorList(); await acPrincipals();
   const vendorOpts = '<option value="">— choose the vendor —</option>' + window.__enVendors.map(v=>acVenOpt(v)).join('');
   $('ac-entry-form').innerHTML = `
     <div class="card" style="margin-top:12px;max-width:640px;"><h3 style="font-size:15px;">Bank ledger entry &amp; vendor payment</h3>
@@ -10762,6 +10815,7 @@ async function acEntryForm(kind){
     <div id="en-mode-wrap"><label>Mode</label><select id="en-mode"><option value="">—</option><option>NEFT</option><option>RTGS</option><option>UPI</option><option value="CARD">CARD (debit / credit card)</option><option>CHEQUE</option><option>CASH</option><option>OTHER</option></select></div></div>
     <div class="row2c"><div><label id="en-ref-lbl">Reference no. (UTR / cheque)</label><input type="text" id="en-ref"></div>
     <div id="en-staff-wrap"><label>Staff — only if this money is that person’s own (salary / advance / recovery); leave blank otherwise</label><select id="en-staff">${staffOpts}</select></div></div>
+    <div id="en-principal-wrap"><label>Director / promoter — only if this money is received from or paid to one of them (loan, capital, repayment); leave blank otherwise</label><select id="en-principal">${acPrincipalOpts('')}</select></div>
     <label id="en-narr-lbl">Payee / narration</label><input type="text" id="en-narr" placeholder="Who / what for">
     <p id="en-help" style="font-size:12px;color:#777;margin-top:6px;"></p>
     ${canFinApprove()?'':'<p style="font-size:12px;color:#b8860b;margin-top:6px;">This entry will wait for approval by the Accounts head or Director before money moves.</p>'}
@@ -10898,6 +10952,7 @@ async function acEntrySave(){
       res = await db.schema('acct').rpc('create_entry', { p_kind: 'PAYMENT', p_amount: amt, p_bank: $('en-bank').value, p_direction: 'OUT', p_counter_bank: null,
         p_date: $('en-date').value||null, p_mode: $('en-mode').value||'NEFT', p_ref: ref, p_party: null, p_staff: null, p_payee: manual, p_narration: note || ('Payment to ' + manual) });
       if (res.error){ say('en-msg','Could not post: '+res.error.message,false); return; }
+      { const pid = $('en-principal') ? $('en-principal').value : ''; if (pid && res.data){ const { error: pe } = await db.schema('acct').rpc('entry_set_principal', { p_entry: res.data, p_principal: pid }); if (pe) alert('Posted, but not linked to the director / promoter: ' + pe.message); } }
       alert(canFinApprove() ? 'Payment to ' + manual + ' posted in the bank ledger.' : 'Submitted — the payment to ' + manual + ' waits for approval by the Accounts head or Director.');
       window.acLedSel = ''; acctTab('ledger'); return;
     }
@@ -10926,13 +10981,15 @@ async function acEntrySave(){
     if (k === 'VPAY') acctTab('vdues'); else { window.acLedType = 'M:'; window.acLedSel = 'M:MMC'; acctTab('ledger'); }
     return;
   }
-  const { error } = await db.schema('acct').rpc('create_entry', {
+  const { data: newEntry, error } = await db.schema('acct').rpc('create_entry', {
     p_kind: k, p_amount: amt, p_bank: $('en-bank').value,
     p_direction: k==='OTHER' ? $('en-dir').value : null,
     p_counter_bank: k==='TRANSFER' ? $('en-counter').value : null,
     p_date: $('en-date').value||null, p_mode: $('en-mode').value||null, p_ref: $('en-ref').value.trim()||null,
     p_staff: $('en-staff').value||null, p_payee: $('en-narr').value.trim()||null, p_narration: $('en-narr').value.trim()||null });
   if (error){ say('en-msg','Could not post: '+error.message,false); return; }
+  const pid = $('en-principal') ? $('en-principal').value : '';
+  if (pid && newEntry){ const { error: pe } = await db.schema('acct').rpc('entry_set_principal', { p_entry: newEntry, p_principal: pid }); if (pe) alert('Entry posted, but it could not be linked to the director / promoter: ' + pe.message); }
   acctTab('ledger');
 }
 async function acApprove(id, reject){
@@ -10948,6 +11005,7 @@ async function acEdit(id){
   const { data: e, error } = await A2.from('v_entries').select('*').eq('id', id).single();
   if (error || !e){ alert('Could not open that entry.'); return; }
   if (!acBanks.length){ try { const b = await A2.from('bank_accounts').select('*').order('name'); acBanks = b.data || []; } catch(x){} }
+  await acPrincipals();
   const [{ data: vpL }, { data: exL }, { data: mmL }, { data: edits }] = await Promise.all([
     A2.from('vendor_payments').select('pay_no').eq('entry_id', id),
     A2.from('expenses').select('exp_no').eq('entry_id', id),
@@ -10976,6 +11034,7 @@ async function acEdit(id){
       <div><label>Mode</label><select id="ee-mode">${MODES.map(m=>`<option value="${m}" ${m===(e.mode||'')?'selected':''}>${m||'—'}</option>`).join('')}</select></div></div>
       <div class="row2c"><div><label>Reference no. (UTR / cheque)</label><input type="text" id="ee-ref" value="${esc(e.ref_no||'')}"></div>
       <div><label>Staff (if any)</label><select id="ee-staff">${staffOpts}</select></div></div>
+      <div><label>Director / promoter (if this money is from or to one of them)</label><select id="ee-principal">${acPrincipalOpts(e.principal_id||'')}</select></div>
       <label>Payee</label><input type="text" id="ee-payee" value="${esc(e.payee||'')}">
       <label>Narration</label><input type="text" id="ee-narr" value="${esc(e.narration||'')}">
       <label>Reason for the correction (kept on record)</label><input type="text" id="ee-reason" placeholder="e.g. wrong amount typed, correct UTR">
@@ -11003,6 +11062,7 @@ async function acEditSave(id){
     p_mode: $('ee-mode').value, p_ref: $('ee-ref').value, p_payee: $('ee-payee').value, p_narration: $('ee-narr').value,
     p_staff: $('ee-staff').value || null, p_party: null, p_reason: reason });
   if (error){ say('ee-msg','Could not save: '+error.message,false); return; }
+  if ($('ee-principal')){ const { error: pe } = await db.schema('acct').rpc('entry_set_principal', { p_entry: id, p_principal: $('ee-principal').value || null }); if (pe) alert('Saved, but the director / promoter link could not be: ' + pe.message); }
   acctTab('ledger');
 }
 /* ---- Vendor ledger: edit / delete the lines (purchase bills, payments, TDS) ---- */
