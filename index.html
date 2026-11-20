@@ -10751,7 +10751,8 @@ function acPrincipalRel(e, p){
 function acNameTokMatch(name, hay){
   const toks = String(name||'').toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>2); if (!toks.length) return false;
   const h = String(hay||'').toLowerCase();
-  return toks.every(t=>h.includes(t)) || (toks.length>1 && h.split(/[^a-z0-9]+/).filter(t=>t.length>2).every(t=>toks.includes(t)));
+  const ht = h.split(/[^a-z0-9]+/).filter(t=>t.length>2);
+  return toks.every(t=>h.includes(t)) || (toks.length>1 && ht.length>1 && ht.every(t=>toks.includes(t)));   // v61c
 }
 // the director / promoter an entry's staff login belongs to (so the same person is never listed under Staff as well)
 function acPrincipalOfStaff(e){
