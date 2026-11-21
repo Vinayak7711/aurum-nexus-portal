@@ -4694,6 +4694,26 @@ async function mfgTab(which){
     window.__prBlends = blends || []; window.__prBlendRmBy = blendRmBy;
     let losses = []; try { const { data: lz } = await MF.from('blend_losses').select('*').order('loss_date',{ascending:false}).order('created_at',{ascending:false}).limit(60); losses = lz || []; } catch(e){}   // v81
     window.__prLosses = losses;
+    // per-blend status: each blend lives in its tank from its date until the next blend goes into that tank (fill window);
+    // blended − drawn for bottling − lost within that window = what is left. 0 left = COMPLETED (closed on the last draw / loss).   v85
+    let blendStat = {};
+    try {
+      const [{ data: drawAll }, { data: lossAll }] = await Promise.all([
+        MF.from('batches').select('blend_tank, blend_litres, production_date').not('blend_tank','is',null).limit(5000),
+        MF.from('blend_losses').select('tank, litres, loss_date').limit(5000) ]);
+      const asc = [...(blends||[])].sort((a,b)=> (a.blend_date+''+a.created_at) < (b.blend_date+''+b.created_at) ? -1 : 1);
+      asc.forEach((b, i) => {
+        const next = asc.slice(i+1).find(x => x.tank === b.tank); const from = String(b.blend_date), to = next ? String(next.blend_date) : null;
+        const inWin = d => String(d) >= from && (!to || String(d) < to);
+        const dr = (drawAll||[]).filter(x => x.blend_tank === b.tank && inWin(x.production_date));
+        const lo = (lossAll||[]).filter(x => x.tank === b.tank && inWin(x.loss_date));
+        const drawn = dr.reduce((a,x)=>a+Number(x.blend_litres||0),0), lost = lo.reduce((a,x)=>a+Number(x.litres||0),0);
+        const left = Math.round((Number(b.litres||0) - drawn - lost) * 1000) / 1000;
+        const lastD = [...dr.map(x=>String(x.production_date)), ...lo.map(x=>String(x.loss_date))].sort().pop() || null;
+        blendStat[b.id] = { drawn: Math.round(drawn*1000)/1000, lost: Math.round(lost*1000)/1000, left, closed: left <= 0 || !!next, closedOn: lastD, current: !next };
+      });
+    } catch(e){}
+    window.__prBlendStat = blendStat;
     // what is in each tank right now = litres blended in − litres drawn by case-wise production − blend losses
     let tankBal = {}; try { const { data: tb } = await MF.rpc('tank_balances'); (tb||[]).forEach(t => tankBal[t.tank] = t); } catch(e){}
     window.__prTankBal = tankBal;
@@ -4791,12 +4811,16 @@ async function mfgTab(which){
       ${isDir() ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">As Director you can edit any report — SKU, cases, date and the materials consumed. MMC’s raw-material custody and FG stock follow the correction automatically; the batch number stays the same.</p>' : ''}
       <h4 class="sec" style="margin-top:18px;">🧴 Recent blend-wise production <span style="font-weight:normal;font-size:12px;color:#777">— last ${(blends||[]).length} entr${(blends||[]).length===1?'y':'ies'}</span></h4>
       <div id="bl-editbox"></div>
-      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Blend no.</th><th>Tank</th><th>Blend</th><th class="amount">Litres</th><th>Materials consumed</th><th>Entered by</th>${isDir()?'<th></th>':''}</tr></thead><tbody>
-      ${(blends||[]).map(b=>`<tr><td>${b.blend_date}</td><td><b>${esc(b.blend_no||'')}</b></td><td>${esc(tankLabel(b.tank))}${b.fill_no?'<br><span style="font-size:11px;color:#777">'+ordN(b.fill_no)+' blend of this tank</span>':''}</td><td>${esc(b.blend_name)}${b.note?'<br><span style="font-size:11px;color:#777">'+esc(b.note)+'</span>':''}</td><td class="amount"><b>${Number(b.litres)}</b></td>` +
-        `<td style="font-size:12px;">${(blendRmBy[b.id]||[]).map(l=>esc(l.item?.code||'?')+' × '+Number(l.qty)+' '+(l.item?.unit||'')).join(', ')||'—'}</td>` +
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Blend no.</th><th>Tank</th><th>Blend</th><th class="amount">Litres</th><th>Materials consumed</th><th>Status</th><th>Entered by</th>${isDir()?'<th></th>':''}</tr></thead><tbody>
+      ${(blends||[]).map(b=>{ const st = blendStat[b.id]; const stHtml = !st ? '—' : st.closed
+          ? `<span class="pill DELIVERED">COMPLETED</span><br><span style="font-size:11px;color:#777">closed${st.closedOn ? ' on ' + st.closedOn : ''} · drawn ${st.drawn} L${st.lost ? ' · lost ' + st.lost + ' L' : ''}${st.left > 0 ? ' · ' + st.left + ' L unaccounted' : ''}</span>`
+          : `<span class="pill RECEIVED">IN TANK</span><br><span style="font-size:11px;color:#1f4e79;font-weight:600;">${st.left} L left</span><span style="font-size:11px;color:#777;"> · drawn ${st.drawn} L${st.lost ? ' · lost ' + st.lost + ' L' : ''}</span>`;
+        return `<tr${st && st.closed ? ' style="opacity:.75"' : ''}><td>${b.blend_date}</td><td><b>${esc(b.blend_no||'')}</b></td><td>${esc(tankLabel(b.tank))}${b.fill_no?'<br><span style="font-size:11px;color:#777">'+ordN(b.fill_no)+' blend of this tank</span>':''}</td><td>${esc(b.blend_name)}${b.note?'<br><span style="font-size:11px;color:#777">'+esc(b.note)+'</span>':''}</td><td class="amount"><b>${Number(b.litres)}</b></td>` +
+        `<td style="font-size:12px;">${(blendRmBy[b.id]||[]).map(l=>esc(l.item?.code||'?')+' × '+Number(l.qty)+' '+(l.item?.unit||'')).join(', ')||'—'}</td><td>${stHtml}</td>` +
         `<td style="font-size:11.5px;color:#555;">${esc(userNameOf(b.created_by))}<br><span style="color:#999">${String(b.created_at||'').slice(0,10)}</span></td>` +
-        (isDir() ? `<td style="white-space:nowrap"><button class="mini" onclick="blendEdit('${b.id}')">✏️ Edit</button> ${dirDelBtn('mfg','blends', b.id, b.blend_no, "mfgTab('report')")}</td>` : '') + `</tr>`).join('')
-        || `<tr><td colspan="${isDir()?8:7}" style="color:#777">No blend recorded yet.</td></tr>`}
+        (isDir() ? `<td style="white-space:nowrap"><button class="mini" onclick="blendEdit('${b.id}')">✏️ Edit</button> ${dirDelBtn('mfg','blends', b.id, b.blend_no, "mfgTab('report')")}</td>` : '') + `</tr>`; }).join('')
+        || `<tr><td colspan="${isDir()?9:8}" style="color:#777">No blend recorded yet.</td></tr>`}
+      <tr><td colspan="${isDir()?9:8}" style="font-size:11px;color:#777;">A blend is <b>IN TANK</b> while any of it is left; once it is fully drawn for bottling or written off as blend loss it is <b>COMPLETED</b> and closed, and the tank is free for the next blend.</td></tr>
       </tbody></table></div>
       <h4 class="sec" style="margin-top:18px;">💧 Blend losses while production <span style="font-weight:normal;font-size:12px;color:#777">— last ${losses.length} entr${losses.length===1?'y':'ies'} · total ${losses.reduce((a,l)=>a+Number(l.litres||0),0)} L</span></h4>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>Loss no.</th><th>Tank</th><th>Blend</th><th class="amount">Litres lost</th><th>Reason</th><th>Entered by</th>${isDir()?'<th></th>':''}</tr></thead><tbody>
