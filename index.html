@@ -5758,18 +5758,28 @@ async function blendReportData(id){
   const prod = bt.map(x => ({ ...x, sku_code: sku(x.sku_id).sku_code, litres: Number(x.blend_litres||0) }));
   const bySku = {}; prod.forEach(x => { const k = x.sku_code; bySku[k] = bySku[k] || { cases:0, litres:0, batches:0, passed:0 }; bySku[k].cases += Number(x.cases||0); bySku[k].litres += x.litres; bySku[k].batches++; if (x.qc_status==='PASSED') bySku[k].passed += Number(x.cases||0); });
   // bottling materials: consumed vs the SKU standard (per-case × cases) → excess = material wastage
-  const mat = {};
-  (batchRm||[]).forEach(l => { const bx = bt.find(x=>x.id===l.batch_id); if (!bx) return; const it = item(l.rm_item_id); const k = l.rm_item_id;
-    mat[k] = mat[k] || { code: it.code, name: it.name, unit: it.unit, consumed: 0, standard: 0, skus: new Set() };
-    mat[k].consumed += Number(l.qty||0); mat[k].skus.add(sku(bx.sku_id).sku_code);
+  // bottling materials per SKU → per component (bottle, cap, box, front label, back label): consumed vs standard (per-case × cases) → wastage.   v87
+  const COMP_ORDER = ['BOTTLE','CAP','BOX','FRONT_LABEL','BACK_LABEL','OTHER'];
+  const mat = {}, skuMat = {};
+  (batchRm||[]).forEach(l => { const bx = bt.find(x=>x.id===l.batch_id); if (!bx) return; const it = item(l.rm_item_id); const sk = sku(bx.sku_id); const k = l.rm_item_id;
     const line = (bom||[]).find(z => z.sku_id === bx.sku_id && z.rm_item_id === l.rm_item_id);
-    const q = rmBomQty(line, it, sku(bx.sku_id)); if (q && q.q) mat[k].standard += q.q * Number(bx.cases||0); });
+    const q = rmBomQty(line, it, sk); const std = q && q.q ? q.q * Number(bx.cases||0) : 0;
+    const comp = (line && line.component) || (typeof rmItemRoleAuto === 'function' ? rmItemRoleAuto(it) : 'OTHER');
+    mat[k] = mat[k] || { code: it.code, name: it.name, unit: it.unit, consumed: 0, standard: 0, skus: new Set() };
+    mat[k].consumed += Number(l.qty||0); mat[k].standard += std; mat[k].skus.add(sk.sku_code);
+    const S = skuMat[sk.sku_code] = skuMat[sk.sku_code] || { sku: sk.sku_code, upc: Number(sk.units_per_case||0), cases: 0, batchIds: new Set(), items: {} };
+    if (!S.batchIds.has(bx.id)){ S.batchIds.add(bx.id); S.cases += Number(bx.cases||0); }
+    const I = S.items[k] = S.items[k] || { code: it.code, name: it.name, unit: it.unit, comp, perCase: q && q.q ? q.q : null, consumed: 0, standard: 0 };
+    I.consumed += Number(l.qty||0); I.standard += std; });
   const mats = Object.values(mat).map(m => ({ ...m, skus: [...m.skus].join(', '), excess: Math.round((m.consumed - m.standard) * 1000) / 1000 }));
+  const skuMats = Object.values(skuMat).sort((a,b)=>a.sku.localeCompare(b.sku)).map(S => ({ ...S,
+    rows: Object.values(S.items).map(I => ({ ...I, excess: Math.round((I.consumed - I.standard) * 1000) / 1000, pct: I.standard ? Math.round((I.consumed - I.standard) / I.standard * 10000) / 100 : null }))
+      .sort((a,b) => (COMP_ORDER.indexOf(a.comp) - COMP_ORDER.indexOf(b.comp)) || a.code.localeCompare(b.code)) }));
   const drawn = prod.reduce((a,x)=>a+x.litres,0), lost = (losses||[]).reduce((a,x)=>a+Number(x.litres||0),0);
   const left = Math.round((Number(b.litres) - drawn - lost) * 1000) / 1000, cases = prod.reduce((a,x)=>a+Number(x.cases||0),0);
   const closed = left <= 0 || !!next;
   const lastD = [...prod.map(x=>String(x.production_date)), ...(losses||[]).map(x=>String(x.loss_date))].sort().pop() || null;
-  return { b, next, inputs, prod, bySku, mats, losses: losses||[], drawn: Math.round(drawn*1000)/1000, lost: Math.round(lost*1000)/1000, left, cases, closed, closedOn: lastD };
+  return { b, next, inputs, prod, bySku, mats, skuMats, losses: losses||[], drawn: Math.round(drawn*1000)/1000, lost: Math.round(lost*1000)/1000, left, cases, closed, closedOn: lastD };
 }
 function blendReportHtml(R, forPrint){
   const b = R.b, n3 = v => Math.round(Number(v||0)*1000)/1000, inr2 = v => Number(v||0).toLocaleString('en-IN', {maximumFractionDigits:3});
@@ -5797,10 +5807,12 @@ function blendReportHtml(R, forPrint){
     ${T('<th>SKU</th><th class="amount">Batches</th><th class="amount">Cases produced</th><th class="amount">QC passed</th><th class="amount">Blend used (L)</th><th class="amount">Litres per case</th>',
         Object.keys(R.bySku).sort().map(k=>{ const v = R.bySku[k]; return `<tr><td><b>${esc(k)}</b></td><td class="amount">${v.batches}</td><td class="amount">${v.cases}</td><td class="amount">${v.passed}</td><td class="amount">${inr2(v.litres)}</td><td class="amount">${v.cases ? n3(v.litres / v.cases) : '—'}</td></tr>`; }).join('')
         + (R.cases ? `<tr class="tot"><td>Total</td><td class="amount">${R.prod.length}</td><td class="amount">${R.cases}</td><td class="amount">${Object.values(R.bySku).reduce((a,v)=>a+v.passed,0)}</td><td class="amount">${inr2(R.drawn)}</td><td class="amount">${lpc ?? '—'}</td></tr>` : ''), 'No bottling was done from this blend.')}
-    <h3 style="font-size:13.5px;margin:16px 0 6px;">4. Raw material consumed in bottling this blend — and material wastage</h3>
-    <p style="font-size:11.5px;color:#555;margin:0 0 6px;">Standard = the SKU's per-case material × cases produced; anything consumed above the standard is wastage (breakages, rejects, spoilt labels). A negative figure means less than standard was recorded.</p>
-    ${T('<th>Material</th><th>Description</th><th>Used on</th><th class="amount">Consumed</th><th class="amount">Standard</th><th class="amount">Wastage (excess)</th><th>Unit</th>',
-        R.mats.sort((a,b)=>a.code.localeCompare(b.code)).map(m=>`<tr><td><b>${esc(m.code)}</b></td><td>${esc(m.name||'')}</td><td style="font-size:11px">${esc(m.skus)}</td><td class="amount">${inr2(m.consumed)}</td><td class="amount">${m.standard ? inr2(m.standard) : '—'}</td><td class="amount" style="${m.standard && m.excess > 0 ? 'color:#b3261e;font-weight:600;' : ''}">${m.standard ? inr2(m.excess) : '—'}</td><td>${esc(m.unit||'')}</td></tr>`).join(''), 'No bottling materials recorded.')}
+    <h3 style="font-size:13.5px;margin:16px 0 6px;">4. Raw material consumed in bottling this blend — SKU-wise, component-wise — and material wastage</h3>
+    <p style="font-size:11.5px;color:#555;margin:0 0 6px;">For each SKU bottled from this blend: the components it needs (bottle, cap, box, front label, back label), what was consumed, the standard (per-case requirement × cases produced), the wastage above standard and the wastage %. A negative figure means less than standard was recorded.</p>
+    ${T('<th>Component</th><th>Material</th><th class="amount">Per case</th><th class="amount">Consumed</th><th class="amount">Standard required</th><th class="amount">Wastage</th><th class="amount">Wastage %</th><th>Unit</th>',
+        (R.skuMats||[]).map(S => `<tr class="tot"><td colspan="8">${esc(S.sku)} — ${S.cases} cases produced${S.upc ? ' · ' + (S.cases * S.upc).toLocaleString('en-IN') + ' bottles (' + S.upc + ' per case)' : ''}</td></tr>`
+          + S.rows.map(r => `<tr><td>${esc(RM_COMP_LABEL[r.comp] || 'Other')}</td><td><b>${esc(r.code)}</b><br><span style="font-size:11px;color:#666">${esc(r.name||'')}</span></td><td class="amount">${r.perCase != null ? inr2(r.perCase) : '—'}</td><td class="amount">${inr2(r.consumed)}</td><td class="amount">${r.standard ? inr2(r.standard) : '—'}</td><td class="amount" style="${r.standard && r.excess > 0 ? 'color:#b3261e;font-weight:600;' : ''}">${r.standard ? inr2(r.excess) : '—'}</td><td class="amount" style="${r.pct != null && r.pct > 0 ? 'color:#b3261e;font-weight:600;' : ''}">${r.pct != null ? r.pct + '%' : '—'}</td><td>${esc(r.unit||'')}</td></tr>`).join('')
+          + (() => { const c = S.rows.reduce((a,r)=>a+r.consumed,0), st = S.rows.reduce((a,r)=>a+r.standard,0), ex = c - st; return `<tr style="background:#fbfaf4;font-weight:600;"><td colspan="3">Total for ${esc(S.sku)}</td><td class="amount">${inr2(c)}</td><td class="amount">${st ? inr2(st) : '—'}</td><td class="amount" style="${st && ex > 0 ? 'color:#b3261e;' : ''}">${st ? inr2(ex) : '—'}</td><td class="amount" style="${st && ex > 0 ? 'color:#b3261e;' : ''}">${st ? Math.round(ex / st * 10000) / 100 + '%' : '—'}</td><td></td></tr>`; })()).join(''), 'No bottling materials recorded.')}
     <h3 style="font-size:13.5px;margin:16px 0 6px;">5. Blend wastage</h3>
     ${T('<th>Date</th><th>Loss no.</th><th class="amount">Litres lost</th><th>Reason</th><th>Entered by</th>',
         R.losses.map(l=>`<tr><td>${l.loss_date}</td><td><b>${esc(l.loss_no||'')}</b></td><td class="amount">${inr2(l.litres)}</td><td>${esc(l.reason||'')}${l.note ? ' — ' + esc(l.note) : ''}</td><td>${esc(userNameOf(l.created_by))}</td></tr>`).join('')
@@ -5842,8 +5854,8 @@ function blendReportCsv(){
   L.push(['Total','','','', R.cases, R.drawn, ''].join(','));
   L.push(''); L.push('3. PRODUCTION FROM THIS BLEND - SKU-WISE'); L.push(['SKU','Batches','Cases','QC passed','Blend used (L)','Litres per case'].join(','));
   Object.keys(R.bySku).sort().forEach(k => { const v = R.bySku[k]; L.push([e2(k), v.batches, v.cases, v.passed, Math.round(v.litres*1000)/1000, v.cases ? Math.round(v.litres/v.cases*1000)/1000 : ''].join(',')); });
-  L.push(''); L.push('4. RAW MATERIAL CONSUMED IN BOTTLING - AND WASTAGE'); L.push(['Material','Description','Used on','Consumed','Standard','Wastage (excess)','Unit'].join(','));
-  R.mats.forEach(m => L.push([e2(m.code), e2(m.name), e2(m.skus), m.consumed, m.standard || '', m.standard ? m.excess : '', e2(m.unit)].join(',')));
+  L.push(''); L.push('4. RAW MATERIAL CONSUMED IN BOTTLING - SKU-WISE, COMPONENT-WISE - AND WASTAGE'); L.push(['SKU','Cases produced','Component','Material','Description','Per case','Consumed','Standard required','Wastage','Wastage %','Unit'].join(','));
+  (R.skuMats||[]).forEach(S => S.rows.forEach(r => L.push([e2(S.sku), S.cases, e2(RM_COMP_LABEL[r.comp] || 'Other'), e2(r.code), e2(r.name), r.perCase ?? '', r.consumed, r.standard || '', r.standard ? r.excess : '', r.pct != null ? r.pct : '', e2(r.unit)].join(','))));
   L.push(''); L.push('5. BLEND WASTAGE'); L.push(['Date','Loss no','Litres lost','Reason','Note'].join(','));
   R.losses.forEach(l => L.push([l.loss_date, e2(l.loss_no), Number(l.litres), e2(l.reason), e2(l.note||'')].join(',')));
   L.push(['Total','', R.lost, '', ''].join(','));
