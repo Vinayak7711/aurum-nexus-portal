@@ -4555,6 +4555,13 @@ async function saveMcActual(structId){
 // Awaited on purpose: openProd() opens this section and then switches to the
 // targets tab, and an unawaited FG load would land in the body afterwards.
 async function openMfg(){ await loadMasters(); await mfgTab('fg'); show('mfg'); }
+function fgCsv(){
+  const rows = window.__fgRows || []; const e2 = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const lines = [['SKU','Opening','Manufactured','Dispatched','Adjustments','Available for dispatch'].join(',')];
+  rows.forEach(r => lines.push([e2(r.sku_code), r.open, r.made, r.out, r.adj, r.avail].join(',')));
+  const blob = new Blob(['\ufeff' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'fg-stock-' + String(window.__fgRange||'all').replace(/[^0-9a-z→-]+/gi,'_') + '.csv'; a.click();
+}
 async function mfgTab(which){
   ['fg','batches','report','rm','incoming'].forEach(k => $('mt-'+k).classList.toggle('on', k===which));
   ['targets','log'].forEach(k => $('pd-'+k).classList.remove('on'));   // the targets half steps aside
@@ -4564,7 +4571,22 @@ async function mfgTab(which){
   if (which === 'fg'){
     const { data, error } = await MF.from('v_fg_stock').select('*').order('sku_code');
     if (error){ B.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
-    const total = (data||[]).reduce((a,r)=>a+Number(r.cases),0);
+    // FG movements (IN = QC-passed production, OUT = dispatched, ADJ = corrections) for the date range; no range = the whole record.   v79
+    window.fgFrom = window.fgFrom || ''; window.fgTo = window.fgTo || '';
+    const F = window.fgFrom, T = window.fgTo, ranged = !!(F || T);
+    const { data: mvAll } = await MF.from('fg_movements').select('move_date, sku_id, direction, cases').order('move_date').limit(10000);
+    const mv = mvAll || [];
+    const inR = m => (!F || m.move_date >= F) && (!T || m.move_date <= T);
+    const upto = m => !T || m.move_date <= T;
+    const bySku = {};
+    const skuRow = id => bySku[id] || (bySku[id] = { open:0, made:0, out:0, adj:0, avail:0 });
+    mv.forEach(m => { const r = skuRow(m.sku_id), c = Number(m.cases||0), sg = m.direction==='OUT' ? -c : c;
+      if (upto(m)) r.avail += sg;
+      if (F && m.move_date < F) r.open += sg;
+      if (inR(m)){ if (m.direction==='IN') r.made += c; else if (m.direction==='OUT') r.out += c; else r.adj += c; } });
+    const sum = k => Object.values(bySku).reduce((a,r)=>a+r[k],0);
+    const total = sum('avail'), made = sum('made'), out = sum('out'), adj = sum('adj');
+    const rangeLbl = ranged ? ((F||'beginning') + ' → ' + (T||'today')) : 'all time';
     // the three blend tanks: what was blended into each (from the blend-wise production report)
     let tankTiles = '';
     try {
@@ -4585,16 +4607,30 @@ async function mfgTab(which){
           <div style="font-size:10.5px;color:#777;margin-top:4px;line-height:1.35;">${last ? 'in tank now<br>last blend ' + Number(last.litres) + ' L on ' + last.blend_date + ' · ' + esc(last.blend_no||'') : 'no blend recorded yet'}${rows.length ? '<br>' + blended + ' L blended in − ' + drawn + ' L drawn for bottling<br>' + monthL + ' L blended this month' : ''}</div></div>`;
       }).join('');
     } catch(e){ tankTiles = ''; }
-    let html = `<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin-bottom:14px;"><div class="stat" style="flex:0 0 170px;"><div class="n">${total}</div><div class="l">Total FG cases at MMC</div></div>${tankTiles}</div>
+    let html = `<div class="card" style="padding:10px 14px;margin-bottom:12px;">
+        <div class="row2c"><div><label>From date</label><input type="date" id="fg-from" value="${F}" onchange="window.fgFrom=this.value;mfgTab('fg')"></div>
+          <div><label>To date</label><input type="date" id="fg-to" value="${T}" onchange="window.fgTo=this.value;mfgTab('fg')"></div></div>
+        <div style="font-size:11.5px;color:#777;margin-top:6px;">Leave both blank for the entire record. ${ranged ? `<button class="btn ghost sm" onclick="window.fgFrom='';window.fgTo='';mfgTab('fg')">✕ Clear — show all</button>` : ''} <button class="btn ghost sm" onclick="fgCsv()">⬇ Download (CSV / Excel)</button></div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin-bottom:14px;">
+        <div class="stat" style="flex:0 0 200px;border:1.5px solid #c9a227;"><div class="n">${total}</div><div class="l">Available for dispatch at MMC</div><div style="font-size:10.5px;color:#777;margin-top:4px;">cases in stock as on ${T || 'today'}</div></div>
+        <div class="stat" style="flex:0 0 170px;"><div class="n" style="color:#1a7f37">${made}</div><div class="l">Manufactured</div><div style="font-size:10.5px;color:#777;margin-top:4px;">QC-passed cases · ${rangeLbl}</div></div>
+        <div class="stat" style="flex:0 0 170px;"><div class="n" style="color:#b3261e">${out}</div><div class="l">Dispatched</div><div style="font-size:10.5px;color:#777;margin-top:4px;">cases sent out · ${rangeLbl}</div></div>
+        ${adj ? `<div class="stat" style="flex:0 0 150px;"><div class="n" style="color:#b8860b">${adj > 0 ? '+' : ''}${adj}</div><div class="l">Adjustments</div><div style="font-size:10.5px;color:#777;margin-top:4px;">Director corrections · ${rangeLbl}</div></div>` : ''}
+        ${tankTiles}</div>
       <p style="font-size:11px;color:#777;margin:-4px 0 10px;">Tanks show what is in each tank now: all blends prepared (blend-wise production report) minus the blend drawn for bottling (case-wise production report), with the latest blend's name; click a tank to open the report.</p>`;
-    html += '<div class="table-scroll"><table><thead><tr><th>SKU</th><th class="amount">Cases in stock</th></tr></thead><tbody>';
-    for (const r of (data||[]).filter(x=>Number(x.cases)!==0))
-      html += `<tr><td><b>${esc(r.sku_code)}</b></td><td class="amount">${r.cases}</td></tr>`;
-    html += '</tbody></table></div><p style="font-size:11px;color:#777;margin-top:8px;">IN = QC-passed batches · OUT = dispatched orders · adjustments are Director-only with a reason.</p>';
+    const skuRows = (data||[]).map(x => Object.assign({ sku_code: x.sku_code }, skuRow(x.sku_id))).filter(r => r.avail !== 0 || r.made || r.out || r.adj || r.open);
+    window.__fgRows = skuRows; window.__fgRange = rangeLbl;
+    html += `<h4 class="sec">SKU-wise <span style="font-weight:normal;font-size:12px;color:#777">— ${rangeLbl}</span></h4>
+      <div class="table-scroll"><table><thead><tr><th>SKU</th>${F ? '<th class="amount">Opening (before ' + F + ')</th>' : ''}<th class="amount">Manufactured</th><th class="amount">Dispatched</th>${adj ? '<th class="amount">Adjustments</th>' : ''}<th class="amount">Available for dispatch</th></tr></thead><tbody>`;
+    for (const r of skuRows)
+      html += `<tr><td><b>${esc(r.sku_code)}</b></td>${F ? '<td class="amount">' + r.open + '</td>' : ''}<td class="amount" style="color:#1a7f37">${r.made}</td><td class="amount" style="color:#b3261e">${r.out}</td>${adj ? '<td class="amount">' + r.adj + '</td>' : ''}<td class="amount" style="font-weight:700">${r.avail}</td></tr>`;
+    html += `<tr style="font-weight:700;background:#faf6ea;"><td>Total</td>${F ? '<td class="amount">' + sum('open') + '</td>' : ''}<td class="amount">${made}</td><td class="amount">${out}</td>${adj ? '<td class="amount">' + adj + '</td>' : ''}<td class="amount">${total}</td></tr>`;
+    html += '</tbody></table></div><p style="font-size:11px;color:#777;margin-top:8px;">Manufactured = QC-passed batches into stock · Dispatched = cases sent out against orders · Available = what is lying at MMC as on the To date (today if blank) · adjustments are Director-only with a reason.</p>';
     // batch-wise: which product batch the stock came from
     try {
       const { data: byB } = await MF.from('v_fg_by_batch').select('*').order('production_date',{ascending:false}).limit(200);
-      const rows = (byB||[]).filter(r => Number(r.balance) !== 0 || r.qc_status !== 'PASSED');
+      const rows = (byB||[]).filter(r => (ranged ? ((!F || r.production_date >= F) && (!T || r.production_date <= T)) : (Number(r.balance) !== 0 || r.qc_status !== 'PASSED')));
       html += `<h4 class="sec" style="margin-top:16px;">Batch-wise <span style="font-weight:normal;font-size:12px;color:#777">— stock by product batch number</span></h4>
         <div class="table-scroll"><table><thead><tr><th>Product batch no.</th><th>Record</th><th>SKU</th><th>Produced on</th><th>QC</th><th class="amount">Cases produced</th><th class="amount">Into stock</th><th class="amount">Out</th><th class="amount">In stock</th></tr></thead><tbody>
         ${rows.map(r=>`<tr><td><b>${esc(r.product_batch_no||'—')}</b></td><td style="font-size:12px;color:#777">${esc(r.batch_no)}</td><td>${esc(r.sku_code)}</td><td>${r.production_date}</td><td><span class="pill ${r.qc_status==='PASSED'?'DELIVERED':(r.qc_status==='FAILED'?'CANCELLED':'RECEIVED')}">${r.qc_status}</span></td><td class="amount">${Number(r.cases_produced)}</td><td class="amount">${Number(r.cases_in)}</td><td class="amount">${Number(r.cases_out)}</td><td class="amount" style="font-weight:700">${Number(r.balance)}</td></tr>`).join('') || '<tr><td colspan="9" style="color:#777">No batches yet.</td></tr>'}
