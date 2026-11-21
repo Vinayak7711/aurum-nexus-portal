@@ -5870,7 +5870,17 @@ function blendReportCsv(){
   L.push(''); L.push('3. PRODUCTION FROM THIS BLEND - SKU-WISE'); L.push(['SKU','Batches','Cases','QC passed','Blend used (L)','Litres per case'].join(','));
   Object.keys(R.bySku).sort().forEach(k => { const v = R.bySku[k]; L.push([e2(k), v.batches, v.cases, v.passed, Math.round(v.litres*1000)/1000, v.cases ? Math.round(v.litres/v.cases*1000)/1000 : ''].join(',')); });
   L.push(''); L.push('4. RAW MATERIAL CONSUMED IN BOTTLING - SKU-WISE, COMPONENT-WISE - AND WASTAGE'); L.push(['SKU','Cases produced','Component','Material','Description','Per case','Consumed','Standard required','Wastage','Wastage %','Unit'].join(','));
-  (R.skuMats||[]).forEach(S => S.comps.forEach(g => g.items.forEach(r => L.push([e2(S.sku), S.cases, e2(RM_COMP_LABEL[g.comp] || 'Other'), e2(r.code), e2(r.name), g.perCase ?? '', r.consumed, g.items.length === 1 && g.standard ? g.standard : (g.items.length > 1 ? 'see component total' : ''), g.items.length === 1 && g.standard ? g.excess : '', g.items.length === 1 && g.pct != null ? g.pct : '', e2(r.unit)].join(','))).concat(g.items.length > 1 ? [L.push([e2(S.sku), S.cases, e2((RM_COMP_LABEL[g.comp]||'Other') + ' — together'), '', '', g.perCase ?? '', g.consumed, g.standard || '', g.standard ? g.excess : '', g.pct != null ? g.pct : '', e2(g.unit)].join(','))] : [])));
+  (R.skuMats||[]).forEach(S => {   // v88
+    L.push([e2(S.sku + ' — ' + S.cases + ' cases produced')].join(','));
+    S.comps.forEach(g => {
+      const one = g.items.length === 1;
+      g.items.forEach(r => L.push([e2(S.sku), S.cases, e2(RM_COMP_LABEL[g.comp] || 'Other'), e2(r.code), e2(r.name), g.perCase ?? '', r.consumed,
+        one ? (g.standard || '') : 'see component total', one && g.standard ? g.excess : '', one && g.pct != null ? g.pct : '', e2(r.unit)].join(',')));
+      if (!one) L.push([e2(S.sku), S.cases, e2((RM_COMP_LABEL[g.comp] || 'Other') + ' — together'), '', '', g.perCase ?? '', g.consumed, g.standard || '', g.standard ? g.excess : '', g.pct != null ? g.pct : '', e2(g.unit)].join(','));
+    });
+    const c = S.comps.reduce((a,g)=>a+g.consumed,0), st = S.comps.reduce((a,g)=>a+g.standard,0);
+    L.push([e2('Total for ' + S.sku), S.cases, '', '', '', '', c, st || '', st ? Math.round((c - st)*1000)/1000 : '', st ? Math.round((c - st) / st * 10000) / 100 : '', ''].join(','));
+  });
   L.push(''); L.push('5. BLEND WASTAGE'); L.push(['Date','Loss no','Litres lost','Reason','Note'].join(','));
   R.losses.forEach(l => L.push([l.loss_date, e2(l.loss_no), Number(l.litres), e2(l.reason), e2(l.note||'')].join(',')));
   L.push(['Total','', R.lost, '', ''].join(','));
