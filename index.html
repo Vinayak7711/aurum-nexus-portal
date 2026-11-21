@@ -100,7 +100,7 @@
   #rm-store-table td.amount{white-space:nowrap; overflow-wrap:normal;}
   #rm-store-table th.amount{white-space:normal; overflow-wrap:normal; word-break:normal;}
   #po-hist-table th.amount{white-space:normal;} #po-hist-table td{vertical-align:top;} #po-hist-table td .mini{display:inline-block; width:auto; margin:0; flex:0 0 auto;} #po-hist-table td .amount{white-space:nowrap;}
-  /* asset register: whole table on one screen, actions wrap in their own cell   v77 */
+  /* asset register: whole table on one screen, actions wrap in their own cell   v77b */
   #asset-table{table-layout:fixed; width:100%; font-size:12px;} #asset-table th{font-size:11px; white-space:normal;} #asset-table td{vertical-align:top; overflow-wrap:anywhere; padding:8px 6px;}
   #asset-table td.amount{white-space:nowrap; overflow-wrap:normal; padding-right:6px;} #asset-table td .acts{display:flex; flex-wrap:wrap; gap:3px;} #asset-table td .mini{display:inline-block; width:auto; margin:0; flex:0 0 auto; font-size:10.5px; padding:2px 6px;}
   #rm-store-table select{max-width:100%; font-size:10.5px; padding:2px 4px; margin-top:2px;}
@@ -9996,7 +9996,7 @@ async function acctTab(t){
       ${canFinEdit()?`<button class="btn gold sm" onclick="acAssetForm()">+ Add asset</button>`:''}
       <div id="ac-asset-form"></div>
       <h4 class="sec" style="margin-top:12px;">Asset register</h4>
-      <div class="table-scroll"><table id="asset-table"><colgroup><col style="width:9%"><col style="width:15%"><col style="width:10%"><col style="width:13%"><col style="width:11%"><col style="width:9%"><col style="width:9%"><col style="width:7%"><col style="width:7%"><col style="width:10%"></colgroup><thead><tr><th>Code</th><th>Asset</th><th>Class · category</th><th>Identifier</th><th>Custodian</th><th class="amount">Cost ₹</th><th class="amount">Book ₹</th><th>Licences</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+      <div class="table-scroll"><table id="asset-table"><colgroup><col style="width:8%"><col style="width:15%"><col style="width:9%"><col style="width:12%"><col style="width:10%"><col style="width:9%"><col style="width:9%"><col style="width:6%"><col style="width:7%"><col style="width:15%"></colgroup><thead><tr><th>Code</th><th>Asset</th><th>Class · category</th><th>Identifier</th><th>Custodian</th><th class="amount">Cost ₹</th><th class="amount">Book ₹</th><th>Licences</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${acAssets.map(a=>{
         const disp = a.status==='DISPOSED';
         return `<tr style="${disp?'opacity:.55':''}"><td><b style="white-space:normal">${esc(a.asset_code).replace('/','/<wbr>')}</b></td>` +
