@@ -4590,21 +4590,30 @@ async function mfgTab(which){
     // the three blend tanks: what was blended into each (from the blend-wise production report)
     let tankTiles = '';
     try {
-      const [{ data: bl }, { data: tb }] = await Promise.all([
+      const [{ data: bl }, { data: tb }, { data: drawnRows }, { data: lostRows }] = await Promise.all([
         MF.from('blends').select('id, blend_no, blend_date, tank, blend_name, litres, created_at, fill_no').order('blend_date',{ascending:false}).order('created_at',{ascending:false}).limit(500),
-        MF.rpc('tank_balances')
+        MF.rpc('tank_balances'),
+        MF.from('batches').select('blend_tank, blend_litres, production_date').not('blend_tank','is',null).limit(5000),
+        MF.from('blend_losses').select('tank, litres, loss_date').limit(5000)
       ]);
       const balBy = {}; (tb||[]).forEach(x => balBy[x.tank] = x);
-      const mon = monthLabelJS();
+      // a tank shows only the blend it holds now: the current fill (litres in, drawn and lost since that blend went in);
+      // an empty tank shows just that it is free for the next blend — the old blend belongs to the production report.   v84
       tankTiles = ['TANK1','TANK2','TANK3'].map(t => {
         const rows = (bl||[]).filter(b => b.tank === t); const last = rows[0];
-        const monthL = rows.filter(b => String(b.blend_date).slice(0,7) === mon).reduce((x,b)=>x+Number(b.litres||0),0);
-        const tbx = balBy[t]; const now = tbx ? Number(tbx.balance) : rows.reduce((x,b)=>x+Number(b.litres||0),0);
-        const blended = tbx ? Number(tbx.blended) : rows.reduce((x,b)=>x+Number(b.litres||0),0); const drawn = tbx ? Number(tbx.drawn) : 0; const lost = tbx ? Number(tbx.lost||0) : 0;
-        return `<div class="stat" style="cursor:pointer;min-width:0;overflow-wrap:anywhere;" title="Open the blend-wise production report" onclick="window.prMode='blend';mfgTab('report')">
-          <div class="n" style="font-size:20px;${now < 0 ? 'color:#b3261e;' : ''}">${rows.length ? now + ' L' : '—'}</div>
-          <div class="l"><b>${tankLabel(t)}</b>${last ? ' · ' + esc(last.blend_name) : ' · empty'}</div>
-          <div style="font-size:10.5px;color:#777;margin-top:4px;line-height:1.35;">${last ? 'in tank now<br>last blend ' + Number(last.litres) + ' L on ' + last.blend_date + ' · ' + esc(last.blend_no||'') + (last.fill_no ? ' · ' + ordN(last.fill_no) + ' blend of this tank' : '') : 'no blend recorded yet'}${rows.length ? '<br>' + blended + ' L blended in − ' + drawn + ' L drawn for bottling' + (lost ? ' − <span style="color:#b3261e">' + lost + ' L lost</span>' : '') + '<br>' + monthL + ' L blended this month' : ''}</div></div>`;
+        const tbx = balBy[t]; const now = tbx ? Math.round(Number(tbx.balance) * 1000) / 1000 : 0;
+        const held = now > 0 && last;
+        const since = last ? String(last.blend_date) : '';
+        const drawnF = held ? (drawnRows||[]).filter(x => x.blend_tank === t && String(x.production_date) >= since).reduce((a,x)=>a+Number(x.blend_litres||0),0) : 0;
+        const lostF = held ? (lostRows||[]).filter(x => x.tank === t && String(x.loss_date) >= since).reduce((a,x)=>a+Number(x.litres||0),0) : 0;
+        const nextNo = last && last.fill_no ? Number(last.fill_no) + 1 : 1;
+        return `<div class="stat" style="cursor:pointer;min-width:0;overflow-wrap:anywhere;${held ? '' : 'background:#f7f9f4;'}" title="Open the blend-wise production report" onclick="window.prMode='blend';mfgTab('report')">
+          <div class="n" style="font-size:20px;${now < 0 ? 'color:#b3261e;' : (held ? '' : 'color:#1a7f37;')}">${held ? now + ' L' : 'Empty'}</div>
+          <div class="l"><b>${tankLabel(t)}</b>${held ? ' · ' + esc(last.blend_name) : ' · available for a new blend'}</div>
+          <div style="font-size:10.5px;color:#777;margin-top:4px;line-height:1.35;">${held
+            ? 'in tank now<br>' + esc(last.blend_no||'') + ' · ' + (last.fill_no ? ordN(last.fill_no) + ' blend of this tank · ' : '') + 'blended ' + Number(last.litres) + ' L on ' + last.blend_date
+              + '<br>' + Number(last.litres) + ' L in − ' + (Math.round(drawnF*1000)/1000) + ' L drawn for bottling' + (lostF ? ' − <span style="color:#b3261e">' + (Math.round(lostF*1000)/1000) + ' L lost</span>' : '')
+            : 'nothing in the tank — ready for the ' + ordN(nextNo) + ' blend (record it under Production report → Blend-wise production)'}</div></div>`;
       }).join('');
     } catch(e){ tankTiles = ''; }
     let html = `<div class="card" style="padding:10px 14px;margin-bottom:12px;">
@@ -5606,7 +5615,7 @@ function prBlendTankOpts(tankNow){
     return `<option value="${t}" ${free ? '' : 'disabled'}>${tankLabel(t)} — ${free ? 'empty · ready for the ' + ordN(next) + ' blend' : L + ' L of ' + esc(b ? b.blend_name : 'blend') + ' still in tank — not available'}</option>`;
   }).join('');
 }
-function prTankOptionLabel(t, litres){ const nm = prTankBlendName(t); const L = Math.round(Number(litres||0) * 1000) / 1000; return tankLabel(t) + ' — ' + (nm ? nm : (L > 0 ? 'blend' : 'empty — no blend recorded')) + ' — ' + L + ' L available'; }
+function prTankOptionLabel(t, litres){ const nm = prTankBlendName(t); const L = Math.round(Number(litres||0) * 1000) / 1000; return L > 0 ? tankLabel(t) + ' — ' + (nm || 'blend') + ' — ' + L + ' L available' : tankLabel(t) + ' — empty — available for a new blend'; }
 // Blend drawn from a tank on a case-wise report: reads the chosen tank + litres, validates against what the tank holds.
 function prBlendPick(prefix){
   const sel = $(prefix + '-tank'), inp = $(prefix + '-blend-litres');
