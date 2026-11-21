@@ -4759,7 +4759,8 @@ async function mfgTab(which){
         </div>
         <div id="pr-loss-sec" class="${window.prMode==='loss'?'':'hidden'}">
         <p style="font-size:12px;color:#777;margin:0 0 8px;">Blend lost from a tank during production — evaporation, spillage, filtration sediment, lab samples, wastage. The litres are minused from that tank (FG stock tab shows what is left) and listed below as a blend loss; it is not production and no materials are consumed.</p>
-        <div class="row2c"><div style="min-width:0;"><label>Tank *</label><select id="ls-tank" style="width:100%;max-width:100%;">${['TANK1','TANK2','TANK3'].map(t=>`<option value="${t}">${esc(prTankOptionLabel(t, tankNow(t)))}</option>`).join('')}</select></div>
+        <div class="row2c"><div style="min-width:0;"><label>Tank * <span style="font-weight:normal;color:#888;font-size:11px;">— only a tank holding blend can have a loss</span></label><select id="ls-tank" style="width:100%;max-width:100%;">${['TANK1','TANK2','TANK3'].map(t=>{ const L = Math.round(Number(tankNow(t)||0)*1000)/1000; return `<option value="${t}" ${L > 0 ? '' : 'disabled'}>${L > 0 ? esc(prTankOptionLabel(t, L)) : tankLabel(t) + ' — empty — nothing to lose'}</option>`; }).join('')}</select>
+          ${['TANK1','TANK2','TANK3'].some(t=>tankNow(t) > 0) ? '' : '<div style="font-size:11.5px;color:#b3261e;margin-top:4px;">All three tanks are empty — there is no blend to record a loss against.</div>'}</div>
           <div class="row2c"><div><label>Litres lost *</label><input type="number" id="ls-litres" min="0.001" step="any" placeholder="litres"></div>
           <div><label>Date</label><input type="date" id="ls-date" value="${calFmt(new Date())}"></div></div></div>
         <div class="row2c" style="margin-top:8px;"><div><label>Reason *</label><select id="ls-reason"><option>Evaporation</option><option>Spillage / leakage</option><option>Filtration &amp; sediment</option><option>Sampling / lab testing</option><option>Wastage during bottling</option><option>Tank cleaning</option><option>Other</option></select></div>
@@ -4797,7 +4798,8 @@ async function mfgTab(which){
       </tbody></table></div>
       <p style="font-size:11.5px;color:#777;margin-top:6px;">In the tanks now (all blends in − blend drawn by case-wise production − blend losses): ${['TANK1','TANK2','TANK3'].map(t=>'<b>'+tankLabel(t)+'</b> '+tankNow(t)+' L' + (tankBal[t] ? ' (blended ' + Number(tankBal[t].blended) + ' − drawn ' + Number(tankBal[t].drawn) + (Number(tankBal[t].lost) ? ' − lost ' + Number(tankBal[t].lost) : '') + ')' : '')).join(' · ')}.</p>`;
     prodRepRender(); blendRender(); prSkuMaterials(); rmShowFull('bl-item','bl-item-full');
-    { const bt = $('bl-tank'); if (bt){ const free = [...bt.options].find(o=>!o.disabled); bt.value = free ? free.value : ''; } }
+    { const bt = $('bl-tank'); if (bt){ const free = [...bt.options].find(o=>!o.disabled); bt.value = free ? free.value : ''; }
+      const lt = $('ls-tank'); if (lt){ const held = [...lt.options].find(o=>!o.disabled); lt.value = held ? held.value : ''; } }   // v83
     return;
   }
   if (which === 'incoming'){
@@ -5659,6 +5661,7 @@ function tankLabel(t){ return ({ TANK1:'Tank 1', TANK2:'Tank 2', TANK3:'Tank 3' 
 function prModeSet(m){ window.prMode = m; const c = $('pr-case-sec'), b = $('pr-blend-sec'), l = $('pr-loss-sec'); if (c) c.classList.toggle('hidden', m !== 'case'); if (b) b.classList.toggle('hidden', m !== 'blend'); if (l) l.classList.toggle('hidden', m !== 'loss'); say('pr-msg',''); }
 async function blendLossSave(){
   const litres = Number($('ls-litres').value), tank = $('ls-tank').value, reason = $('ls-reason').value;
+  if (!tank){ say('pr-msg','No tank holds any blend right now — a loss can only be recorded against blend lying in a tank.',false); return; }
   if (!(litres > 0)){ say('pr-msg','Enter the litres of blend lost.',false); return; }
   const { error } = await db.schema('mfg').rpc('record_blend_loss', { p_date: $('ls-date').value || null, p_tank: tank, p_litres: litres, p_reason: reason, p_note: $('ls-note').value.trim() || null });
   if (error){ say('pr-msg','Could not record the loss: '+error.message,false); return; }
