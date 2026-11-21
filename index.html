@@ -1216,7 +1216,7 @@ async function openAdmin(){
 }
 /* ---- Recently deleted: every Director delete is kept for 30 days and can be put back ---- */
 const BIN_NAMES = { 'sales.vendors':'Vendor', 'sales.parties':'Party (distributor / vendor)', 'sales.orders':'Sales order', 'sales.brands':'Brand', 'sales.skus':'SKU', 'sales.retailers':'Retailer', 'sales.field_visits':'Field visit', 'app.contacts':'Contact',
-  'mfg.purchase_orders':'Purchase order', 'mfg.rm_receipts':'RM receipt', 'mfg.rm_inspections':'Receipt & QC record', 'mfg.rm_requests':'RM request', 'mfg.rm_items':'RM item', 'mfg.rm_issues':'RM issue', 'mfg.po_dispatches':'Dispatch', 'mfg.blends':'Blend (blend-wise production)', 'mfg.blend_rm':'Blend material line',
+  'mfg.purchase_orders':'Purchase order', 'mfg.blend_losses':'Blend loss', 'mfg.rm_receipts':'RM receipt', 'mfg.rm_inspections':'Receipt & QC record', 'mfg.rm_requests':'RM request', 'mfg.rm_items':'RM item', 'mfg.rm_issues':'RM issue', 'mfg.po_dispatches':'Dispatch', 'mfg.blends':'Blend (blend-wise production)', 'mfg.blend_rm':'Blend material line',
   'acct.entries':'Bank ledger entry', 'acct.expenses':'Expense', 'acct.petty_cash':'Petty cash entry', 'acct.vendor_payments':'Vendor payment', 'acct.vendor_pay_requests':'Vendor payment request',
   'acct.salary_slips':'Salary slip', 'acct.advances':'Advance', 'acct.assets':'Asset', 'acct.tds_deductions':'TDS record', 'acct.mmc_txns':'MMC ledger line', 'acct.bank_accounts':'Bank account', 'adm.users':'User', 'adm.people':'Person' };
 function binName(t){ return BIN_NAMES[t] || (t||'').split('.').pop().replace(/_/g,' '); }
@@ -4600,11 +4600,11 @@ async function mfgTab(which){
         const rows = (bl||[]).filter(b => b.tank === t); const last = rows[0];
         const monthL = rows.filter(b => String(b.blend_date).slice(0,7) === mon).reduce((x,b)=>x+Number(b.litres||0),0);
         const tbx = balBy[t]; const now = tbx ? Number(tbx.balance) : rows.reduce((x,b)=>x+Number(b.litres||0),0);
-        const blended = tbx ? Number(tbx.blended) : rows.reduce((x,b)=>x+Number(b.litres||0),0); const drawn = tbx ? Number(tbx.drawn) : 0;
+        const blended = tbx ? Number(tbx.blended) : rows.reduce((x,b)=>x+Number(b.litres||0),0); const drawn = tbx ? Number(tbx.drawn) : 0; const lost = tbx ? Number(tbx.lost||0) : 0;
         return `<div class="stat" style="cursor:pointer;min-width:0;overflow-wrap:anywhere;" title="Open the blend-wise production report" onclick="window.prMode='blend';mfgTab('report')">
           <div class="n" style="font-size:20px;${now < 0 ? 'color:#b3261e;' : ''}">${rows.length ? now + ' L' : '—'}</div>
           <div class="l"><b>${tankLabel(t)}</b>${last ? ' · ' + esc(last.blend_name) : ' · empty'}</div>
-          <div style="font-size:10.5px;color:#777;margin-top:4px;line-height:1.35;">${last ? 'in tank now<br>last blend ' + Number(last.litres) + ' L on ' + last.blend_date + ' · ' + esc(last.blend_no||'') : 'no blend recorded yet'}${rows.length ? '<br>' + blended + ' L blended in − ' + drawn + ' L drawn for bottling<br>' + monthL + ' L blended this month' : ''}</div></div>`;
+          <div style="font-size:10.5px;color:#777;margin-top:4px;line-height:1.35;">${last ? 'in tank now<br>last blend ' + Number(last.litres) + ' L on ' + last.blend_date + ' · ' + esc(last.blend_no||'') : 'no blend recorded yet'}${rows.length ? '<br>' + blended + ' L blended in − ' + drawn + ' L drawn for bottling' + (lost ? ' − <span style="color:#b3261e">' + lost + ' L lost</span>' : '') + '<br>' + monthL + ' L blended this month' : ''}</div></div>`;
       }).join('');
     } catch(e){ tankTiles = ''; }
     let html = `<div class="card" style="padding:10px 14px;margin-bottom:12px;">
@@ -4619,7 +4619,7 @@ async function mfgTab(which){
         ${adj ? `<div class="stat" style="flex:0 0 150px;"><div class="n" style="color:#b8860b">${adj > 0 ? '+' : ''}${adj}</div><div class="l">Adjustments</div><div style="font-size:10.5px;color:#777;margin-top:4px;">Director corrections · ${rangeLbl}</div></div>` : ''}
       </div>
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px;">${tankTiles}</div>
-      <p style="font-size:11px;color:#777;margin:-4px 0 10px;">Tanks show what is in each tank now: all blends prepared (blend-wise production report) minus the blend drawn for bottling (case-wise production report), with the latest blend's name; click a tank to open the report.</p>`;
+      <p style="font-size:11px;color:#777;margin:-4px 0 10px;">Tanks show what is in each tank now: all blends prepared (blend-wise production report) minus the blend drawn for bottling (case-wise production report) minus blend losses recorded, with the latest blend's name; click a tank to open the report.</p>`;
     const skuRows = (data||[]).map(x => Object.assign({ sku_code: x.sku_code }, skuRow(x.sku_id))).filter(r => r.avail !== 0 || r.made || r.out || r.adj || r.open);
     window.__fgRows = skuRows; window.__fgRange = rangeLbl;
     html += `<h4 class="sec">SKU-wise <span style="font-weight:normal;font-size:12px;color:#777">— ${rangeLbl}</span></h4>
@@ -4683,7 +4683,9 @@ async function mfgTab(which){
       (brm||[]).forEach(l => { const it = rmItems.find(x=>x.id===l.rm_item_id); l.item = it ? { code: it.code, unit: it.unit, name: it.name } : null; (blendRmBy[l.blend_id] ??= []).push(l); });
     }
     window.__prBlends = blends || []; window.__prBlendRmBy = blendRmBy;
-    // what is in each tank right now = litres blended in − litres drawn by case-wise production
+    let losses = []; try { const { data: lz } = await MF.from('blend_losses').select('*').order('loss_date',{ascending:false}).order('created_at',{ascending:false}).limit(60); losses = lz || []; } catch(e){}   // v81
+    window.__prLosses = losses;
+    // what is in each tank right now = litres blended in − litres drawn by case-wise production − blend losses
     let tankBal = {}; try { const { data: tb } = await MF.rpc('tank_balances'); (tb||[]).forEach(t => tankBal[t.tank] = t); } catch(e){}
     window.__prTankBal = tankBal;
     const tankNow = t => tankBal[t] ? Number(tankBal[t].balance) : 0;
@@ -4717,6 +4719,7 @@ async function mfgTab(which){
         <div style="display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 10px;padding:8px 10px;background:#faf6ea;border-radius:8px;">
           <label style="display:flex;gap:6px;align-items:center;font-weight:600;margin:0;cursor:pointer;"><input type="radio" name="pr-mode" value="case" style="width:auto;margin:0;" ${window.prMode==='case'?'checked':''} onchange="prModeSet('case')">📦 Case-wise production <span style="font-weight:normal;color:#777;font-size:11.5px;">(bottling — SKU, cases, batch no., case-wise materials)</span></label>
           <label style="display:flex;gap:6px;align-items:center;font-weight:600;margin:0;cursor:pointer;"><input type="radio" name="pr-mode" value="blend" style="width:auto;margin:0;" ${window.prMode==='blend'?'checked':''} onchange="prModeSet('blend')">🧴 Blend-wise production <span style="font-weight:normal;color:#777;font-size:11.5px;">(tank, blend name, litres, blend-wise materials)</span></label>
+          <label style="display:flex;gap:6px;align-items:center;font-weight:600;margin:0;cursor:pointer;"><input type="radio" name="pr-mode" value="loss" style="width:auto;margin:0;" ${window.prMode==='loss'?'checked':''} onchange="prModeSet('loss')">💧 Blend loss <span style="font-weight:normal;color:#777;font-size:11.5px;">(tank, litres lost, reason — minused from the tank and reported as blend loss while production)</span></label>
         </div>
         <div id="pr-case-sec" class="${window.prMode==='case'?'':'hidden'}">
         <div class="row2c"><div><label>SKU produced *</label><select id="pr-sku" onchange="prSkuMaterials()">${skuOpts}</select></div>
@@ -4753,6 +4756,15 @@ async function mfgTab(which){
         <div style="margin-top:8px;"><label>Note (optional)</label><input type="text" id="bl-note" placeholder="e.g. strength, batch of spirit used"></div>
         <button class="btn gold sm" style="margin-top:10px;" onclick="blendSave()">Record blend &amp; consumption</button>
         </div>
+        <div id="pr-loss-sec" class="${window.prMode==='loss'?'':'hidden'}">
+        <p style="font-size:12px;color:#777;margin:0 0 8px;">Blend lost from a tank during production — evaporation, spillage, filtration sediment, lab samples, wastage. The litres are minused from that tank (FG stock tab shows what is left) and listed below as a blend loss; it is not production and no materials are consumed.</p>
+        <div class="row2c"><div style="min-width:0;"><label>Tank *</label><select id="ls-tank" style="width:100%;max-width:100%;">${['TANK1','TANK2','TANK3'].map(t=>`<option value="${t}">${esc(prTankOptionLabel(t, tankNow(t)))}</option>`).join('')}</select></div>
+          <div class="row2c"><div><label>Litres lost *</label><input type="number" id="ls-litres" min="0.001" step="any" placeholder="litres"></div>
+          <div><label>Date</label><input type="date" id="ls-date" value="${calFmt(new Date())}"></div></div></div>
+        <div class="row2c" style="margin-top:8px;"><div><label>Reason *</label><select id="ls-reason"><option>Evaporation</option><option>Spillage / leakage</option><option>Filtration &amp; sediment</option><option>Sampling / lab testing</option><option>Wastage during bottling</option><option>Tank cleaning</option><option>Other</option></select></div>
+          <div><label>Note (optional)</label><input type="text" id="ls-note" placeholder="e.g. hose burst while transferring"></div></div>
+        <button class="btn gold sm" style="margin-top:10px;" onclick="blendLossSave()">Record blend loss</button>
+        </div>
         <div id="pr-msg"></div></div>
       <h4 class="sec">📦 Recent case-wise production <span style="font-weight:normal;font-size:12px;color:#777">— last ${(batches||[]).length} entr${(batches||[]).length===1?'y':'ies'}</span></h4>
       ${bErr ? `<div class="msg err">Could not load the production reports: ${esc(bErr.message)}</div>` : ''}
@@ -4775,7 +4787,14 @@ async function mfgTab(which){
         (isDir() ? `<td style="white-space:nowrap"><button class="mini" onclick="blendEdit('${b.id}')">✏️ Edit</button> ${dirDelBtn('mfg','blends', b.id, b.blend_no, "mfgTab('report')")}</td>` : '') + `</tr>`).join('')
         || `<tr><td colspan="${isDir()?8:7}" style="color:#777">No blend recorded yet.</td></tr>`}
       </tbody></table></div>
-      <p style="font-size:11.5px;color:#777;margin-top:6px;">In the tanks now (all blends in − all blend drawn by case-wise production): ${['TANK1','TANK2','TANK3'].map(t=>'<b>'+tankLabel(t)+'</b> '+tankNow(t)+' L' + (tankBal[t] ? ' (blended ' + Number(tankBal[t].blended) + ' − drawn ' + Number(tankBal[t].drawn) + ')' : '')).join(' · ')}.</p>`;
+      <h4 class="sec" style="margin-top:18px;">💧 Blend losses while production <span style="font-weight:normal;font-size:12px;color:#777">— last ${losses.length} entr${losses.length===1?'y':'ies'} · total ${losses.reduce((a,l)=>a+Number(l.litres||0),0)} L</span></h4>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Loss no.</th><th>Tank</th><th>Blend</th><th class="amount">Litres lost</th><th>Reason</th><th>Entered by</th>${isDir()?'<th></th>':''}</tr></thead><tbody>
+      ${losses.map(l=>`<tr><td>${l.loss_date}</td><td><b>${esc(l.loss_no||'')}</b></td><td>${esc(tankLabel(l.tank))}</td><td>${esc(l.blend_name||'—')}</td><td class="amount" style="color:#b3261e"><b>${Number(l.litres)}</b></td><td style="font-size:12px;">${esc(l.reason||'')}${l.note?'<br><span style="font-size:11px;color:#777">'+esc(l.note)+'</span>':''}</td>` +
+        `<td style="font-size:11.5px;color:#555;">${esc(userNameOf(l.created_by))}<br><span style="color:#999">${String(l.created_at||'').slice(0,10)}</span></td>` +
+        (isDir() ? `<td style="white-space:nowrap">${dirDelBtn('mfg','blend_losses', l.id, l.loss_no, "mfgTab('report')")}</td>` : '') + `</tr>`).join('')
+        || `<tr><td colspan="${isDir()?8:7}" style="color:#777">No blend loss recorded.</td></tr>`}
+      </tbody></table></div>
+      <p style="font-size:11.5px;color:#777;margin-top:6px;">In the tanks now (all blends in − blend drawn by case-wise production − blend losses): ${['TANK1','TANK2','TANK3'].map(t=>'<b>'+tankLabel(t)+'</b> '+tankNow(t)+' L' + (tankBal[t] ? ' (blended ' + Number(tankBal[t].blended) + ' − drawn ' + Number(tankBal[t].drawn) + (Number(tankBal[t].lost) ? ' − lost ' + Number(tankBal[t].lost) : '') + ')' : '')).join(' · ')}.</p>`;
     prodRepRender(); blendRender(); prSkuMaterials(); rmShowFull('bl-item','bl-item-full');
     return;
   }
@@ -5626,7 +5645,16 @@ async function prodRepEditSave(id){
 }
 /* ---- Blend-wise production: tank, blend name, litres and the blend-wise materials consumed ---- */
 function tankLabel(t){ return ({ TANK1:'Tank 1', TANK2:'Tank 2', TANK3:'Tank 3' })[t] || (t||''); }
-function prModeSet(m){ window.prMode = m; const c = $('pr-case-sec'), b = $('pr-blend-sec'); if (c) c.classList.toggle('hidden', m !== 'case'); if (b) b.classList.toggle('hidden', m !== 'blend'); say('pr-msg',''); }
+function prModeSet(m){ window.prMode = m; const c = $('pr-case-sec'), b = $('pr-blend-sec'), l = $('pr-loss-sec'); if (c) c.classList.toggle('hidden', m !== 'case'); if (b) b.classList.toggle('hidden', m !== 'blend'); if (l) l.classList.toggle('hidden', m !== 'loss'); say('pr-msg',''); }
+async function blendLossSave(){
+  const litres = Number($('ls-litres').value), tank = $('ls-tank').value, reason = $('ls-reason').value;
+  if (!(litres > 0)){ say('pr-msg','Enter the litres of blend lost.',false); return; }
+  const { error } = await db.schema('mfg').rpc('record_blend_loss', { p_date: $('ls-date').value || null, p_tank: tank, p_litres: litres, p_reason: reason, p_note: $('ls-note').value.trim() || null });
+  if (error){ say('pr-msg','Could not record the loss: '+error.message,false); return; }
+  window.prMode = 'loss';
+  await mfgTab('report');
+  say('pr-msg','Blend loss recorded — ' + litres + ' L minused from ' + tankLabel(tank) + ' (' + reason + ').', true);
+}
 let blendLines = [];
 function blendRender(){
   const box = $('bl-lines'); if (!box) return;
