@@ -100,6 +100,9 @@
   #rm-store-table td.amount{white-space:nowrap; overflow-wrap:normal;}
   #rm-store-table th.amount{white-space:normal; overflow-wrap:normal; word-break:normal;}
   #po-hist-table th.amount{white-space:normal;} #po-hist-table td{vertical-align:top;} #po-hist-table td .mini{display:inline-block; width:auto; margin:0; flex:0 0 auto;} #po-hist-table td .amount{white-space:nowrap;}
+  /* asset register: whole table on one screen, actions wrap in their own cell   v77 */
+  #asset-table{table-layout:fixed; width:100%; font-size:12px;} #asset-table th{font-size:11px; white-space:normal;} #asset-table td{vertical-align:top; overflow-wrap:anywhere; padding:8px 6px;}
+  #asset-table td.amount{white-space:nowrap; overflow-wrap:normal; padding-right:6px;} #asset-table td .acts{display:flex; flex-wrap:wrap; gap:3px;} #asset-table td .mini{display:inline-block; width:auto; margin:0; flex:0 0 auto; font-size:10.5px; padding:2px 6px;}
   #rm-store-table select{max-width:100%; font-size:10.5px; padding:2px 4px; margin-top:2px;}
   #rm-store-table td .mini{font-size:10.5px; padding:3px 6px; display:block; width:100%; margin:0 0 3px; text-align:center;}
   #rm-store-table .rm-name{font-size:11px; color:#555;}
@@ -9993,20 +9996,20 @@ async function acctTab(t){
       ${canFinEdit()?`<button class="btn gold sm" onclick="acAssetForm()">+ Add asset</button>`:''}
       <div id="ac-asset-form"></div>
       <h4 class="sec" style="margin-top:12px;">Asset register</h4>
-      <div class="table-scroll"><table><thead><tr><th>Code</th><th>Asset</th><th>Class · category</th><th>Identifier</th><th>Custodian</th><th class="amount">Cost ₹</th><th class="amount">Book ₹</th><th>Licences</th><th>Status</th><th></th></tr></thead><tbody>
+      <div class="table-scroll"><table id="asset-table"><colgroup><col style="width:9%"><col style="width:15%"><col style="width:10%"><col style="width:13%"><col style="width:11%"><col style="width:9%"><col style="width:9%"><col style="width:7%"><col style="width:7%"><col style="width:10%"></colgroup><thead><tr><th>Code</th><th>Asset</th><th>Class · category</th><th>Identifier</th><th>Custodian</th><th class="amount">Cost ₹</th><th class="amount">Book ₹</th><th>Licences</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${acAssets.map(a=>{
         const disp = a.status==='DISPOSED';
-        return `<tr style="${disp?'opacity:.55':''}"><td><b>${esc(a.asset_code)}</b></td>` +
+        return `<tr style="${disp?'opacity:.55':''}"><td><b style="white-space:normal">${esc(a.asset_code).replace('/','/<wbr>')}</b></td>` +
           `<td>${esc(a.name)}${a.location?'<br><span style="font-size:11px;color:#777">'+esc(a.location)+'</span>':''}</td>` +
           `<td>${a.asset_class==='MOVABLE'?'Movable':'Immovable'}<br><span style="font-size:11px;color:#777">${esc(a.category)}</span></td>` +
           `<td>${esc(a.identifier||'—')}</td><td>${esc(a.custodian_name||'—')}</td>` +
           `<td class="amount">${inr(a.purchase_value)}</td><td class="amount" style="font-weight:700">${inr(a.current_value)}</td>` +
           `<td>${acDocBadge(a.doc_alert, a.next_expiry)}</td>` +
           `<td><span style="color:${a.status==='ACTIVE'?'#1a7f37':(a.status==='DISPOSED'?'#777':'#b8860b')};font-weight:600;font-size:12px">${esc(a.status)}</span></td>` +
-          `<td style="white-space:nowrap"><button class="mini" onclick="acAssetPanel('${a.id}')">Licences</button> ` +
-            (canFinEdit()&&!disp?`<button class="mini" onclick="acValueForm('${a.id}')">Revalue</button> <button class="mini" onclick="acAssetForm('${a.id}')">Edit</button> <button class="mini" onclick="acDisposeForm('${a.id}')">Dispose</button> `:'') +
-            (isDir()?`<button class="mini" onclick="acAssetDelete('${a.id}')">Delete</button>`:'') +
-          `</td></tr>`;}).join('')
+          `<td><div class="acts"><button class="mini" onclick="acAssetPanel('${a.id}')">Licences</button>` +
+            (canFinEdit()&&!disp?`<button class="mini" onclick="acValueForm('${a.id}')">Revalue</button><button class="mini" onclick="acAssetForm('${a.id}')">Edit</button><button class="mini" onclick="acDisposeForm('${a.id}')">Dispose</button>`:'') +
+            (isDir()?`<button class="mini" style="color:#b3261e;border-color:#b3261e;" onclick="acAssetDelete('${a.id}')">Delete</button>`:'') +
+          `</div></td></tr>`;}).join('')
         || '<tr><td colspan="10" style="color:#777">No assets yet.</td></tr>'}
       </tbody></table></div>
       <div id="ac-asset-panel"></div>`;
