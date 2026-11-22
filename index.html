@@ -4680,7 +4680,12 @@ async function mfgTab(which){
     // shows under the box once an item is chosen, and on hover.
     const [{ data: stock }, { data: batches, error: bErr }, { data: skusFG }, { data: blends }, { data: bomAll }] = await Promise.all([
       MF.from('v_rm_stock').select('*').order('code'),
-      MF.from('batches').select('*').order('created_at',{ascending:false}).limit(60),
+      (() => { // case-wise production list: date range, or every report, or (default) the last 60   v89
+        window.prFrom = window.prFrom || ''; window.prTo = window.prTo || ''; window.prAll = !!window.prAll;
+        let q = MF.from('batches').select('*');
+        if (window.prAll) return q.order('production_date',{ascending:false}).order('created_at',{ascending:false}).limit(5000);
+        if (window.prFrom) q = q.gte('production_date', window.prFrom); if (window.prTo) q = q.lte('production_date', window.prTo);
+        return q.order('production_date',{ascending:false}).order('created_at',{ascending:false}).limit(window.prFrom || window.prTo ? 5000 : 60); })(),
       MF.from('v_fg_stock').select('*'),
       MF.from('blends').select('*').order('blend_date',{ascending:false}).order('created_at',{ascending:false}).limit(60),
       MF.from('sku_bom').select('sku_id, rm_item_id, qty_per_case, component')
@@ -4797,7 +4802,16 @@ async function mfgTab(which){
         <button class="btn gold sm" style="margin-top:10px;" onclick="blendLossSave()">Record blend loss</button>
         </div>
         <div id="pr-msg"></div></div>
-      <h4 class="sec">📦 Recent case-wise production <span style="font-weight:normal;font-size:12px;color:#777">— last ${(batches||[]).length} entr${(batches||[]).length===1?'y':'ies'}</span></h4>
+      <h4 class="sec">📦 ${window.prAll ? 'All case-wise production' : (window.prFrom || window.prTo) ? 'Case-wise production' : 'Recent case-wise production'} <span style="font-weight:normal;font-size:12px;color:#777">— ${window.prAll ? 'all ' + (batches||[]).length + ' report' + ((batches||[]).length===1?'':'s') : (window.prFrom || window.prTo) ? (window.prFrom||'beginning') + ' → ' + (window.prTo||'today') + ' · ' + (batches||[]).length + ' report' + ((batches||[]).length===1?'':'s') : 'last ' + (batches||[]).length + ' entr' + ((batches||[]).length===1?'y':'ies')}</span></h4>
+      <div class="card" style="padding:10px 14px;margin:0 0 10px;">
+        <div class="row2c"><div><label>From date</label><input type="date" id="pr-from" value="${window.prFrom}" ${window.prAll?'disabled':''} onchange="window.prFrom=this.value;mfgTab('report')"></div>
+          <div><label>To date</label><input type="date" id="pr-to" value="${window.prTo}" ${window.prAll?'disabled':''} onchange="window.prTo=this.value;mfgTab('report')"></div></div>
+        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:8px;font-size:12.5px;">
+          <label style="display:flex;align-items:center;gap:6px;margin:0;font-weight:600;cursor:pointer;"><input type="checkbox" id="pr-all" style="width:auto;margin:0;" ${window.prAll?'checked':''} onchange="window.prAll=this.checked;mfgTab('report')"> See all production reports</label>
+          ${(window.prFrom || window.prTo) && !window.prAll ? `<button class="btn ghost sm" onclick="window.prFrom='';window.prTo='';mfgTab('report')">✕ Clear dates</button>` : ''}
+          <span style="color:#777;font-size:11.5px;">Pick a date range to see the reports of those dates; tick the box for every report ever recorded; leave both for the latest 60.</span>
+        </div>
+      </div>
       ${bErr ? `<div class="msg err">Could not load the production reports: ${esc(bErr.message)}</div>` : ''}
       <div id="pr-editbox"></div>
       <div class="table-scroll"><table><thead><tr><th>Date</th><th>Batch no.</th><th>SKU</th><th class="amount">Cases</th><th>Materials consumed</th><th>QC</th><th>Entered by</th>${isDir()?'<th></th>':''}</tr></thead><tbody>
