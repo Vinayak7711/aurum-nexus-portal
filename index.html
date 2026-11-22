@@ -4685,7 +4685,7 @@ async function mfgTab(which){
         let q = MF.from('batches').select('*');
         if (window.prAll) return q.order('production_date',{ascending:false}).order('created_at',{ascending:false}).limit(5000);
         if (window.prFrom) q = q.gte('production_date', window.prFrom); if (window.prTo) q = q.lte('production_date', window.prTo);
-        return q.order('production_date',{ascending:false}).order('created_at',{ascending:false}).limit(window.prFrom || window.prTo ? 5000 : 60); })(),
+        return q.order('production_date',{ascending:false}).order('created_at',{ascending:false}).limit(window.prFrom || window.prTo ? 5000 : 1); })(),   // default: only the latest entry   v90
       MF.from('v_fg_stock').select('*'),
       MF.from('blends').select('*').order('blend_date',{ascending:false}).order('created_at',{ascending:false}).limit(60),
       MF.from('sku_bom').select('sku_id, rm_item_id, qty_per_case, component')
@@ -4802,14 +4802,14 @@ async function mfgTab(which){
         <button class="btn gold sm" style="margin-top:10px;" onclick="blendLossSave()">Record blend loss</button>
         </div>
         <div id="pr-msg"></div></div>
-      <h4 class="sec">📦 ${window.prAll ? 'All case-wise production' : (window.prFrom || window.prTo) ? 'Case-wise production' : 'Recent case-wise production'} <span style="font-weight:normal;font-size:12px;color:#777">— ${window.prAll ? 'all ' + (batches||[]).length + ' report' + ((batches||[]).length===1?'':'s') : (window.prFrom || window.prTo) ? (window.prFrom||'beginning') + ' → ' + (window.prTo||'today') + ' · ' + (batches||[]).length + ' report' + ((batches||[]).length===1?'':'s') : 'last ' + (batches||[]).length + ' entr' + ((batches||[]).length===1?'y':'ies')}</span></h4>
+      <h4 class="sec">📦 ${window.prAll ? 'All case-wise production' : (window.prFrom || window.prTo) ? 'Case-wise production' : 'Latest case-wise production entry'} <span style="font-weight:normal;font-size:12px;color:#777">— ${window.prAll ? 'all ' + (batches||[]).length + ' report' + ((batches||[]).length===1?'':'s') : (window.prFrom || window.prTo) ? (window.prFrom||'beginning') + ' → ' + (window.prTo||'today') + ' · ' + (batches||[]).length + ' report' + ((batches||[]).length===1?'':'s') : 'the last entry made'}</span></h4>
       <div class="card" style="padding:10px 14px;margin:0 0 10px;">
         <div class="row2c"><div><label>From date</label><input type="date" id="pr-from" value="${window.prFrom}" ${window.prAll?'disabled':''} onchange="window.prFrom=this.value;mfgTab('report')"></div>
           <div><label>To date</label><input type="date" id="pr-to" value="${window.prTo}" ${window.prAll?'disabled':''} onchange="window.prTo=this.value;mfgTab('report')"></div></div>
         <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:8px;font-size:12.5px;">
           <label style="display:flex;align-items:center;gap:6px;margin:0;font-weight:600;cursor:pointer;"><input type="checkbox" id="pr-all" style="width:auto;margin:0;" ${window.prAll?'checked':''} onchange="window.prAll=this.checked;mfgTab('report')"> See all production reports</label>
           ${(window.prFrom || window.prTo) && !window.prAll ? `<button class="btn ghost sm" onclick="window.prFrom='';window.prTo='';mfgTab('report')">✕ Clear dates</button>` : ''}
-          <span style="color:#777;font-size:11.5px;">Pick a date range to see the reports of those dates; tick the box for every report ever recorded; leave both for the latest 60.</span>
+          <span style="color:#777;font-size:11.5px;">Only the last entry made is shown. Pick a date range to see the reports of those dates, or tick the box to see every report ever recorded.</span>
         </div>
       </div>
       ${bErr ? `<div class="msg err">Could not load the production reports: ${esc(bErr.message)}</div>` : ''}
@@ -4820,7 +4820,7 @@ async function mfgTab(which){
         `<td><span class="pill ${b.qc_status==='PASSED'?'DELIVERED':(b.qc_status==='FAILED'?'CANCELLED':'RECEIVED')}">${b.qc_status}</span></td>` +
         `<td style="font-size:11.5px;color:#555;">${esc(userNameOf(b.created_by))}<br><span style="color:#999">${String(b.created_at||'').slice(0,10)}</span></td>` +
         (isDir() ? `<td style="white-space:nowrap"><button class="mini" onclick="prodRepEdit('${b.id}')">✏️ Edit</button> ${dirDelBtn('mfg','batches', b.id, b.batch_no, "mfgTab('report')")}</td>` : '') + `</tr>`).join('')
-        || `<tr><td colspan="${isDir()?8:7}" style="color:#777">No production recorded yet.</td></tr>`}
+        || `<tr><td colspan="${isDir()?8:7}" style="color:#777">${(window.prFrom || window.prTo) ? 'No production recorded in these dates.' : 'No production recorded yet.'}</td></tr>`}
       </tbody></table></div>
       ${isDir() ? '<p style="font-size:11.5px;color:#777;margin-top:6px;">As Director you can edit any report — SKU, cases, date and the materials consumed. MMC’s raw-material custody and FG stock follow the correction automatically; the batch number stays the same.</p>' : ''}
       <h4 class="sec" style="margin-top:18px;">🧴 Recent blend-wise production <span style="font-weight:normal;font-size:12px;color:#777">— last ${(blends||[]).length} entr${(blends||[]).length===1?'y':'ies'}</span></h4>
