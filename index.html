@@ -9917,7 +9917,7 @@ async function acctTab(t){
           `<td class="amount" style="font-weight:600;color:#b3261e">${isTop(r)?'':inr(r.amount)}</td>` +
           `<td style="font-size:12px;">${esc(acStaffName(r.created_by))}</td>` +
           `<td><span style="color:${AC_ST[r.status]||'#333'};font-weight:600;font-size:12px">${acLbl(r.status)}</span>${r.approved_by?'<br><span style="font-size:10.5px;color:#777">by '+esc(acStaffName(r.approved_by))+'</span>':''}</td>` +
-          `<td style="white-space:nowrap"><button class="mini" onclick="acPettyVoucher('${r.id}')">🖨 Voucher</button> ${r.status==='PENDING_APPROVAL'&&canPetty('admin')
+          `<td style="white-space:nowrap"><button class="mini" onclick="acPettyVoucher('${r.id}')">🖨 Voucher</button> ${(isDir()||canPetty('admin'))&&!r.journal_id?`<button class="mini" onclick="acPettyEdit('${r.id}')" title="Edit this entry">✏️ Edit</button> `:''}${r.status==='PENDING_APPROVAL'&&canPetty('admin')
               ? `<button class="mini" onclick="acPettyDecide('${r.id}',true)">Approve</button> <button class="mini" onclick="acPettyDecide('${r.id}',false)" style="color:#c0392b;">Reject</button> `
               : ''}${dirDelBtn('acct','petty_cash', r.id, r.pc_no, "acctTab('petty')")}</td></tr>`;
         const head = '<tr><th>No.</th><th>Date</th><th>Category</th><th>Paid to / note</th><th class="amount">In ₹</th><th class="amount">Out ₹</th><th>Posted by</th><th>Status</th><th></th></tr>';
@@ -11108,6 +11108,43 @@ function acTdsCsv(){
   rows.forEach(r=>out.push([r.tds_no, r.deduct_date, r.deduct_date.slice(0,7), r.vendor, r.po_no, r.section||'', Number(r.bill_amount).toFixed(2), r.tds_rate??'', Number(r.tds_amount).toFixed(2), r.status==='PENDING'?'Awaiting approval':'Deducted'].map(e2).join(',')));
   const blob = new Blob(['\ufeff' + out.join('\n')], { type:'text/csv;charset=utf-8' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'tds-deducted-from-vendors.csv'; a.click();
+}
+/* edit a petty-cash line (cash expense or bank top-up) — Director / Accounts head   v92 */
+function acPettyEdit(id){
+  const r = (window.__pcAll||[]).find(x=>x.id===id); if (!r){ alert('Entry not found — reload the tab.'); return; }
+  const isTop = r.entry_kind === 'TOPUP';
+  const CATS = ['Office supplies','Tea, coffee & snacks','Postage & courier','Emergency repairs','Local travel (taxi / auto)','Other'];
+  const cats = CATS.includes(r.category) || !r.category ? CATS : [r.category].concat(CATS);
+  const bankOpts = acBanks.filter(b=>(b.is_active && !b.principal_id) || b.id===r.bank_id).map(b=>`<option value="${b.id}" ${b.id===r.bank_id?'selected':''}>${esc(b.name)}</option>`).join('');
+  apprModal((isTop ? 'Edit top-up ' : 'Edit cash expense ') + r.pc_no, `
+    <p style="font-size:12px;color:#777;margin:0 0 10px;">${isTop
+      ? 'Changing the amount, date or bank also changes the bank withdrawal posted in the finance ledger for this top-up; the cash box balance follows.'
+      : 'Changes are carried to the petty-cash line under Expenses and the cash box balance; the status (' + esc(acLbl(r.status)) + ') stays as it is.'}</p>
+    <div class="row2c"><div><label>Date *</label><input type="date" id="pe-date" value="${r.expense_date}"></div>
+      <div><label>Amount ₹ *</label><input type="number" id="pe-amt" min="0.01" step="any" value="${Number(r.amount)}"></div></div>
+    ${isTop
+      ? `<label style="margin-top:8px;">From bank *</label><select id="pe-bank">${bankOpts}</select>`
+      : `<div class="row2c" style="margin-top:8px;"><div><label>Category *</label><select id="pe-cat">${cats.map(c=>`<option ${c===r.category?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+         <div><label>Paid to</label><input type="text" id="pe-paidto" value="${esc(r.paid_to||'')}" placeholder="Shopkeeper / driver / courier…"></div></div>`}
+    <label style="margin-top:8px;">${isTop ? 'Note' : 'Description / what it was for'}</label><input type="text" id="pe-desc" value="${esc(r.description||'')}">
+    <label style="margin-top:8px;">Approval note</label><input type="text" id="pe-note" value="${esc(r.approval_note||'')}" placeholder="optional">
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;"><button class="btn gold sm" onclick="acPettyEditSave('${r.id}')">Save changes</button><span id="pe-msg" style="font-size:12px;"></span></div>`);
+}
+async function acPettyEditSave(id){
+  const r = (window.__pcAll||[]).find(x=>x.id===id); if (!r) return;
+  const isTop = r.entry_kind === 'TOPUP';
+  const amt = Number($('pe-amt').value), m = $('pe-msg');
+  if (!(amt > 0)){ m.textContent = 'Enter an amount more than zero.'; m.style.color = '#b3261e'; return; }
+  if (!$('pe-date').value){ m.textContent = 'Pick the date.'; m.style.color = '#b3261e'; return; }
+  m.textContent = 'Saving…'; m.style.color = '#777';
+  const { error } = await db.schema('acct').rpc('petty_edit', {
+    p_id: id, p_date: $('pe-date').value, p_category: isTop ? null : $('pe-cat').value, p_amount: amt,
+    p_paid_to: isTop ? null : ($('pe-paidto').value.trim() || null), p_desc: $('pe-desc').value.trim() || null,
+    p_bank: isTop ? $('pe-bank').value : null, p_note: $('pe-note').value.trim() || null });
+  if (error){ m.textContent = 'Could not save: ' + error.message; m.style.color = '#b3261e'; return; }
+  apprModalClose();
+  await acctTab('petty');
+  say('pc-list-msg', r.pc_no + ' updated.', true);
 }
 async function acPettyDecide(id, approve){
   const note = prompt(approve ? 'Approve this cash expense?\nOptional note:' : 'Reject this cash expense?\nOptional reason:', '');
